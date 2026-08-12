@@ -239,11 +239,13 @@ follows. The explicit tag is mandatory: a bare `npm publish` claims `latest`, an
 refuses any publish that would move `latest` to a lower-sorting version.
 
 **A release publishes the version itself.** `.config/qits/ci-event-release.yml` reacts to this
-repository's own `SCMRelease` — published the moment a release push lands on `main` — checks out the
-annotated tag named for the version, builds it and publishes with no `--tag`, so `latest` moves
-forward exactly once per release. A green run makes qits-ci announce one `SoftwareRelease` naming
-`@qits/angular`, which is the event a downstream consumer can act on: the tarball exists by then.
-Releasing is `POST /workspaces/api/branches/release`, not a version-bump commit.
+repository's own release **tag** (`SCMPublishTag`, announced the moment the release push lands),
+checks that tag out, builds it and publishes with no `--tag`, so `latest` moves forward exactly once
+per release. A real release also publishes `SCMRelease`; where that meets a green run, qits-ci
+announces one `SoftwareRelease` naming `@qits/angular`, which is the event a downstream consumer can
+act on: the tarball exists by then. A bootstrap replay pushes the tag alone, so it republishes
+without announcing anything. Releasing is `POST /workspaces/api/branches/release`, not a
+version-bump commit.
 
 Both are **publish-if-absent**: each asks the registry whether its version exists and skips,
 successfully, when it does. Doc-only pushes, re-runs, reverts and redelivered events stay green

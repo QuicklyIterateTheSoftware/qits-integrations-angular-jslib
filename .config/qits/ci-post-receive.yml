@@ -25,7 +25,7 @@
 # container itself, never by the host's docker daemon — the opposite of $QITS_REGISTRY's caveat.
 #
 # THIS PIPELINE PUBLISHES PRERELEASES ONLY. The release itself belongs to ci-event-release.yml,
-# which reacts to this repository's SCMRelease, checks out the tag and publishes the real version.
+# which reacts to this repository's release TAG, checks it out and publishes the real version.
 # What a push to main produces is `<last released version>-main.g<sha7>` — the last released version
 # as the base, so the prerelease sorts just under the release it follows and above everything older.
 steps:

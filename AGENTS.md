@@ -163,8 +163,8 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   `.config/qits/ci-post-receive.yml`, whose second step cuts a **prerelease**,
   `<version in projects/qits-integrations-angular/package.json>-main.g<sha7>`, under the `main`
   dist-tag. The **release** is `.config/qits/ci-event-release.yml`, which reacts to this
-  repository's own `SCMRelease`, checks out the version tag and publishes that version with no
-  `--tag`, so `latest` moves once per release. Releasing is
+  repository's own release **tag** (`SCMPublishTag`), checks that tag out and publishes that version
+  with no `--tag`, so `latest` moves once per release. The tag name is the version. Releasing is
   `POST /workspaces/api/branches/release`, never a version-bump commit.
 - **Both are publish-if-absent** — a re-run finds its version in the registry and succeeds without
   touching it. Published versions are immutable; never try to re-publish one.
