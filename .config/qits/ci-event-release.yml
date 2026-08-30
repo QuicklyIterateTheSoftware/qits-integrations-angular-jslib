@@ -32,9 +32,10 @@
 # the version, and ng-packagr copies it into the manifest inside `dist/`.
 event: SCMPublishTag
 when:
-  # repoId, not repository: the tag event carries the git host's own coordinate, which is the name
-  # this repository is served under.
-  - repoId: { exact: qits-integrations-angular }
+  # repoName, not repoId: since the identity cutover the git host's own coordinate is an opaque
+  # UUID, so a name match on repoId never fires. The tag event echoes the public name the push
+  # was addressed with; a rename updates this line in the same campaign.
+  - repoName: { exact: qits-integrations-angular-jslib }
 artifacts:
   - { type: npm, name: "@qits/angular" }
 steps:
