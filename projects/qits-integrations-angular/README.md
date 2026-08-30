@@ -34,4 +34,4 @@ providers: [provideQitsIntegration(withFeatureCapture())];
 
 The rest of the consumer contract — the backend endpoints, the capture and state-snapshot APIs,
 serving under a path prefix — is in the
-[repository README](https://github.com/QuicklyIterateTheSoftware/qits-integrations-angular#readme).
+[repository README](https://github.com/QuicklyIterateTheSoftware/qits-integrations-angular-jslib#readme).

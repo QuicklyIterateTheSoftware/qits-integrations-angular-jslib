@@ -57,7 +57,7 @@ aliases are `http://qits-platform-mirror:8080/artifacts/npm/npmjs/` and
 `http://qits-artifacts:8080/artifacts/npm/npm/`, which is what qits-ci's pipelines write
 into `~/.npmrc` from `$QITS_NPM_PROXY_URL` / `$QITS_NPM_REGISTRY_URL`; a consumer repo's committed
 file is overwritten by that preamble in CI, so it only has to be right for humans. The registry
-takes no credential in either direction — see the qits-artifacts README for the posture.
+takes no credential in either direction — see the qits-artifacts-service README for the posture.
 
 The tarball ships **prebuilt** (the ng-packagr output), so an install runs no build: no `prepare`
 hook, no `pnpm.onlyBuiltDependencies` allowlist, no Angular toolchain in the consumer.
@@ -257,7 +257,7 @@ re-publish, which is why neither step ever tries one.
 Iterate with a local override — **never bump versions to move code**:
 
 ```bash
-pnpm add "file:../qits-integrations-angular/dist/qits-integrations-angular"   # after pnpm build
+pnpm add "file:../../qits-integrations/qits-integrations-angular-jslib/dist/qits-integrations-angular"   # after pnpm build
 ```
 
 Note the path: the installable artifact is the build output, not the repo root. Drop the override

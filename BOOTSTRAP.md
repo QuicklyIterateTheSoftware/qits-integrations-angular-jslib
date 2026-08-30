@@ -10,8 +10,8 @@
 
 > **Historical record — names and the distribution model below are stale.** This document describes
 > the bootstrap as it was executed, and is kept verbatim. Since then the repo moved to
-> `QuicklyIterateTheSoftware/qits-integrations-angular` (a submodule of `qits-qits` at
-> `integrations/qits-integrations-angular`) and the Angular project was renamed
+> `QuicklyIterateTheSoftware/qits-integrations-angular-jslib` (a submodule of `qits-qits` at
+> `components/qits-integrations/qits-integrations-angular-jslib`) and the Angular project was renamed
 > `qits-angular-integration` → `qits-integrations-angular`.
 >
 > More importantly, **the root-manifest takeover this document's Step 2 builds has been undone.**
