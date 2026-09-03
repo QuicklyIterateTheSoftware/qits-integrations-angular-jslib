@@ -1,0 +1,94 @@
+# THE ONE QA PIPELINE THIS REPOSITORY HAS, and it runs for a release request and nothing else.
+#
+# There is no push pipeline any more, and `ci-post-receive.yml` is what this file replaces.
+# qits-projects keeps a backing branch `release/<id>` per open release request — an octopus merge of
+# that request's sources, refolded whenever the set changes — and publishes `ReleaseRequestChanged`
+# on every successful re-fold. The merge primitive that writes that branch fires no `post-receive`
+# and so publishes no `SCMPublishCommit`: without this file the fold exists and NOTHING BUILDS IT.
+# A fold the git host answered `unchanged`, and one that conflicted, publish nothing — so every
+# arrival here is a new sha worth a build.
+#
+# DECIDED AT MAIN, BUILT AT THE FOLD. This file is discovered, parsed and selected at `main`'s head,
+# always; only the run's branch and sha come from the payload, which is why `checkout:` names them
+# as a pair — a sha with no branch whose history holds it is not something a step container can
+# fetch. A release request therefore cannot alter the CI that gates it by folding in a commit that
+# edits this file. Inside a step, $QITS_CI_BRANCH is `release/<id>` and $QITS_CI_SHA is the merged
+# sha; the fold is already checked out, so nothing below fetches or switches refs.
+#
+# EVERY STEP HERE IS GATING, and there is no trailing `gating: false` half because this repository
+# publishes nothing from a fold. The verdict returns on the ordinary `BuildSuccessful`/`BuildFailed`
+# with `commitSha` = the merged sha, which is what qits-projects' `BuildStatusListener` matches on
+# together with `repoId`.
+#
+# ci-event-release.yml BESIDE THIS FILE IS UNTOUCHED and is still the other half: it reacts to this
+# repository's release TAG and publishes the released coordinate. This file names a build by the
+# merged sha; that one names a release by its version. Neither pushes the other's coordinate.
+#
+# ONE STEP, AND THE PRERELEASE LEG IS GONE WITH THE PUSH PIPELINE THAT JUSTIFIED IT. The retired
+# file had a second, `branches: [exact: main]` step that cut `<last released version>-main.g<sha7>`
+# under the `main` dist-tag on every push to main. There are no pushes to main to hang it off any
+# more — a fold is `release/<id>`, and a prerelease identifier that says `main` may only ever be cut
+# from `main` — so the leg is dropped rather than repointed. `@qits/angular` is published by
+# ci-event-release.yml, from the release TAG, and that is now the only thing that publishes it. The
+# consequence, stated plainly: the `main` dist-tag stops advancing, and a consumer that was pinning
+# `@qits/angular@main` has to move to a released version.
+#
+# Neither the retired publish step nor this one declares `docker: true`: nothing here needs a docker
+# socket, a host daemon or root-equivalence, so the step keeps the full sandbox (--cap-drop=ALL,
+# no-new-privileges, resource caps).
+#
+# The package this repository ships is `dist/qits-integrations-angular`, the ng-packagr output — NOT
+# the repo root. The root package.json is the workspace harness and keeps `private: true`;
+# projects/qits-integrations-angular/package.json is the single source of truth for name and
+# version, and ng-packagr generates the published manifest from it. This pipeline builds it and
+# publishes nothing.
+#
+# Two env vars are injected into every step container by qits-ci, so no registry address is spelled
+# in this repo: $QITS_NPM_PROXY_URL (the pull-through cache of npmjs) and $QITS_NPM_REGISTRY_URL
+# (the hosted repository the @qits scope publishes to). Both are qits-net aliases dialled by this
+# container itself, never by the host's docker daemon — the opposite of $QITS_REGISTRY's caveat.
+
+event: ReleaseRequestChanged
+
+when:
+  # repoName, not repoId: the git host's storage coordinate is an opaque UUID since
+  # the identity cutover, so a name match on repoId is not dependable. The event
+  # echoes the public name; a rename updates this line in the same campaign.
+  - repoName: { exact: qits-integrations-angular-jslib }
+
+checkout:
+  branch: backingBranch
+  sha: mergedSha
+
+steps:
+  - image: qits/build-images/node-base:latest
+    timeout-seconds: 1800
+    script: |
+      # The daemon runs this with `bash -c` and no -e, so an unguarded failure would be swallowed
+      # by the next command's exit code. -u is load-bearing too: with the registry vars unset, an
+      # unset-tolerant script writes a registry-less .npmrc and then resolves the @qits scope
+      # against npmjs.org, where these packages do not exist and never will.
+      set -eu
+
+      # The third line is npm-CLI ceremony and nothing else: the CLI refuses to publish when no
+      # credential is configured for the target registry, a pre-flight that never reaches the wire.
+      # qits-platform-artifacts requires and reads no credential. The parameter expansion strips the scheme,
+      # leaving the //host/path/ form npm keys credentials by — the one non-obvious line here.
+      # This step publishes nothing, so the token line buys nothing here either; it is kept so this
+      # preamble stays byte-identical to ci-event-release.yml's, which does publish and does need it.
+      cat > ~/.npmrc <<EOF
+      registry=${QITS_NPM_PROXY_URL}
+      @qits:registry=${QITS_NPM_REGISTRY_URL}
+      ${QITS_NPM_REGISTRY_URL#http:}:_authToken=qits-ci
+      EOF
+
+      pnpm install --frozen-lockfile
+      pnpm lint
+
+      # The jsdom target. The *.browser.spec.ts suite (`pnpm test:browser`) needs a real layout
+      # engine, hence a chromium download and its system libraries — deliberately not in this
+      # pipeline; it runs locally, where the one-time `playwright install chromium` has been paid.
+      pnpm test
+
+      pnpm build
+
