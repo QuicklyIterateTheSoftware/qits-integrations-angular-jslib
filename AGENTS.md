@@ -123,7 +123,7 @@ Standard `ng new` workspace (`--create-application=false`) plus one library proj
 
 **The package is `dist/qits-integrations-angular`** — the ng-packagr output, published to qits'
 own npm registry (hosted by qits-artifacts, under the `@qits` scope) by
-`.config/qits/ci-post-receive.yml`. `projects/qits-integrations-angular/package.json` is the single
+`.config/qits/ci-event-release.yml`. `projects/qits-integrations-angular/package.json` is the single
 source of truth for name, version, description, license, peers and runtime deps; ng-packagr copies
 it into the manifest inside `dist/`, and that manifest is what `npm publish` uploads. A field that
 must reach the registry is added *there*.
@@ -156,21 +156,24 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
 - **Root `dependencies` mirror the published manifest's** — the workspace resolves against its own
   `node_modules` while a consumer resolves what the manifest declares; either drift ships a package
   whose imports resolve for nobody but us.
-- **`pnpm check-exports` guards all of it** against `dist/` after a build, and CI runs it on every
-  push. Never hand-edit `dist/`.
+- **`pnpm check-exports` guards all of it** against `dist/` after a build, and both CI pipelines
+  run it. Never hand-edit `dist/`.
 - **`dist/` is never committed on `main`** — CI rebuilds it before it publishes.
-- **Two pipelines publish, and they publish different things.** A push to `main` runs
-  `.config/qits/ci-post-receive.yml`, whose second step cuts a **prerelease**,
-  `<version in projects/qits-integrations-angular/package.json>-main.g<sha7>`, under the `main`
-  dist-tag. The **release** is `.config/qits/ci-event-release.yml`, which reacts to this
-  repository's own release **tag** (`SCMPublishTag`), checks that tag out and publishes that version
-  with no `--tag`, so `latest` moves once per release. The tag name is the version. Releasing is
-  `POST /workspaces/api/branches/release`, never a version-bump commit.
-- **Both are publish-if-absent** — a re-run finds its version in the registry and succeeds without
-  touching it. Published versions are immutable; never try to re-publish one.
-- **A prerelease publish needs `--tag main`.** A bare `npm publish` means `--tag latest`, and the
-  registry refuses a publish that would move `latest` to a lower-sorting version: a missing flag is
-  a 403 and a red build, not a silent regression.
+- **One pipeline publishes, and it is not a push.** `.config/qits/ci-event-release.yml` reacts to
+  `SCMRelease`, checks the release tag out and publishes that version with no `--tag`, so `latest`
+  moves once per release. The tag name is the version. Beside it,
+  `.config/qits/ci-event-release-request.yml` is the QA pipeline: it builds the `release/<id>` fold
+  of a release request and publishes nothing, and its green verdict is what lets Auto Release stamp
+  the version. Releasing is `POST /projects/api/repositories/<repoId>/release-requests`, never a
+  version-bump commit.
+- **The `main` dist-tag is frozen.** The retired push pipeline cut a **prerelease**,
+  `<version>-main.g<sha7>`, under it on every push to `main`; there are no such pushes any more and
+  the leg was dropped rather than repointed. Consumers pin released versions. (If you ever restore
+  a prerelease leg, it needs an explicit `--tag`: a bare `npm publish` means `--tag latest`, and the
+  registry refuses a publish that would move `latest` to a lower-sorting version — a missing flag is
+  a 403 and a red build, not a silent regression.)
+- **The publish is publish-if-absent** — a re-run finds its version in the registry and succeeds
+  without touching it. Published versions are immutable; never try to re-publish one.
 
 ## Conventions (inherited from the qits webui)
 

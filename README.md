@@ -229,28 +229,39 @@ before any module code, so it stays an inline `index.html` script — the canoni
 
 ## Releasing
 
-There is no release command, and two pipelines publish two different things.
+There is no release command, and there is no longer a push that publishes anything.
 
-**A push cuts a prerelease.** `.config/qits/ci-post-receive.yml` runs lint, the jsdom specs and the
-build on every push to a tracked branch. Its second step is bound to `main` and publishes
-`<version in projects/qits-integrations-angular/package.json>-main.g<sha7>` under the `main`
-dist-tag — the last released version as the base, so the prerelease sorts just under the release it
-follows. The explicit tag is mandatory: a bare `npm publish` claims `latest`, and the registry
-refuses any publish that would move `latest` to a lower-sorting version.
+**A release starts as a release REQUEST.** Ask qits-projects for one against this repository:
 
-**A release publishes the version itself.** `.config/qits/ci-event-release.yml` reacts to this
-repository's own release **tag** (`SCMPublishTag`, announced the moment the release push lands),
-checks that tag out, builds it and publishes with no `--tag`, so `latest` moves forward exactly once
-per release. A real release also publishes `SCMRelease`; where that meets a green run, qits-ci
-announces one `SoftwareRelease` naming `@qits/angular`, which is the event a downstream consumer can
-act on: the tarball exists by then. A bootstrap replay pushes the tag alone, so it republishes
-without announcing anything. Releasing is `POST /workspaces/api/branches/release`, not a
-version-bump commit.
+```
+POST /projects/api/repositories/<repoId>/release-requests
+{ "branch": "<your branch>", "summary": "<the release's subject>" }
+```
 
-Both are **publish-if-absent**: each asks the registry whether its version exists and skips,
-successfully, when it does. Doc-only pushes, re-runs, reverts and redelivered events stay green
-without touching the registry. Published versions are immutable — the registry rejects a
-re-publish, which is why neither step ever tries one.
+It folds `main`, that branch and any released tags still in flight onto a backing branch
+`release/<id>`, and re-folds whenever the set changes. Nothing merges and nothing publishes at that
+call.
+
+**The fold is what gets proved.** `.config/qits/ci-event-release-request.yml` runs lint, the jsdom
+specs and the build against `release/<id>`, and every step is gating, because a fold publishes
+nothing. Auto Release stamps the CalVer into
+`projects/qits-integrations-angular/package.json`, tags it and publishes `SCMRelease` only over a
+green verdict; `main` is finalized after the release lands. The old push pipeline's prerelease leg —
+`<version>-main.g<sha7>` under the `main` dist-tag — went with the pushes that justified it, so the
+`main` dist-tag no longer advances and consumers take released versions.
+
+**A release publishes the version itself.** `.config/qits/ci-event-release.yml` reacts to
+`SCMRelease`, checks the release tag out, builds it and publishes with no `--tag`, so `latest` moves
+forward exactly once per release. Where that green run meets the `SCMRelease`, qits-ci announces one
+`SoftwareRelease` naming `@qits/angular`, which is the event a downstream consumer can act on: the
+tarball exists by then. The tag stays the durable stamp but triggers nothing on its own — a
+bootstrap replay pushes it quietly and re-presents the `SCMRelease` through qits-ci's manual trigger
+door, republishing without waking a train.
+
+It is **publish-if-absent**: it asks the registry whether its version exists and skips,
+successfully, when it does. Re-runs, reverts and redelivered events stay green without touching the
+registry. Published versions are immutable — the registry rejects a re-publish, which is why the
+step never tries one.
 
 ## Developing against a consumer
 
@@ -276,8 +287,8 @@ and bump the version once the change is worth publishing.
 - **Root `dependencies` mirror the published manifest's** — the workspace builds against its own
   `node_modules` while a consumer resolves what the manifest declares, and either direction of
   drift ships a package whose imports resolve for nobody but us.
-- **`pnpm check-exports` guards all of the above** against `dist/` after a build, and CI runs it on
-  every push. Do not hand-edit anything in `dist/`.
+- **`pnpm check-exports` guards all of the above** against `dist/` after a build, and both CI
+  pipelines run it. Do not hand-edit anything in `dist/`.
 
 ## Regression check (smoke the published shape)
 

@@ -16,7 +16,7 @@
 >
 > More importantly, **the root-manifest takeover this document's Step 2 builds has been undone.**
 > qits has its own npm registry now, so the published artifact is `dist/qits-integrations-angular`
-> — the ng-packagr output, pushed by `.config/qits/ci-post-receive.yml` — and
+> — the ng-packagr output, published by `.config/qits/ci-event-release.yml` off a release tag — and
 > `projects/qits-integrations-angular/package.json` is the single source of truth for the published
 > manifest. The root's duplicated `name`/`version`, its `files`/`exports` into `dist/`, and the
 > `prepare` build hook are gone with the git-install path they served; a registry tarball ships
