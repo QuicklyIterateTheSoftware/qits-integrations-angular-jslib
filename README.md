@@ -247,12 +247,15 @@ specs and the build against `release/<id>`, and every step is gating, because a 
 nothing. Auto Release stamps the CalVer into
 `projects/qits-integrations-angular/package.json`, tags it and publishes `SCMRelease` only over a
 green verdict; `main` is finalized after the release lands. The old push pipeline's prerelease leg —
-`<version>-main.g<sha7>` under the `main` dist-tag — went with the pushes that justified it, so the
-`main` dist-tag no longer advances and consumers take released versions.
+`<version>-main.g<sha7>` under the `main` dist-tag — went with the pushes that justified it, and the
+dist-tag was repointed rather than dropped: `@qits/angular@main` is now **the latest released
+main**, moved there by the release pipeline itself.
 
 **A release publishes the version itself.** `.config/qits/ci-event-release.yml` reacts to
 `SCMRelease`, checks the release tag out, builds it and publishes with no `--tag`, so `latest` moves
-forward exactly once per release. Where that green run meets the `SCMRelease`, qits-ci announces one
+forward exactly once per release — then moves `main` onto the same version with `npm dist-tag add`,
+which is a second call because a publish can claim exactly one dist-tag and a published version is
+immutable. Where that green run meets the `SCMRelease`, qits-ci announces one
 `SoftwareRelease` naming `@qits/angular`, which is the event a downstream consumer can act on: the
 tarball exists by then. The tag stays the durable stamp but triggers nothing on its own — a
 bootstrap replay pushes it quietly and re-presents the `SCMRelease` through qits-ci's manual trigger

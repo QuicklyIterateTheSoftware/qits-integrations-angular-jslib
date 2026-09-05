@@ -82,7 +82,13 @@ steps:
       # redelivery should cost seconds, not a full install — which is also what makes a warm
       # bootstrap cheap, since the replay re-pushes every tag on every boot.
       if npm view "@qits/angular@$version" version >/dev/null 2>&1; then
-        echo "@qits/angular@$version is already published — skipping"
+        echo "@qits/angular@$version is already published — skipping the publish"
+        # The tag is still moved on this path, which is the whole reason this branch is no longer a
+        # bare `exit 0`: a redelivery whose publish landed and whose tag move did not would skip the
+        # repair and report green, and `main` would sit one release behind with nothing saying so.
+        # Same discipline the ui-components pipeline's SBOM PUT carries; the early exit stays,
+        # because the budget argument above is unaffected by a tag move.
+        npm dist-tag add "@qits/angular@$version" main
         exit 0
       fi
 
@@ -101,6 +107,23 @@ steps:
       fi
 
       # NO --tag, DELIBERATELY: this is the real release, so claiming `latest` is what it is for.
-      # The registry allows it because it refuses only a move that goes *backwards* — the push
-      # pipeline's `-main.g<sha>` prerelease is the one that must carry an explicit `--tag main`.
+      # The registry allows it because it refuses only a move that goes *backwards*.
       npm publish ./dist/qits-integrations-angular
+
+      # AND `main` NAMES THE SAME VERSION. Not a second publish — `npm publish` can claim exactly one
+      # dist-tag and a version is immutable, so the only way to be under both is to move the tag
+      # afterwards, which is what qits-artifacts' npm registry grew a `/-/package/…/dist-tags` route
+      # for.
+      #
+      # WHAT `main` MEANS NOW. It used to be the per-push pipeline's `<release>-main.g<sha>`
+      # prerelease, republished on every push to main. That pipeline is retired, and with it the only
+      # thing that ever wrote this tag: `@qits/angular@main` froze on 2026.830.133217-main.g55effb5
+      # and stayed there while five releases went out under `latest`. Under the release-request flow
+      # main only advances at a release, so the honest reading of the tag is "the latest released
+      # main" — which is one tag move per release, here.
+      #
+      # WHY A CONSUMER WOULD WANT IT AT ALL, given that it now tracks `latest` exactly: it says what
+      # it tracks. `latest` is npm's default and means whatever the registry's ordering rule allows;
+      # `main` is this repository's branch, and a consumer pinning `@main` is saying "follow that
+      # branch's releases" rather than "follow whatever is newest".
+      npm dist-tag add "@qits/angular@$version" main
