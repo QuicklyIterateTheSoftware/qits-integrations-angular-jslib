@@ -1,6 +1,6 @@
 {
   "name": "@qits/angular",
-  "version": "2026.905.83455",
+  "version": "2026.905.90159",
   "description": "qits integration for Angular apps: config.json-gated OTEL telemetry (traces, logs, route/interaction/caller enrichment), feature capture, and state snapshots.",
   "license": "MIT",
   "repository": {
