@@ -167,6 +167,12 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   of a release request and publishes nothing, and its green verdict is what lets Auto Release stamp
   the version. Releasing is `POST /projects/api/repositories/<repoId>/release-requests`, never a
   version-bump commit.
+- **A change to the release recipe takes effect on the release that merges it**, not on the one
+  after. qits-ci reads `.config/qits/ci-event-release.yml` at `main`, and Auto Release merges the
+  fold before it publishes the `SCMRelease` the recipe triggers on — so by the time the run is
+  selected, `main` already carries the edit. Measured 2026-09-05: the release that added the
+  `npm dist-tag add` line moved `main` to its own version. Do not plan a recipe change around a
+  one-release delay that does not exist.
 - **The `main` dist-tag names the latest released main**, and the release pipeline points it there
   with `npm dist-tag add` right after its publish. It used to name the retired push pipeline's
   **prerelease**, `<version>-main.g<sha7>`, cut on every push to `main`; when that leg went, nothing
