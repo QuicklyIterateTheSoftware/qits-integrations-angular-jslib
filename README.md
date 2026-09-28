@@ -42,7 +42,7 @@ published to npmjs.org, so a consumer routes the `@qits` scope — and, ideally,
 through the platform. One committed `.npmrc` carries the routing and no credential:
 
 ```ini
-registry=http://localhost:8082/artifacts/npm/npmjs/   # pull-through cache of npmjs
+registry=http://localhost:8082/npm/npmjs/   # pull-through cache of npmjs
 @qits:registry=http://localhost:8081/artifacts/npm/npm/
 ```
 
@@ -53,7 +53,7 @@ pnpm add @qits/angular
 Those are the **local platform's** host-published addresses — the ports a developer on the
 deployment host already dials. They are two services since the byte-plane split: the cache belongs
 to qits-platform-mirror, the hosted scope to qits-artifacts. Inside the platform's own network the
-aliases are `http://qits-platform-mirror:8080/artifacts/npm/npmjs/` and
+aliases are `http://qits-platform-mirror:8080/npm/npmjs/` and
 `http://qits-artifacts:8080/artifacts/npm/npm/`, which is what qits-ci's pipelines write
 into `~/.npmrc` from `$QITS_NPM_PROXY_URL` / `$QITS_NPM_REGISTRY_URL`; a consumer repo's committed
 file is overwritten by that preamble in CI, so it only has to be right for humans. The registry
