@@ -1,6 +1,6 @@
 {
   "name": "qits-integrations-angular",
-  "version": "2026.921.121715",
+  "version": "2026.929.140555",
   "private": true,
   "description": "Angular workspace that builds @qits/angular. The published package is the ng-packagr output in dist/qits-integrations-angular; this manifest is the harness and stays unpublishable.",
   "license": "MIT",
