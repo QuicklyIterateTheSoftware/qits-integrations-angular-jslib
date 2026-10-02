@@ -59,6 +59,8 @@ export interface GoldenOperation {
   readonly path: string;
   /** The query the recording was made with (`?limit=20`); empty when it had none. */
   readonly query: Readonly<Record<string, string>>;
+  /** The JSON body the recording sent (a write's request); undefined when it sent none. */
+  readonly body: Json | undefined;
   readonly status: number;
   readonly file: string;
   readonly ids: ReadonlySet<string>;
@@ -77,6 +79,7 @@ interface Index {
       method: string;
       path: string;
       query?: Record<string, string>;
+      body?: Json;
       status: number;
       file: string;
       frozen?: { ids?: string[]; instants?: string[]; listFilteredTo?: string | null };
@@ -148,6 +151,7 @@ export function goldenMasters(
       method: op.method,
       path: op.path,
       query: { ...(op.query ?? {}) },
+      body: op.body,
       status: op.status,
       file: op.file,
       ids: new Set(op.frozen?.ids ?? []),
@@ -249,9 +253,15 @@ export function addGoldenInteraction(
     interaction = interaction.reference('qits-trigger', key, value);
   }
   const query = op.query;
-  const request = Object.keys(query).length
-    ? interaction.withRequest(op.method, path, (builder) => builder.query({ ...query }))
-    : interaction.withRequest(op.method, path);
+  const sent = op.body;
+  // The request as recorded: its query, and a write's JSON body, matched exactly.
+  const request =
+    Object.keys(query).length || sent !== undefined
+      ? interaction.withRequest(op.method, path, (builder) => {
+          if (Object.keys(query).length) builder.query({ ...query });
+          if (sent !== undefined) builder.jsonBody(sent);
+        })
+      : interaction.withRequest(op.method, path);
   return request.willRespondWith(op.status, (response) => {
     if (body === undefined) return;
     response

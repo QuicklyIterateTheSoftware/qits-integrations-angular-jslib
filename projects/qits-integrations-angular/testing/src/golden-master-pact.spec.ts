@@ -52,6 +52,15 @@ function project(): string {
             frozen: { ids: ['$.entries[*].id'], listFilteredTo: '$.entries' },
           },
           {
+            operationId: 'finishThing',
+            method: 'POST',
+            path: '/things/{thingId}/transition',
+            body: { target: 'DONE' },
+            status: 200,
+            file: 'get-thing.json',
+            frozen: { ids: ['$.id'], instants: ['$.created'] },
+          },
+          {
             operationId: 'listMixed',
             method: 'GET',
             path: '/mixed',
@@ -199,6 +208,32 @@ describe('golden-master-pact', () => {
       const file = join(dir, 'qits-demo-app-qits-demo-service.json');
       const request = JSON.parse(readFileSync(file, 'utf8')).interactions[0].request;
       expect(request.query).toEqual({ limit: ['20'] });
+    });
+
+    it('sends a write’s recorded JSON body', async () => {
+      const masters = goldenMasters(PACKAGE, 'qits-demo', root);
+      expect(masters.operation('a thing exists', 'finishThing').body).toEqual({ target: 'DONE' });
+      expect(masters.operation('a thing exists', 'getThing').body).toBeUndefined();
+      const dir = join(root, 'pacts-write');
+      const pact = new PactV4({ consumer: 'qits-demo-app', provider: 'qits-demo-service', dir });
+      await addGoldenInteraction(pact, masters, {
+        provider: 'qits-demo-service',
+        state: 'a thing exists',
+        operationId: 'finishThing',
+        trigger: { kind: 'ui', app: 'qits-demo-app', interaction: 'finish-thing' },
+        consumes: ['name'],
+      }).executeTest(async (server) => {
+        const op = masters.operation('a thing exists', 'finishThing');
+        await fetch(`${server.url}/things/${op.params['thingId'] ?? ID}/transition`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target: 'DONE' }),
+        });
+      });
+      const file = join(dir, 'qits-demo-app-qits-demo-service.json');
+      const request = JSON.parse(readFileSync(file, 'utf8')).interactions[0].request;
+      expect(request.method).toBe('POST');
+      expect(request.body.content).toEqual({ target: 'DONE' });
     });
 
     it('binds only the paths the consumer reads', async () => {
