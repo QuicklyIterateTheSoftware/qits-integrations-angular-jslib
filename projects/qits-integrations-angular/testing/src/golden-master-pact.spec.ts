@@ -43,6 +43,15 @@ function project(): string {
             frozen: { ids: ['$.entries[*].id'], listFilteredTo: '$.entries' },
           },
           {
+            operationId: 'listRecent',
+            method: 'GET',
+            path: '/things',
+            query: { limit: '20' },
+            status: 200,
+            file: 'list-things.json',
+            frozen: { ids: ['$.entries[*].id'], listFilteredTo: '$.entries' },
+          },
+          {
             operationId: 'listMixed',
             method: 'GET',
             path: '/mixed',
@@ -170,6 +179,26 @@ describe('golden-master-pact', () => {
       const rule = mixed.response.matchingRules.body['$.entries'].matchers[0];
       expect(rule.match).toBe('arrayContains');
       expect(rule.variants).toHaveLength(2);
+    });
+
+    it('requests with the query the recording was made with', async () => {
+      const masters = goldenMasters(PACKAGE, 'qits-demo', root);
+      expect(masters.operation('a thing exists', 'listRecent').query).toEqual({ limit: '20' });
+      expect(masters.operation('a thing exists', 'listThings').query).toEqual({});
+      const dir = join(root, 'pacts');
+      const pact = new PactV4({ consumer: 'qits-demo-app', provider: 'qits-demo-service', dir });
+      await addGoldenInteraction(pact, masters, {
+        provider: 'qits-demo-service',
+        state: 'a thing exists',
+        operationId: 'listRecent',
+        trigger: { kind: 'ui', app: 'qits-demo-app', interaction: 'open-things' },
+        consumes: ['entries[].id'],
+      }).executeTest(async (server) => {
+        await fetch(`${server.url}/things?limit=20`);
+      });
+      const file = join(dir, 'qits-demo-app-qits-demo-service.json');
+      const request = JSON.parse(readFileSync(file, 'utf8')).interactions[0].request;
+      expect(request.query).toEqual({ limit: ['20'] });
     });
 
     it('binds only the paths the consumer reads', async () => {

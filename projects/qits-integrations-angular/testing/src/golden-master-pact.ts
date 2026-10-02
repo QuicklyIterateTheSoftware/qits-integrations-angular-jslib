@@ -57,6 +57,8 @@ export interface GoldenOperation {
   readonly method: string;
   /** The path template, with `{param}` keys of `params`. */
   readonly path: string;
+  /** The query the recording was made with (`?limit=20`); empty when it had none. */
+  readonly query: Readonly<Record<string, string>>;
   readonly status: number;
   readonly file: string;
   readonly ids: ReadonlySet<string>;
@@ -74,6 +76,7 @@ interface Index {
       operationId: string;
       method: string;
       path: string;
+      query?: Record<string, string>;
       status: number;
       file: string;
       frozen?: { ids?: string[]; instants?: string[]; listFilteredTo?: string | null };
@@ -144,6 +147,7 @@ export function goldenMasters(
       operationId,
       method: op.method,
       path: op.path,
+      query: { ...(op.query ?? {}) },
       status: op.status,
       file: op.file,
       ids: new Set(op.frozen?.ids ?? []),
@@ -244,7 +248,11 @@ export function addGoldenInteraction(
   for (const [key, value] of Object.entries(trigger)) {
     interaction = interaction.reference('qits-trigger', key, value);
   }
-  return interaction.withRequest(op.method, path).willRespondWith(op.status, (response) => {
+  const query = op.query;
+  const request = Object.keys(query).length
+    ? interaction.withRequest(op.method, path, (builder) => builder.query({ ...query }))
+    : interaction.withRequest(op.method, path);
+  return request.willRespondWith(op.status, (response) => {
     if (body === undefined) return;
     response
       .headers({ 'Content-Type': MatchersV3.regex('application/json.*', 'application/json') })
