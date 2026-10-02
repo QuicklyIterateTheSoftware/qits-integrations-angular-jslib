@@ -8,11 +8,27 @@
     "url": "https://github.com/QuicklyIterateTheSoftware/qits-integrations-angular.git"
   },
   "homepage": "https://github.com/QuicklyIterateTheSoftware/qits-integrations-angular#readme",
-  "keywords": ["qits", "angular", "opentelemetry", "telemetry", "feature-capture"],
+  "keywords": [
+    "qits",
+    "angular",
+    "opentelemetry",
+    "telemetry",
+    "feature-capture"
+  ],
   "peerDependencies": {
-    "@angular/core": "^21.2.0",
-    "@angular/router": "^21.2.0",
-    "@ngrx/signals": "^21.0.0"
+    "@angular/core": "^22.1.0",
+    "@angular/router": "^22.1.0",
+    "@ngrx/signals": "^22.0.1",
+    "@pact-foundation/pact": "^17.1.4",
+    "eslint": "^9.0.0 || ^10.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@pact-foundation/pact": {
+      "optional": true
+    },
+    "eslint": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
@@ -28,5 +44,10 @@
     "@opentelemetry/sdk-trace-web": "^2.9.0",
     "tslib": "^2.3.0"
   },
-  "sideEffects": false
+  "sideEffects": false,
+  "exports": {
+    "./eslint": {
+      "default": "./eslint/index.mjs"
+    }
+  }
 }

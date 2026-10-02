@@ -110,7 +110,7 @@ marked optional via a pnpm `packageExtensions` entry here and in every consumer.
 ## Commands
 
 - `pnpm build` — `ng build qits-integrations-angular` → APF output in `dist/qits-integrations-angular/`
-- `pnpm test` — `ng test qits-integrations-angular` (vitest builder, jsdom; excludes `*.browser.spec.ts`)
+- `pnpm test` — `pnpm test:eslint` (the lint rules, `node --test`), then `ng test qits-integrations-angular` (vitest builder, jsdom; excludes `*.browser.spec.ts`)
 - `pnpm test:browser` — `*.browser.spec.ts` in headless Chromium (`ng run
   qits-integrations-angular:test-browser`); one-time `pnpm exec playwright install chromium`
 - `pnpm lint` — `ng lint qits-integrations-angular`
@@ -186,9 +186,23 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
 - **The publish is publish-if-absent** — a re-run finds its version in the registry and succeeds
   without touching it. Published versions are immutable; never try to re-publish one.
 
+## The other two entry points
+
+- **`@qits/angular/testing`** (`projects/qits-integrations-angular/testing/`, an ng-packagr
+  secondary entry): the golden-master reader and pact helper (epic qits-546), moved from
+  qits-landing-app. It imports `node:fs`, so it is Node-only and must never be imported by the main
+  entry. Its spec runs under `ng test` (the `../testing/**` include in `angular.json`, because the
+  builder's globs are relative to `src/`) and starts a real pact-js mock server.
+- **`@qits/angular/eslint`** (`projects/qits-integrations-angular/eslint/`): plain ESM, no build.
+  ng-packagr copies the `.mjs` files as assets (minus `test/`), and the source `package.json`'s
+  `exports["./eslint"]` points at them; ng-packagr merges that with the exports it generates.
+  Rule tests run with `node --test` and ESLint's `RuleTester`, on a throwaway app tree under
+  `tmp/` (git-ignored). The roles `pact-names` accepts are the wrapper's repository roles; keep
+  them in step.
+
 ## Conventions (inherited from the qits webui)
 
-- **Every export goes through `projects/qits-integrations-angular/src/public-api.ts`.**
+- **Every export of the main entry goes through `projects/qits-integrations-angular/src/public-api.ts`.**
 - Standalone components only; `ChangeDetectionStrategy.OnPush`.
 - `input()` / `output()` / `computed()` functions — never the decorator forms.
 - `inject()` over constructor injection.

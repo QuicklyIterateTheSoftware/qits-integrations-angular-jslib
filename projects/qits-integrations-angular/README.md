@@ -19,7 +19,7 @@ Published to qits' internal registry under the `@qits` scope, so point the scope
 pnpm add @qits/angular
 ```
 
-**Peers:** `@angular/core`, `@angular/router` and `@ngrx/signals` (^21). The ngrx peer is required
+**Peers:** `@angular/core`, `@angular/router` and `@ngrx/signals` (^22). The ngrx peer is required
 even if you never call `withQitsSnapshot` — the single bundle imports it statically.
 
 ```ts
@@ -31,6 +31,13 @@ initQitsIntegration()
 // app.config.ts
 providers: [provideQitsIntegration(withFeatureCapture())];
 ```
+
+Two more entry points, both documented in the repository README:
+
+- `@qits/angular/testing`: golden masters and Pact V4 consumer pacts for specs (Node only; needs
+  `@pact-foundation/pact`).
+- `@qits/angular/eslint`: lint rules (`client-only-in-stores`, `store-has-pact`, `pact-names`) as
+  a flat-config plugin: `export default [...yourConfig, ...qits.configs.recommended];`
 
 The rest of the consumer contract — the backend endpoints, the capture and state-snapshot APIs,
 serving under a path prefix — is in the

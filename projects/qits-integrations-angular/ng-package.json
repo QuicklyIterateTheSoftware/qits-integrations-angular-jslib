@@ -4,8 +4,13 @@
   "lib": {
     "entryFile": "src/public-api.ts"
   },
-  "allowedNonPeerDependencies": [
-    "tslib",
-    "^@opentelemetry/"
+  "allowedNonPeerDependencies": ["tslib", "^@opentelemetry/"],
+  "assets": [
+    {
+      "glob": "**/*.mjs",
+      "input": "eslint",
+      "output": "eslint",
+      "ignore": ["test/**"]
+    }
   ]
 }

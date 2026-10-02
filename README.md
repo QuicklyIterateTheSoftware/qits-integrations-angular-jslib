@@ -62,7 +62,7 @@ takes no credential in either direction — see the qits-artifacts-service READM
 The tarball ships **prebuilt** (the ng-packagr output), so an install runs no build: no `prepare`
 hook, no `pnpm.onlyBuiltDependencies` allowlist, no Angular toolchain in the consumer.
 
-**Peers:** `@angular/core`, `@angular/router`, and `@ngrx/signals` (^21). The ngrx peer is
+**Peers:** `@angular/core`, `@angular/router`, and `@ngrx/signals` (^22). The ngrx peer is
 required even if you never call `withQitsSnapshot` — the library's single bundle imports it
 statically, so it must be resolvable in every consumer.
 
@@ -227,6 +227,64 @@ before any module code, so it stays an inline `index.html` script — the canoni
 </script>
 ```
 
+## Pacts and golden masters: `@qits/angular/testing`
+
+For an app that consumes a qits provider (epic qits-546). The provider records its real answer for
+each (provider state, operation) and publishes them as an npm package of **golden masters**. The
+app's specs answer with those, and its pact spec turns them into a Pact V4 contract the provider
+verifies. Node-side only: import it from specs, never from app code. Needs
+`@pact-foundation/pact` (optional peer) for the pact part.
+
+```ts
+import { addGoldenInteraction, assertPactFile, goldenMasters } from '@qits/angular/testing';
+
+const masters = goldenMasters('@qits/projects-golden-masters', 'qits-projects');
+masters.body('a project exists', 'listProjects'); // the recorded answer, for flush(...)
+
+const pact = new PactV4({ consumer: 'qits-landing-app', provider: 'qits-projects-service', dir });
+addGoldenInteraction(pact, masters, {
+  provider: 'qits-projects-service',
+  state: 'a project exists',
+  operationId: 'listProjects',
+  trigger: { kind: 'ui', app: 'qits-landing-app', interaction: 'list-projects' },
+}).executeTest(async (server) => { /* drive the store against server.url */ });
+
+// afterAll: fail when the committed pact is stale; QITS_GOLDEN_UPDATE=true rewrites it
+assertPactFile(join(dir, 'qits-landing-app-qits-projects-service.json'),
+  'pacts/qits-landing-app_qits-projects-service.json', 'QITS_GOLDEN_UPDATE');
+```
+
+- **Names are repository names**, both sides: `qits-landing-app`, `qits-projects-service`, never
+  the bare `qits-projects`. A component's frontend and backend must stay distinct. The committed
+  file is `pacts/<consumer>_<provider>.json`.
+- **Matchers come from the index's `frozen` lists**: ids get a uuid regex, instants an ISO-8601
+  regex, every other leaf a type match. `listFilteredTo` arrays match "at least"; other arrays
+  match the recorded length exactly.
+- **Every interaction carries `comments.references`** (`qits-call`, `qits-trigger`). The provider's
+  verification refuses one without them.
+- The path is a provider-state expression only when it has a `{param}`.
+
+## Lint rules: `@qits/angular/eslint`
+
+An ESLint flat-config plugin. Spread its `recommended` config after your own; your config must
+already parse TypeScript (typescript-eslint or angular-eslint does):
+
+```js
+// eslint.config.mjs
+import qits from '@qits/angular/eslint';
+export default [...yourConfig, ...qits.configs.recommended];
+```
+
+| Rule | What it enforces |
+| --- | --- |
+| `qits/client-only-in-stores` | Only `*.store.ts` files and specs import a generated client, so every backend call goes through a store. Type-only imports are fine. Files in `allow` (default `src/app/app.config*.ts`, `src/main*.ts`) may import it to set the client up. |
+| `qits/store-has-pact` | A store that imports a generated client has `<name>.store.pact.spec.ts` beside it. |
+| `qits/pact-names` | In a `*.pact.spec.ts`, `new PactV4({ consumer, provider })` and `addGoldenInteraction(…, { provider, trigger: { app } })`: the consumer and trigger app equal the nearest `package.json` `name`; the provider is a repository name ending in a role (`-service`, `-frontend`, `-app`, `-daemon`, `-oci`, `-cli`, `-javalib`, `-jslib`). Give names as string literals or consts, or the rule cannot check them. |
+
+Generated clients are `src/app/api/**` (relative to the nearest `package.json`) unless you pass
+`{ clients: ['<glob>', …] }` to `client-only-in-stores` and `store-has-pact`. A path alias such as
+`@api/**` is matched as written.
+
 ## Releasing
 
 There is no release command, and there is no longer a push that publishes anything.
@@ -299,7 +357,7 @@ and bump the version once the change is worth publishing.
 pnpm build && pnpm check-exports
 cd dist/qits-integrations-angular && npm pack --dry-run   # prebuilt fesm + types + manifest, no sources
 
-pnpm dlx @angular/cli@21 new smoke --minimal --skip-git --defaults && cd smoke
+pnpm dlx @angular/cli@22 new smoke --minimal --skip-git --defaults && cd smoke
 printf '@qits:registry=http://localhost:8081/artifacts/npm/npm/\n' > .npmrc
 pnpm add @qits/angular
 pnpm ng build                                            # compiles against the installed types
@@ -310,7 +368,7 @@ pnpm ng build                                            # compiles against the 
 | Command | What it does |
 | --- | --- |
 | `pnpm build` | `ng build qits-integrations-angular` → APF output in `dist/qits-integrations-angular/` |
-| `pnpm test` | `ng test qits-integrations-angular` (vitest builder, jsdom) |
+| `pnpm test` | the lint-rule tests (`pnpm test:eslint`, `node --test`), then `ng test qits-integrations-angular` (vitest builder, jsdom) |
 | `pnpm test:browser` | `*.browser.spec.ts` in headless Chromium (style freezing needs a real layout engine); needs a one-time `pnpm exec playwright install chromium` |
 | `pnpm lint` | `ng lint qits-integrations-angular` |
 | `pnpm check-exports` | verify `dist/qits-integrations-angular` is publishable (run it after `pnpm build`) |
