@@ -14,9 +14,11 @@ Public API (all of `public-api.ts`): `initQitsIntegration(options?)` (pre-bootst
 `api/config.json` identity relay, stays dark on `telemetry: null`, otherwise wires the OTEL web
 SDKs; independently stashes the `capture` section), `provideQitsIntegration(...features)` (DI:
 `TelemetryErrorHandler` + route telemetry; `QitsIntegrationFeature.providers` is the tree-shakable
-seam for features), `withFeatureCapture(options?)`, `captureNow()`, and `freezeDocument()` (the
+seam for features), `withFeatureCapture(options?)`, `captureNow()`, `freezeDocument()` (the
 freeze core, exported so the qits webui's element picker can eventually consume it instead of its
-own copy). The two-phase shape is not incidental: Angular's `FetchBackend` captures `window.fetch`
+own copy), and `consume(call, paths)` / `Consumed<T, Paths>` (`consume.ts`: a store states the body
+paths it reads; the compiler then refuses any other field, and the pact spec binds the same list;
+type-level only, the run-time function returns the answer unchanged). The two-phase shape is not incidental: Angular's `FetchBackend` captures `window.fetch`
 on first use, so `initQitsIntegration()` must complete **before** `bootstrapApplication`.
 
 Ported verbatim from the qits fixture (`testing-repo-quarkus-angular`), each encoding a trap
@@ -192,7 +194,9 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   secondary entry): the golden-master reader and pact helper (epic qits-546), moved from
   qits-landing-app. It imports `node:fs`, so it is Node-only and must never be imported by the main
   entry. Its spec runs under `ng test` (the `../testing/**` include in `angular.json`, because the
-  builder's globs are relative to `src/`) and starts a real pact-js mock server.
+  builder's globs are relative to `src/`) and starts a real pact-js mock server. A pact binds only
+  the body paths an interaction lists in `consumes` (required); the golden master keeps the whole
+  answer.
 - **`@qits/angular/eslint`** (`projects/qits-integrations-angular/eslint/`): plain ESM, no build.
   ng-packagr copies the `.mjs` files as assets (minus `test/`), and the source `package.json`'s
   `exports["./eslint"]` points at them; ng-packagr merges that with the exports it generates.

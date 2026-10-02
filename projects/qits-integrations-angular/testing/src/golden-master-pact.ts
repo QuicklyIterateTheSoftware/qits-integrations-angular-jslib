@@ -11,6 +11,12 @@
  *   ({@link addGoldenInteraction}), with matchers from the index's `frozen` lists;
  * - compares the pact a run wrote with the committed one ({@link assertPactFile}).
  *
+ * THE PACT BINDS ONLY WHAT THE CONSUMER READS. The golden master holds the provider's whole answer;
+ * each interaction names the body paths its consumer actually reads (`consumes`), and the pact's
+ * body holds those and nothing else. Every other field stays free for the provider to change.
+ * `consumes: []` means the consumer relies on the status alone: the pact then has no body and no
+ * `Content-Type`.
+ *
  * Pacts name both sides by REPOSITORY name (`qits-landing-app`, `qits-projects-service`), so a
  * component's frontend and backend stay distinct; the committed file is
  * `pacts/<consumer>_<provider>.json`. This file knows no provider, consumer or package by name;
@@ -189,6 +195,18 @@ export interface GoldenInteraction {
   readonly state: string;
   readonly operationId: string;
   readonly trigger: Trigger;
+  /**
+   * The body paths the consumer reads, and so the only ones the pact binds. Dot-separated keys;
+   * `[]` after a key steps into the elements of an array:
+   *
+   * - `project.name`: that field (a whole object or array, if that is what it holds);
+   * - `entries[].project.id`: that field in every element of `entries`;
+   * - `entries[]`: the elements themselves, without any of their fields (the consumer counts them).
+   *
+   * `[]` (empty): the consumer reads the status only, so the pact has no body. A path that is not
+   * in the recorded body throws.
+   */
+  readonly consumes: readonly string[];
 }
 
 /**
@@ -198,7 +216,8 @@ export interface GoldenInteraction {
  * - the provider state with its params;
  * - the path, as a provider-state expression only when it has a `{param}` (pact-jvm resolves a
  *   parameterless expression to a path that misses the route);
- * - the recorded status and body, under matchers (see the file comment);
+ * - the recorded status, and the parts of the recorded body named in `consumes`, under matchers
+ *   (see the file comment);
  * - `comments.references`: `qits-call` (provider and operation) and `qits-trigger`, which the
  *   provider's verification requires.
  *
@@ -208,9 +227,10 @@ export interface GoldenInteraction {
 export function addGoldenInteraction(
   pact: PactV4,
   masters: GoldenMasters,
-  { provider, state, operationId, trigger }: GoldenInteraction,
+  { provider, state, operationId, trigger, consumes }: GoldenInteraction,
 ): V4InteractionWithResponse {
   const op = masters.operation(state, operationId);
+  const body = consumed(masters.body<Json>(state, operationId), consumes, op);
   const path = /\{\w+}/.test(op.path)
     ? MatchersV3.fromProviderState(op.path.replace(/\{(\w+)}/g, '$${$1}'), examplePath(op))
     : op.path;
@@ -224,10 +244,90 @@ export function addGoldenInteraction(
     interaction = interaction.reference('qits-trigger', key, value);
   }
   return interaction.withRequest(op.method, path).willRespondWith(op.status, (response) => {
+    if (body === undefined) return;
     response
       .headers({ 'Content-Type': MatchersV3.regex('application/json.*', 'application/json') })
-      .jsonBody(matched(masters.body<Json>(state, operationId), '$', op));
+      .jsonBody(matched(body, '$', op));
   });
+}
+
+/** The paths of `consumes` as a tree: which keys to keep, and what to keep in array elements. */
+interface Pick {
+  /** The whole value here is read. */
+  whole: boolean;
+  readonly keys: Map<string, Pick>;
+  /** Set when the value here is an array whose elements are read. */
+  elements?: Pick;
+}
+
+const pick = (): Pick => ({ whole: false, keys: new Map() });
+
+/** One path's steps: a key, or `[]` for the elements of an array. */
+function steps(path: string): string[] {
+  const out: string[] = [];
+  for (const segment of path.split('.')) {
+    const match = /^([^[\]]*)((?:\[\])*)$/.exec(segment);
+    if (!match || (!match[1] && !match[2])) throw new Error(`consumes '${path}' is not a path`);
+    if (match[1]) out.push(match[1]);
+    for (let i = 0; i < match[2].length / 2; i++) out.push('[]');
+  }
+  return out;
+}
+
+/**
+ * The recorded `body` cut down to the paths of `consumes`, or `undefined` when it is empty. Throws
+ * when a path is not in the body, naming the state, the operation and the path.
+ */
+function consumed(body: Json, consumes: readonly string[], op: GoldenOperation): Json | undefined {
+  if (consumes.length === 0) return undefined;
+  const root = pick();
+  for (const path of consumes) {
+    const walk = steps(path);
+    if (!holds(body, walk)) {
+      throw new Error(
+        `golden master ${op.state}/${op.operationId}: consumes '${path}', which the recorded body does not hold`,
+      );
+    }
+    let node = root;
+    for (const step of walk) {
+      node = step === '[]' ? (node.elements ??= pick()) : (node.keys.get(step) ?? set(node, step));
+    }
+    // `entries[]` reads the elements, not their fields: only a path ending in a key reads it whole.
+    if (walk[walk.length - 1] !== '[]') node.whole = true;
+  }
+  return project(body, root);
+}
+
+function set(node: Pick, key: string): Pick {
+  const child = pick();
+  node.keys.set(key, child);
+  return child;
+}
+
+/** Whether `value` holds the path `walk`: in at least one element, where it crosses an array. */
+function holds(value: Json, walk: readonly string[]): boolean {
+  if (walk.length === 0) return true;
+  const [step, ...rest] = walk;
+  if (step === '[]') return Array.isArray(value) && value.some((v) => holds(v, rest));
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  return step in value && holds(value[step], rest);
+}
+
+/** `value` with only what `node` keeps. An object element read without fields becomes `{}`. */
+function project(value: Json, node: Pick): Json {
+  if (node.whole || value === null) return value;
+  if (Array.isArray(value)) {
+    const elements = node.elements;
+    return elements ? value.map((v) => project(v, elements)) : value;
+  }
+  if (typeof value === 'object') {
+    const out: Record<string, Json> = {};
+    for (const [key, child] of node.keys) {
+      if (key in value) out[key] = project(value[key], child);
+    }
+    return out;
+  }
+  return value;
 }
 
 const UUID = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$';

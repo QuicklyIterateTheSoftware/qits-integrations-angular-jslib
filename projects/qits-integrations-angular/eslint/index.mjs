@@ -8,6 +8,7 @@
  * angular-eslint does).
  */
 import clientOnlyInStores from './rules/client-only-in-stores.mjs';
+import consumeClientCalls from './rules/consume-client-calls.mjs';
 import pactNames from './rules/pact-names.mjs';
 import storeHasPact from './rules/store-has-pact.mjs';
 
@@ -15,6 +16,7 @@ const plugin = {
   meta: { name: '@qits/angular/eslint' },
   rules: {
     'client-only-in-stores': clientOnlyInStores,
+    'consume-client-calls': consumeClientCalls,
     'store-has-pact': storeHasPact,
     'pact-names': pactNames,
   },
@@ -28,6 +30,7 @@ plugin.configs.recommended = [
     plugins: { qits: plugin },
     rules: {
       'qits/client-only-in-stores': 'error',
+      'qits/consume-client-calls': 'error',
       'qits/store-has-pact': 'error',
       'qits/pact-names': 'error',
     },

@@ -88,11 +88,19 @@ describe('golden-master-pact', () => {
     });
     const trigger = { kind: 'ui', app: 'qits-demo-app', interaction: 'open-thing' } as const;
     const common = { provider: 'qits-demo-service', state: 'a thing exists', trigger };
-    await addGoldenInteraction(pact, masters, { ...common, operationId: 'getThing' }).executeTest(
-      async (server) => expect((await fetch(`${server.url}/things/${ID}`)).status).toBe(200),
+    await addGoldenInteraction(pact, masters, {
+      ...common,
+      operationId: 'getThing',
+      consumes: ['id', 'name', 'created', 'backup'],
+    }).executeTest(async (server) =>
+      expect((await fetch(`${server.url}/things/${ID}`)).status).toBe(200),
     );
-    await addGoldenInteraction(pact, masters, { ...common, operationId: 'listThings' }).executeTest(
-      async (server) => expect((await fetch(`${server.url}/things`)).status).toBe(200),
+    await addGoldenInteraction(pact, masters, {
+      ...common,
+      operationId: 'listThings',
+      consumes: ['entries[].id', 'entries[].size'],
+    }).executeTest(async (server) =>
+      expect((await fetch(`${server.url}/things`)).status).toBe(200),
     );
 
     const written = JSON.parse(
@@ -117,6 +125,69 @@ describe('golden-master-pact', () => {
     expect(rules['$.name'].matchers[0].match).toBe('type');
     expect(rules['$.backup']).toBeUndefined();
     expect(list.response.matchingRules.body['$.entries'].matchers[0]).toMatchObject({ min: 1 });
+  });
+
+  describe('consumes', () => {
+    /** Adds one interaction, makes its call, and returns the interaction as written. */
+    async function written(operationId: string, consumes: readonly string[]) {
+      const masters = goldenMasters(PACKAGE, 'qits-demo', root);
+      const dir = join(root, 'pacts');
+      const pact = new PactV4({ consumer: 'qits-demo-app', provider: 'qits-demo-service', dir });
+      const op = masters.operation('a thing exists', operationId);
+      await addGoldenInteraction(pact, masters, {
+        provider: 'qits-demo-service',
+        state: 'a thing exists',
+        operationId,
+        trigger: { kind: 'ui', app: 'qits-demo-app', interaction: 'open-thing' },
+        consumes,
+      }).executeTest(async (server) => {
+        await fetch(`${server.url}${examplePath(op)}`);
+      });
+      const file = join(dir, 'qits-demo-app-qits-demo-service.json');
+      return JSON.parse(readFileSync(file, 'utf8')).interactions[0];
+    }
+
+    it('binds only the paths the consumer reads', async () => {
+      const get = await written('getThing', ['name']);
+      expect(get.response.body.content).toEqual({ name: 'a' });
+      expect(Object.keys(get.response.matchingRules.body)).toEqual(['$.name']);
+    });
+
+    it('binds only the consumed fields of array elements', async () => {
+      const list = await written('listThings', ['entries[].size']);
+      expect(list.response.body.content).toEqual({ entries: [{ size: 3 }] });
+      expect(list.response.matchingRules.body['$.entries[*].id']).toBeUndefined();
+      expect(list.response.matchingRules.body['$.entries'].matchers[0]).toMatchObject({ min: 1 });
+    });
+
+    it('binds array elements without their fields', async () => {
+      const list = await written('listThings', ['entries[]']);
+      expect(list.response.body.content).toEqual({ entries: [{}] });
+    });
+
+    it('binds the status only when nothing is consumed', async () => {
+      const get = await written('getThing', []);
+      expect(get.response.status).toBe(200);
+      expect(get.response.body).toBeUndefined();
+      expect(get.response.headers).toBeUndefined();
+    });
+
+    it('refuses a path the recorded body does not hold', () => {
+      const masters = goldenMasters(PACKAGE, 'qits-demo', root);
+      const pact = new PactV4({ consumer: 'c-app', provider: 'p-service', dir: root });
+      const add = (consumes: readonly string[]) =>
+        addGoldenInteraction(pact, masters, {
+          provider: 'p-service',
+          state: 'a thing exists',
+          operationId: 'listThings',
+          trigger: { kind: 'ui', app: 'c-app', interaction: 'open-thing' },
+          consumes,
+        });
+      expect(() => add(['entries[].colour'])).toThrow(
+        "golden master a thing exists/listThings: consumes 'entries[].colour', which the recorded body does not hold",
+      );
+      expect(() => add(['entries.id'])).toThrow(/consumes 'entries.id'/);
+    });
   });
 
   it('compares the written pact with the committed one, ignoring metadata and order', () => {

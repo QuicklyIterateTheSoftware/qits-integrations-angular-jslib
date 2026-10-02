@@ -227,6 +227,28 @@ before any module code, so it stays an inline `index.html` script — the canoni
 </script>
 ```
 
+## What a store reads: `consume` and `Consumed`
+
+A store lists the body paths it reads from each call, once, as an `as const` array, and wraps
+the generated client call in `consume`. `data` comes back typed to those paths only, so reading
+any other field fails `tsc` and Angular's strict templates. The store's pact spec passes the same
+array as `consumes`, so the pact binds exactly what the code reads.
+
+```ts
+import { consume } from '@qits/angular';
+
+export const LIST_PROJECTS = ['entries[].project.id', 'entries[].project.name'] as const;
+
+const { data, error } = await consume(getProjectsApiProjects(), LIST_PROJECTS);
+data?.entries?.[0].project?.name; // fine
+data?.entries?.[0].project?.slug; // error: not listed
+```
+
+`a.b` is a field (whole, if it is an object or array), `list[].x` a field in every element,
+`list[]` the elements without their fields. `error` is narrowed too: to nothing, unless a third
+argument lists paths. `NOTHING` is the empty list. At run time `consume` returns the answer
+unchanged. `qits/consume-client-calls` makes every client call in a store go through it.
+
 ## Pacts and golden masters: `@qits/angular/testing`
 
 For an app that consumes a qits provider (epic qits-546). The provider records its real answer for
@@ -247,6 +269,7 @@ addGoldenInteraction(pact, masters, {
   state: 'a project exists',
   operationId: 'listProjects',
   trigger: { kind: 'ui', app: 'qits-landing-app', interaction: 'list-projects' },
+  consumes: ['entries[].project.id', 'entries[].project.name'], // what the app reads
 }).executeTest(async (server) => {
   /* drive the store against server.url */
 });
@@ -262,6 +285,11 @@ assertPactFile(
 - **Names are repository names**, both sides: `qits-landing-app`, `qits-projects-service`, never
   the bare `qits-projects`. A component's frontend and backend must stay distinct. The committed
   file is `pacts/<consumer>_<provider>.json`.
+- **The pact binds only what the consumer reads.** The golden master holds the whole answer; each
+  interaction names the body paths its code reads in `consumes` (required), and the pact holds
+  only those. `a.b` is a field (whole, if it is an object or array), `list[].x` a field in every
+  element, `list[]` the elements without their fields (a count). `consumes: []` binds the status
+  only: no body, no `Content-Type`. A path the recorded body does not hold throws.
 - **Matchers come from the index's `frozen` lists**: ids get a uuid regex, instants an ISO-8601
   regex, every other leaf a type match. `listFilteredTo` arrays match "at least"; other arrays
   match the recorded length exactly.
@@ -283,11 +311,12 @@ export default [...yourConfig, ...qits.configs.recommended];
 | Rule                         | What it enforces                                                                                                                                                                                                                                                                                                                                                                                                |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `qits/client-only-in-stores` | Only `*.store.ts` files and specs import a generated client, so every backend call goes through a store. Type-only imports are fine. Files in `allow` (default `src/app/app.config*.ts`, `src/main*.ts`) may import it to set the client up.                                                                                                                                                                    |
+| `qits/consume-client-calls`  | In a store, every call to a generated client function is the first argument of `consume(call, paths)`. Awaiting it on its own, `.then`, passing the promise or the function elsewhere, and `…Resource` helpers (no promise to wrap) are reported. Option `consume` renames the wrapper.                                                                                                                         |
 | `qits/store-has-pact`        | A store that imports a generated client has `<name>.store.pact.spec.ts` beside it.                                                                                                                                                                                                                                                                                                                              |
 | `qits/pact-names`            | In a `*.pact.spec.ts`, `new PactV4({ consumer, provider })` and `addGoldenInteraction(…, { provider, trigger: { app } })`: the consumer and trigger app equal the nearest `package.json` `name`; the provider is a repository name ending in a role (`-service`, `-frontend`, `-app`, `-daemon`, `-oci`, `-cli`, `-javalib`, `-jslib`). Give names as string literals or consts, or the rule cannot check them. |
 
 Generated clients are `src/app/api/**` (relative to the nearest `package.json`) unless you pass
-`{ clients: ['<glob>', …] }` to `client-only-in-stores` and `store-has-pact`. A path alias such as
+`{ clients: ['<glob>', …] }` to `client-only-in-stores`, `consume-client-calls` and `store-has-pact`. A path alias such as
 `@api/**` is matched as written.
 
 ## Releasing

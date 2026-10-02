@@ -14,3 +14,5 @@ export type { CaptureSelection } from './lib/capture-payload';
 export { withQitsSnapshot } from './lib/with-qits-snapshot';
 export { registerCaptureState } from './lib/capture-state';
 export type { CaptureStateSupplier } from './lib/capture-state';
+export { consume, NOTHING } from './lib/consume';
+export type { Consumed, ConsumedPaths } from './lib/consume';

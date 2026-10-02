@@ -120,6 +120,81 @@ tester.run('store-has-pact', rules['store-has-pact'], {
   ],
 });
 
+const STORE = at('src/app/core/projects/projects.store.ts');
+const SDK =
+  "import { getProjects, getProjectsResource, type ProjectDto } from '../../api/projects';";
+
+tester.run('consume-client-calls', rules['consume-client-calls'], {
+  valid: [
+    { filename: STORE, code: `${SDK}\nconst r = await consume(getProjects(), PATHS);` },
+    {
+      filename: STORE,
+      code: `${SDK}\nconsume(getProjects({ path: { id } }), PATHS, ['message']);`,
+    },
+    {
+      filename: STORE,
+      code: "import * as api from '../../api/projects';\nawait consume(api.getProjects(), PATHS);",
+    },
+    // A type calls nothing.
+    { filename: STORE, code: `${SDK}\nlet p: ProjectDto; type F = typeof getProjects;` },
+    // Not a store: client-only-in-stores' business, not this rule's.
+    { filename: at('src/app/projects/card.ts'), code: `${SDK}\nawait getProjects();` },
+    {
+      filename: at('src/app/core/projects/projects.store.spec.ts'),
+      code: `${SDK}\ngetProjects();`,
+    },
+    {
+      filename: STORE,
+      code: `${SDK}\nawait unwrap(getProjects(), PATHS);`,
+      options: [{ consume: 'unwrap' }],
+    },
+  ],
+  invalid: [
+    {
+      filename: STORE,
+      code: `${SDK}\nconst { data } = await getProjects();`,
+      errors: [{ messageId: 'unwrapped', data: { name: 'getProjects', consume: 'consume' } }],
+    },
+    {
+      filename: STORE,
+      code: `${SDK}\ngetProjects().then((r) => r.data);`,
+      errors: [{ messageId: 'unwrapped' }],
+    },
+    {
+      filename: STORE,
+      code: `${SDK}\nconst call = getProjects();\nawait consume(call, PATHS);`,
+      errors: [{ messageId: 'unwrapped' }],
+    },
+    {
+      filename: STORE,
+      code: `${SDK}\nawait consume(Promise.resolve(getProjects()), PATHS);`,
+      errors: [{ messageId: 'unwrapped' }],
+    },
+    {
+      filename: STORE,
+      code: `${SDK}\nawait consume(PATHS, getProjects());`,
+      errors: [{ messageId: 'unwrapped' }],
+    },
+    {
+      filename: STORE,
+      code: `${SDK}\nconst f = getProjects;`,
+      errors: [{ messageId: 'unwrapped' }],
+    },
+    {
+      filename: STORE,
+      code: `${SDK}\nconst projects = getProjectsResource(() => ({}));`,
+      errors: [
+        { messageId: 'unwrapped', data: { name: 'getProjectsResource', consume: 'consume' } },
+      ],
+    },
+    {
+      filename: STORE,
+      code: "import * as api from '../../api/projects';\nawait api.getProjects();",
+      errors: [{ messageId: 'unwrapped', data: { name: 'api.getProjects', consume: 'consume' } }],
+    },
+  ],
+});
+
 const SPEC = at('src/app/core/projects/projects.store.pact.spec.ts');
 
 tester.run('pact-names', rules['pact-names'], {
