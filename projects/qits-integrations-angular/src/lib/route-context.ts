@@ -5,8 +5,10 @@ import type { Span as SdkSpan, SpanProcessor } from '@opentelemetry/sdk-trace-we
 // Current-route state: written by the route-telemetry router subscription, read by the stamping
 // processors below. Before the first NavigationEnd only the concrete URL is known (covers
 // documentLoad); the matched pattern is omitted rather than faked with a concrete URL, which
-// would pollute the pattern attribute's grouping.
-let currentRoute: { path?: string; url: string } = { url: location.pathname };
+// would pollute the pattern attribute's grouping. On the server there is no `location`: importing
+// this module during SSR must not throw, so the URL starts as '/' there.
+const initialUrl = (): string => (typeof location === 'undefined' ? '/' : location.pathname);
+let currentRoute: { path?: string; url: string } = { url: initialUrl() };
 
 export function setCurrentRoute(route: { path?: string; url: string }): void {
   currentRoute = route;
@@ -55,5 +57,5 @@ export class RouteStampingLogRecordProcessor implements LogRecordProcessor {
 
 /** Test seam: the module-level route state would otherwise leak across specs. */
 export function resetRouteContextForTesting(): void {
-  currentRoute = { url: location.pathname };
+  currentRoute = { url: initialUrl() };
 }
