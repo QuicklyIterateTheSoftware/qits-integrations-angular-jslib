@@ -42,6 +42,14 @@ function project(): string {
             file: 'list-things.json',
             frozen: { ids: ['$.entries[*].id'], listFilteredTo: '$.entries' },
           },
+          {
+            operationId: 'listMixed',
+            method: 'GET',
+            path: '/mixed',
+            status: 200,
+            file: 'list-mixed.json',
+            frozen: { ids: ['$.entries[*].id'], listFilteredTo: '$.entries' },
+          },
         ],
       },
     ],
@@ -52,6 +60,15 @@ function project(): string {
     JSON.stringify({ id: ID, name: 'a', created: '2026-01-01T00:00:00Z', backup: null }),
   );
   writeFileSync(join(tree, 'list-things.json'), JSON.stringify({ entries: [{ id: ID, size: 3 }] }));
+  writeFileSync(
+    join(tree, 'list-mixed.json'),
+    JSON.stringify({
+      entries: [
+        { id: ID, parts: [{ size: 1 }, { size: 2 }] },
+        { id: ID.replace(/1$/, '2'), parts: [] },
+      ],
+    }),
+  );
   return root;
 }
 
@@ -124,7 +141,8 @@ describe('golden-master-pact', () => {
     expect(rules['$.created'].matchers[0].match).toBe('regex');
     expect(rules['$.name'].matchers[0].match).toBe('type');
     expect(rules['$.backup']).toBeUndefined();
-    expect(list.response.matchingRules.body['$.entries'].matchers[0]).toMatchObject({ min: 1 });
+    // The state's entries sit in a list that holds others too: "contains", not "every element".
+    expect(list.response.matchingRules.body['$.entries'].matchers[0].match).toBe('arrayContains');
   });
 
   describe('consumes', () => {
@@ -147,6 +165,13 @@ describe('golden-master-pact', () => {
       return JSON.parse(readFileSync(file, 'utf8')).interactions[0];
     }
 
+    it('matches a list mixing empty and filled arrays as "contains one of each"', async () => {
+      const mixed = await written('listMixed', ['entries[].id', 'entries[].parts[].size']);
+      const rule = mixed.response.matchingRules.body['$.entries'].matchers[0];
+      expect(rule.match).toBe('arrayContains');
+      expect(rule.variants).toHaveLength(2);
+    });
+
     it('binds only the paths the consumer reads', async () => {
       const get = await written('getThing', ['name']);
       expect(get.response.body.content).toEqual({ name: 'a' });
@@ -157,7 +182,8 @@ describe('golden-master-pact', () => {
       const list = await written('listThings', ['entries[].size']);
       expect(list.response.body.content).toEqual({ entries: [{ size: 3 }] });
       expect(list.response.matchingRules.body['$.entries[*].id']).toBeUndefined();
-      expect(list.response.matchingRules.body['$.entries'].matchers[0]).toMatchObject({ min: 1 });
+      // The state's entries sit in a list that holds others too: "contains", not "every element".
+      expect(list.response.matchingRules.body['$.entries'].matchers[0].match).toBe('arrayContains');
     });
 
     it('binds array elements without their fields', async () => {

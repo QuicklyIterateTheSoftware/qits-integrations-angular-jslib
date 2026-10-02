@@ -289,10 +289,11 @@ assertPactFile(
   interaction names the body paths its code reads in `consumes` (required), and the pact holds
   only those. `a.b` is a field (whole, if it is an object or array), `list[].x` a field in every
   element, `list[]` the elements without their fields (a count). `consumes: []` binds the status
-  only: no body, no `Content-Type`. A path the recorded body does not hold throws.
+  only: no body, no `Content-Type`. A path the recorded body does not hold throws (an empty array holds every path below it).
 - **Matchers come from the index's `frozen` lists**: ids get a uuid regex, instants an ISO-8601
-  regex, every other leaf a type match. `listFilteredTo` arrays match "at least"; other arrays
-  match the recorded length exactly.
+  regex, every other leaf a type match. `listFilteredTo` arrays match "contains an element of each
+  recorded shape" (`arrayContaining`); other arrays match the recorded length exactly, or
+  `arrayContaining` when their elements differ in which fields are null or which arrays are empty.
 - **Every interaction carries `comments.references`** (`qits-call`, `qits-trigger`). The provider's
   verification refuses one without them.
 - The path is a provider-state expression only when it has a `{param}`.

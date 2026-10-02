@@ -29,13 +29,14 @@
  * - `frozen.instants`: an ISO-8601 regex;
  * - `frozen.strings` and every other leaf: a type match (`number` for numbers);
  * - a leaf that is null where it was recorded: exactly `null`;
- * - `frozen.listFilteredTo`: at least the recorded number of elements ("contains");
+ * - `frozen.listFilteredTo`: `arrayContaining`, one variant per shape: the answer contains the
+ *   state's entries, among whatever else the provider holds ("contains", never "every element");
  * - every other array: exactly the recorded number of elements, each matched against the first.
  *
- * An array whose elements differ in which fields are null (a PROJECT repository has no
- * `component`, the others have one) cannot be matched against one template: Pact has no "type or
- * null". It becomes `arrayContaining` with one variant per such shape, so the answer must hold at
- * least one element of each shape, in any order.
+ * An array whose elements differ in shape (which fields are null, which arrays are empty: a
+ * PROJECT repository has no `component`, a repository not counted yet has no `languages`) cannot
+ * be matched against one template: Pact has no "type or null". It becomes `arrayContaining` with
+ * one variant per shape, so the answer must hold at least one element of each shape, in any order.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -308,7 +309,10 @@ function set(node: Pick, key: string): Pick {
 function holds(value: Json, walk: readonly string[]): boolean {
   if (walk.length === 0) return true;
   const [step, ...rest] = walk;
-  if (step === '[]') return Array.isArray(value) && value.some((v) => holds(v, rest));
+  // An empty array holds every path below it: there is nothing recorded there to bind.
+  if (step === '[]') {
+    return Array.isArray(value) && (value.length === 0 || value.some((v) => holds(v, rest)));
+  }
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   return step in value && holds(value[step], rest);
 }
@@ -349,6 +353,16 @@ function matched(value: Json, path: string, op: GoldenOperation): unknown {
   return MatchersV3.like(value);
 }
 
+/**
+ * A recorded array, wrapped in matchers. Elements that agree on their shape (which paths are null,
+ * which arrays are empty) share one template.
+ *
+ * - The `listFilteredTo` array is the state's own entries in a list that also holds whatever else
+ *   the provider has: it is matched as "contains an element of each shape" (`arrayContaining`),
+ *   never "every element looks like this", because the other entries may look different.
+ * - Any other array with elements of more than one shape is matched the same way.
+ * - Any other array is "exactly the recorded count, each like the template".
+ */
 function matchedArray(values: Json[], path: string, op: GoldenOperation): unknown {
   if (values.length === 0) return [];
   const element = `${path}[*]`;
@@ -357,19 +371,23 @@ function matchedArray(values: Json[], path: string, op: GoldenOperation): unknow
     const shape = nullShape(value);
     if (!shapes.has(shape)) shapes.set(shape, value);
   }
-  if (shapes.size > 1) {
+  if (path === op.listFilteredTo || shapes.size > 1) {
     return MatchersV3.arrayContaining(...[...shapes.values()].map((v) => matched(v, element, op)));
   }
   const template = matched(values[0], element, op);
-  return path === op.listFilteredTo
-    ? MatchersV3.atLeastLike(template, values.length, values.length)
-    : MatchersV3.constrainedArrayLike(template, values.length, values.length, values.length);
+  return MatchersV3.constrainedArrayLike(template, values.length, values.length, values.length);
 }
 
-/** Which paths inside `value` are null: elements that agree can share one template. */
+/**
+ * Which paths inside `value` are null and which arrays are empty: elements that agree can share
+ * one template.
+ */
 function nullShape(value: Json, path = ''): string {
   if (value === null) return `${path}=null;`;
-  if (Array.isArray(value)) return value.map((v) => nullShape(v, `${path}[]`)).join('');
+  if (Array.isArray(value)) {
+    if (value.length === 0) return `${path}=[];`;
+    return value.map((v) => nullShape(v, `${path}[]`)).join('');
+  }
   if (typeof value === 'object') {
     return Object.entries(value)
       .map(([key, child]) => nullShape(child, `${path}.${key}`))
