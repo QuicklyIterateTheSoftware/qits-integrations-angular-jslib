@@ -45,7 +45,7 @@ style:
 
 - `capture-config.ts` — module-level relay/options state (the relay arrives pre-bootstrap,
   before DI exists); `isCaptureActive()` is the gate for the button, `captureNow()`, and the
-  widened route-telemetry initializer (route *tracking* is needed even when telemetry is dark —
+  widened route-telemetry initializer (route _tracking_ is needed even when telemetry is dark —
   the Navigation spans are global no-ops without a tracer provider).
 - `document-freeze.ts` — subtree style-freeze, sibling of the qits webui's element-scoped
   `style-freeze.ts` (same algorithm: stylesheet-free **off-screen, never display:none** baseline
@@ -79,7 +79,7 @@ style:
   `APP_BOOTSTRAP_LISTENER` (an app initializer cannot inject the still-under-construction
   `ApplicationRef`), `createComponent` + `appRef.attachView` + append to `document.body`. The
   button host carries `data-qits-pick-overlay`: excluded from its own freeze, from its own picker,
-  *and* from qits' element picker. The press is a two-step gesture: `idle → picking` (arms
+  _and_ from qits' element picker. The press is a two-step gesture: `idle → picking` (arms
   `pickElement`) → on pick `busy` (`captureNow(target)` → navigate), on Escape/right-click back to
   `idle`. `captureNow(target?)` stays public and target-optional — a `renderButton: false` trigger
   can capture with no pick (whole-body snapshot, no `selection`).
@@ -88,14 +88,14 @@ State snapshots (qits' `docs/features/2026-07-14_capture-state-snapshot.md`):
 
 - `capture-state.ts` — module-level `Map` of named suppliers (registration can predate DI and
   any capture); suppliers run lazily at capture time only. Duplicate name: warn + last-wins.
-  The unregister fn is **identity-guarded** — it deletes only if the map still holds *its own*
+  The unregister fn is **identity-guarded** — it deletes only if the map still holds _its own_
   supplier, so a stale destroy after a hot-reload re-registration can't tear down the live one.
   Per-entry try/catch (covering the sanitizer walk — object getters can throw mid-enumeration)
   → `{$error}`; per-entry 64 kB cap → wholesale `{$truncated, bytes}` replacement.
 - `capture-state-sanitize.ts` — JSON-safe sanitizer: depth 8, ancestor-path (not visited-set)
   cycle detection so shared DAG references still serialize, `Map`/`Set`/`Date` converted,
   everything non-plain → `"$unserializable(<type>)"`. **BigInt → string is load-bearing**: it is
-  the one value `JSON.stringify` *throws* on, and the payload-level stringify in
+  the one value `JSON.stringify` _throws_ on, and the payload-level stringify in
   capture-transport must never throw.
 - `with-qits-snapshot.ts` — `signalStoreFeature` registering `() => getState(store)`.
   Registration happens in `onInit`, **not** the `withHooks` factory body (the factory runs
@@ -112,7 +112,7 @@ marked optional via a pnpm `packageExtensions` entry here and in every consumer.
 - `pnpm build` — `ng build qits-integrations-angular` → APF output in `dist/qits-integrations-angular/`
 - `pnpm test` — `pnpm test:eslint` (the lint rules, `node --test`), then `ng test qits-integrations-angular` (vitest builder, jsdom; excludes `*.browser.spec.ts`)
 - `pnpm test:browser` — `*.browser.spec.ts` in headless Chromium (`ng run
-  qits-integrations-angular:test-browser`); one-time `pnpm exec playwright install chromium`
+qits-integrations-angular:test-browser`); one-time `pnpm exec playwright install chromium`
 - `pnpm lint` — `ng lint qits-integrations-angular`
 - `pnpm check-exports` — verify `dist/qits-integrations-angular` is publishable (after `pnpm build`)
 
@@ -126,16 +126,16 @@ own npm registry (hosted by qits-artifacts, under the `@qits` scope) by
 `.config/qits/ci-event-release.yml`. `projects/qits-integrations-angular/package.json` is the single
 source of truth for name, version, description, license, peers and runtime deps; ng-packagr copies
 it into the manifest inside `dist/`, and that manifest is what `npm publish` uploads. A field that
-must reach the registry is added *there*.
+must reach the registry is added _there_.
 
 There are two READMEs and they are not redundant: the root one is the consumer contract, and
-`projects/qits-integrations-angular/README.md` is the *package* README — ng-packagr copies it into
+`projects/qits-integrations-angular/README.md` is the _package_ README — ng-packagr copies it into
 the tarball, so it is the page the registry shows. ng-packagr refuses assets from outside the
 project directory, so the root file cannot be the shipped one; keep the short version pointing at
 the long one.
 
 The root `package.json` is the **workspace harness**: the devDependencies that build and test the
-library, and the runtime deps its sources resolve against while doing so. It used to *be* the
+library, and the runtime deps its sources resolve against while doing so. It used to _be_ the
 package — git-only distribution installed the repo root and built it consumer-side — and that whole
 shape (a duplicated `name`/`version`, `files`/`exports` pointing into `dist/`, `prepare` as the
 distribution mechanism) is gone. A registry tarball ships prebuilt, so the consumer-side rebuild and
@@ -147,7 +147,7 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   manifest. `npm publish` is pointed at that directory.
 - **`projects/qits-integrations-angular/package.json` is the source of truth** for everything the
   published manifest carries.
-- **The root keeps `private: true`** — it blocks registry publishing of the *root*, which is
+- **The root keeps `private: true`** — it blocks registry publishing of the _root_, which is
   exactly right: the harness is not the package, and `dist/` publishes independently of it. The
   root also carries no `files`, no `exports`, no `prepare`; `check-exports` fails if any come back.
   (Do not verify that guard with `npm publish --dry-run`: the `EPRIVATE` check lives in

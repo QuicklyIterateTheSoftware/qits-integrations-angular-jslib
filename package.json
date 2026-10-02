@@ -15,8 +15,9 @@
     "test": "pnpm test:eslint && ng test qits-integrations-angular",
     "test:eslint": "node --test 'projects/qits-integrations-angular/eslint/test/*.test.mjs'",
     "test:browser": "ng run qits-integrations-angular:test-browser",
-    "lint": "ng lint qits-integrations-angular",
-    "check-exports": "node scripts/check-exports.mjs"
+    "lint": "prettier --check . && ng lint qits-integrations-angular",
+    "check-exports": "node scripts/check-exports.mjs",
+    "format": "prettier --write ."
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",

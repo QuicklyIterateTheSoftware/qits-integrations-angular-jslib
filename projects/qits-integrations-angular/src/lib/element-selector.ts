@@ -26,7 +26,9 @@ export function selectorFor(element: Element): string {
       break;
     }
     const current = node;
-    const sameTagSiblings = Array.from(parent.children).filter((c) => c.tagName === current.tagName);
+    const sameTagSiblings = Array.from(parent.children).filter(
+      (c) => c.tagName === current.tagName,
+    );
     parts.unshift(tag + ':nth-of-type(' + (sameTagSiblings.indexOf(current) + 1) + ')');
     node = parent;
   }

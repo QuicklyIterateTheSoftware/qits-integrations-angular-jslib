@@ -93,9 +93,7 @@ describe('captureApiAvailable', () => {
   });
 
   it('is unavailable on a 404 (backend without the ingest)', async () => {
-    window.fetch = vi
-      .fn()
-      .mockResolvedValue({ ok: false, status: 404 }) as unknown as typeof fetch;
+    window.fetch = vi.fn().mockResolvedValue({ ok: false, status: 404 }) as unknown as typeof fetch;
     await expect(captureApiAvailable(RELAY)).resolves.toBe(false);
   });
 
@@ -145,9 +143,7 @@ describe('postCapture', () => {
 
   it('rejects with a CaptureError on a non-201 status', async () => {
     stubFetch({ status: 413 } as Partial<Response>);
-    await expect(postCapture(payload(), 'http://x/api/capture')).rejects.toThrowError(
-      CaptureError,
-    );
+    await expect(postCapture(payload(), 'http://x/api/capture')).rejects.toThrowError(CaptureError);
   });
 
   it('rejects with a CaptureError when the endpoint is unreachable', async () => {

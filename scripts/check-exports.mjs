@@ -45,7 +45,9 @@ if (dist.version !== source.version) {
 // A private manifest is one npm refuses to publish, so the publish step would fail at the very end
 // of a long green pipeline. Fail here instead, and fix it in SOURCE — never by editing dist/.
 if (dist.private) {
-  fail(`${DIST}/package.json carries "private": true — npm publish refuses it; remove it from ${SOURCE}`);
+  fail(
+    `${DIST}/package.json carries "private": true — npm publish refuses it; remove it from ${SOURCE}`,
+  );
 }
 for (const field of ['description', 'license']) {
   if (!dist[field]) {
@@ -93,4 +95,6 @@ for (const [pkg, range] of Object.entries(dist.peerDependencies ?? {})) {
 }
 
 if (failed) process.exit(1);
-console.log(`publishable: ${dist.name}@${dist.version} in ${DIST} (identity, entry points, deps and peers check out)`);
+console.log(
+  `publishable: ${dist.name}@${dist.version} in ${DIST} (identity, entry points, deps and peers check out)`,
+);

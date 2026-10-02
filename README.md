@@ -33,7 +33,7 @@ metadata — POSTs it to qits' capture ingest, and lands the user in a freshly c
 workspace whose goal carries the captured context. Gated by the relay's `capture` section, same
 dark-by-default stance. **State snapshots** ride along: state the app registers (one line per
 `@ngrx/signals` store via `withQitsSnapshot`, or `registerCaptureState` for anything else) lands
-in the capture's goal as JSON — what the app *knew*, not just what it rendered.
+in the capture's goal as JSON — what the app _knew_, not just what it rendered.
 
 ## Install
 
@@ -69,7 +69,7 @@ statically, so it must be resolvable in every consumer.
 > **Historical note.** Before the registry existed, distribution was git-only: consumers ran
 > `pnpm add "git+https://…#<sha>"`, which installed the **repo root** and built it on their
 > machine through a `prepare` hook — and needed `{"pnpm": {"onlyBuiltDependencies":
-> ["@qits/angular"]}}` in their own manifest to let that hook run under pnpm 10. Both are gone.
+["@qits/angular"]}}` in their own manifest to let that hook run under pnpm 10. Both are gone.
 > A `#<sha>` pin still resolves against the commits that carried that shape, but nothing on `main`
 > supports it: the root manifest is a workspace harness now and installs as an empty package.
 
@@ -115,7 +115,7 @@ providers: [
 ```
 
 Name interactions with a framework-free DOM attribute — put `data-track-event="<name>"` on the
-event **target or an ancestor** (a submit event's target is the *form*, so name forms, not their
+event **target or an ancestor** (a submit event's target is the _form_, so name forms, not their
 buttons):
 
 ```html
@@ -145,7 +145,7 @@ pre-compression) caps the frozen DOM; over it the snapshot truncates depth-first
 `dom.truncated`. The freeze core is exported as `freezeDocument()` for reuse.
 
 Where the POST goes: framed under the qits service proxy (`/workspaces/service/{ws}/{svc}/` base) the frame
-origin *is* qits, so the button posts same-origin to `/workspaces/api/capture` — the capture ingest
+origin _is_ qits, so the button posts same-origin to `/workspaces/api/capture` — the capture ingest
 is `qits-workspaces`, and the qits gateway routes `/<segment>/*` verbatim by prefix, so the segment
 is part of the address and not something the gateway adds. Everywhere else it uses the relayed
 `ingestUrl` verbatim — which must then be **browser-reachable** (deployed apps configure a public
@@ -161,7 +161,7 @@ capture payload's `state` field and rendered as JSON in the workspace goal. For 
 export const CartStore = signalStore(
   { providedIn: 'root' },
   withState(initialCart),
-  withQitsSnapshot('cart'),   // registers on init, unregisters on destroy
+  withQitsSnapshot('cart'), // registers on init, unregisters on destroy
 );
 ```
 
@@ -218,7 +218,7 @@ Apps served under the qits daemon web view get their prefix at runtime. The reba
 before any module code, so it stays an inline `index.html` script — the canonical snippet:
 
 ```html
-<base href="/">
+<base href="/" />
 <script>
   (function () {
     var match = location.pathname.match(/^\/daemon\/[^/]+\/[^/]+\//);
@@ -247,11 +247,16 @@ addGoldenInteraction(pact, masters, {
   state: 'a project exists',
   operationId: 'listProjects',
   trigger: { kind: 'ui', app: 'qits-landing-app', interaction: 'list-projects' },
-}).executeTest(async (server) => { /* drive the store against server.url */ });
+}).executeTest(async (server) => {
+  /* drive the store against server.url */
+});
 
 // afterAll: fail when the committed pact is stale; QITS_GOLDEN_UPDATE=true rewrites it
-assertPactFile(join(dir, 'qits-landing-app-qits-projects-service.json'),
-  'pacts/qits-landing-app_qits-projects-service.json', 'QITS_GOLDEN_UPDATE');
+assertPactFile(
+  join(dir, 'qits-landing-app-qits-projects-service.json'),
+  'pacts/qits-landing-app_qits-projects-service.json',
+  'QITS_GOLDEN_UPDATE',
+);
 ```
 
 - **Names are repository names**, both sides: `qits-landing-app`, `qits-projects-service`, never
@@ -275,11 +280,11 @@ import qits from '@qits/angular/eslint';
 export default [...yourConfig, ...qits.configs.recommended];
 ```
 
-| Rule | What it enforces |
-| --- | --- |
-| `qits/client-only-in-stores` | Only `*.store.ts` files and specs import a generated client, so every backend call goes through a store. Type-only imports are fine. Files in `allow` (default `src/app/app.config*.ts`, `src/main*.ts`) may import it to set the client up. |
-| `qits/store-has-pact` | A store that imports a generated client has `<name>.store.pact.spec.ts` beside it. |
-| `qits/pact-names` | In a `*.pact.spec.ts`, `new PactV4({ consumer, provider })` and `addGoldenInteraction(…, { provider, trigger: { app } })`: the consumer and trigger app equal the nearest `package.json` `name`; the provider is a repository name ending in a role (`-service`, `-frontend`, `-app`, `-daemon`, `-oci`, `-cli`, `-javalib`, `-jslib`). Give names as string literals or consts, or the rule cannot check them. |
+| Rule                         | What it enforces                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `qits/client-only-in-stores` | Only `*.store.ts` files and specs import a generated client, so every backend call goes through a store. Type-only imports are fine. Files in `allow` (default `src/app/app.config*.ts`, `src/main*.ts`) may import it to set the client up.                                                                                                                                                                    |
+| `qits/store-has-pact`        | A store that imports a generated client has `<name>.store.pact.spec.ts` beside it.                                                                                                                                                                                                                                                                                                                              |
+| `qits/pact-names`            | In a `*.pact.spec.ts`, `new PactV4({ consumer, provider })` and `addGoldenInteraction(…, { provider, trigger: { app } })`: the consumer and trigger app equal the nearest `package.json` `name`; the provider is a repository name ending in a role (`-service`, `-frontend`, `-app`, `-daemon`, `-oci`, `-cli`, `-javalib`, `-jslib`). Give names as string literals or consts, or the rule cannot check them. |
 
 Generated clients are `src/app/api/**` (relative to the nearest `package.json`) unless you pass
 `{ clients: ['<glob>', …] }` to `client-only-in-stores` and `store-has-pact`. A path alias such as
@@ -341,7 +346,7 @@ and bump the version once the change is worth publishing.
   `npm publish` is pointed at that directory and the manifest ng-packagr wrote inside it.
 - **`projects/qits-integrations-angular/package.json` is the single source of truth** for name,
   version, description, license, peers and runtime deps. ng-packagr copies it into the published
-  manifest, so a field that must reach the registry is added *there*.
+  manifest, so a field that must reach the registry is added _there_.
 - **The root `package.json` keeps `private: true`** and carries no `name` worth publishing, no
   `files`, no `exports` and no `prepare`. It is the workspace harness: the devDependencies that
   build and test the library, and the runtime deps the sources resolve against while doing so.
@@ -365,10 +370,10 @@ pnpm ng build                                            # compiles against the 
 
 ## Commands
 
-| Command | What it does |
-| --- | --- |
-| `pnpm build` | `ng build qits-integrations-angular` → APF output in `dist/qits-integrations-angular/` |
-| `pnpm test` | the lint-rule tests (`pnpm test:eslint`, `node --test`), then `ng test qits-integrations-angular` (vitest builder, jsdom) |
-| `pnpm test:browser` | `*.browser.spec.ts` in headless Chromium (style freezing needs a real layout engine); needs a one-time `pnpm exec playwright install chromium` |
-| `pnpm lint` | `ng lint qits-integrations-angular` |
-| `pnpm check-exports` | verify `dist/qits-integrations-angular` is publishable (run it after `pnpm build`) |
+| Command              | What it does                                                                                                                                   |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm build`         | `ng build qits-integrations-angular` → APF output in `dist/qits-integrations-angular/`                                                         |
+| `pnpm test`          | the lint-rule tests (`pnpm test:eslint`, `node --test`), then `ng test qits-integrations-angular` (vitest builder, jsdom)                      |
+| `pnpm test:browser`  | `*.browser.spec.ts` in headless Chromium (style freezing needs a real layout engine); needs a one-time `pnpm exec playwright install chromium` |
+| `pnpm lint`          | `ng lint qits-integrations-angular`                                                                                                            |
+| `pnpm check-exports` | verify `dist/qits-integrations-angular` is publishable (run it after `pnpm build`)                                                             |

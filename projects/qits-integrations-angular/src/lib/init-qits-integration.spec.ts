@@ -112,9 +112,9 @@ describe('otlpExportUrl', () => {
 describe('OTLP_PASSTHROUGH_URL_PATTERN', () => {
   it('excludes the passthrough exports and nothing else', () => {
     expect(OTLP_PASSTHROUGH_URL_PATTERN.test('http://app/api/otel/v1/traces')).toBe(true);
-    expect(OTLP_PASSTHROUGH_URL_PATTERN.test('http://app/workspaces/service/ws/svc-1/api/otel/v1/logs')).toBe(
-      true,
-    );
+    expect(
+      OTLP_PASSTHROUGH_URL_PATTERN.test('http://app/workspaces/service/ws/svc-1/api/otel/v1/logs'),
+    ).toBe(true);
     expect(OTLP_PASSTHROUGH_URL_PATTERN.test('http://app/api/greetings')).toBe(false);
   });
 });

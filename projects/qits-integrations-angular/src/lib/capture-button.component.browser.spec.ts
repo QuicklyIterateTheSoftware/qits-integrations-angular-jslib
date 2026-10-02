@@ -50,9 +50,9 @@ describe('QitsCaptureButton', () => {
     });
   });
 
-  function stubFetch(response: Partial<Response> | Promise<Partial<Response>>): ReturnType<
-    typeof vi.fn
-  > {
+  function stubFetch(
+    response: Partial<Response> | Promise<Partial<Response>>,
+  ): ReturnType<typeof vi.fn> {
     const mock = vi.fn().mockReturnValue(Promise.resolve(response));
     window.fetch = mock as unknown as typeof fetch;
     return mock;

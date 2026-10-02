@@ -41,9 +41,10 @@ describe('sanitizeCaptureValue', () => {
   });
 
   it('converts Map and Set', () => {
-    expect(
-      sanitizeCaptureValue({ map: new Map([['k', 'v']]), set: new Set([1, 2]) }),
-    ).toEqual({ map: { k: 'v' }, set: [1, 2] });
+    expect(sanitizeCaptureValue({ map: new Map([['k', 'v']]), set: new Set([1, 2]) })).toEqual({
+      map: { k: 'v' },
+      set: [1, 2],
+    });
   });
 
   it('converts Date to its ISO string', () => {

@@ -1,0 +1,5 @@
+# Generated or not ours to format.
+pnpm-lock.yaml
+/dist
+/coverage
+/.angular
