@@ -629,3 +629,251 @@ describe('page-has-screenshots opt-out', () => {
     );
   });
 });
+
+const PAGE_SPEC = at('src/app/routes/projects/project-list.page.browser.spec.ts');
+const LAYOUT_SPEC = at('src/app/routes/shell.layout.browser.spec.ts');
+tester.run(
+  'browser-spec-data-from-golden-masters',
+  rules['browser-spec-data-from-golden-masters'],
+  {
+    valid: [
+      // A golden-master call, awaited, flushed directly.
+      {
+        filename: PAGE_SPEC,
+        code: "req.flush(await commands.goldenMaster('a project exists', 'listProjects'));",
+      },
+      // Through a const, a field, an element, a destructured part and a find().
+      {
+        filename: PAGE_SPEC,
+        code: `
+        const list = await goldenMaster('a project exists', 'listProjects');
+        const { entries } = list;
+        http.expectOne('/a').flush(list);
+        http.expectOne('/b').flush(list.entries[0]);
+        http.expectOne('/c').flush(entries);
+        http.expectOne('/d').flush(list.entries.find((e) => e.project));
+        http.expectOne('/e').flush(list as unknown as object);
+      `,
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "for (const entry of (await githostGoldenMaster('s', 'op')).entries) req.flush(entry);",
+      },
+      // An error answer may carry any body.
+      {
+        filename: PAGE_SPEC,
+        code: "req.flush(null, { status: 500, statusText: 'Server Error' });",
+      },
+      {
+        filename: LAYOUT_SPEC,
+        code: "req.flush({ message: 'gone' }, { status: 404, statusText: 'x' });",
+      },
+      // A no-content operation says so.
+      { filename: PAGE_SPEC, code: "req.flush(null, { status: 204, statusText: 'No Content' });" },
+      // A parameter cannot be traced, nor options that are not a literal: the run-time guard checks.
+      { filename: PAGE_SPEC, code: 'const answer = (body, options) => req.flush(body, options);' },
+      { filename: PAGE_SPEC, code: 'req.flush({ a: 1 }, options);' },
+      // Types from a store are fine.
+      {
+        filename: PAGE_SPEC,
+        code: "import type { Project } from '$core/projects/projects.store';",
+      },
+      { filename: PAGE_SPEC, code: "import { type Project } from './projects.store';" },
+      // A provider that is not a store.
+      {
+        filename: PAGE_SPEC,
+        code: '({ provide: EVENT_SOURCE, useValue: () => ({ onmessage: null, close() {} }) });',
+      },
+      // A store provided as it is.
+      { filename: PAGE_SPEC, code: '({ providers: [ProjectsStore] });' },
+      // A state-tree token provided as it is, or imported for its type only.
+      {
+        filename: PAGE_SPEC,
+        code: "import { SelectedProject } from '$core/projects/selected-project'; ({ providers: [SelectedProject] });",
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import type { SelectedProject } from '$core/projects/selected-project'; ({ provide: SelectedProject, useValue: {} });",
+      },
+      // A transport seam the app allows, under its name or an alias.
+      {
+        filename: PAGE_SPEC,
+        code: "import { EVENT_SOURCE } from '$core/events/domain-events'; ({ provide: EVENT_SOURCE, useValue: () => ({}) });",
+        options: [{ allowTokens: ['EVENT_SOURCE'] }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import { EVENT_SOURCE as SOURCE } from '../../core/events/domain-events'; ({ provide: SOURCE, useFactory: () => () => ({}) });",
+        options: [{ allowTokens: ['EVENT_SOURCE'] }],
+      },
+      // A token from outside the state tree.
+      {
+        filename: PAGE_SPEC,
+        code: "import { AppOrigins } from '$shared/app-origins'; ({ provide: AppOrigins, useValue: {} });",
+      },
+      // Other specs are not checked.
+      {
+        filename: at('src/app/ui/card.component.browser.spec.ts'),
+        code: "patchState(store, { x: 1 }); req.flush({ a: 1 }); import { recorded } from '@qits/angular/testing/browser';",
+      },
+      {
+        filename: at('src/app/routes/projects/project-list.page.spec.ts'),
+        code: 'req.flush({ a: 1 });',
+      },
+    ],
+    invalid: [
+      // allowTokens exempts only the tokens it names.
+      {
+        filename: PAGE_SPEC,
+        code: "import { EVENT_SOURCE } from '$core/events/domain-events'; import { SelectedProject } from '$core/projects/selected-project'; import { AppOrigins } from '$core/app-origins'; [{ provide: EVENT_SOURCE, useValue: () => ({}) }, { provide: SelectedProject, useValue: {} }, { provide: AppOrigins, useValue: {} }];",
+        options: [{ allowTokens: ['EVENT_SOURCE'] }],
+        errors: [
+          { messageId: 'stateProvider', data: { token: 'SelectedProject' } },
+          { messageId: 'stateProvider', data: { token: 'AppOrigins' } },
+        ],
+      },
+      // It never exempts a store.
+      {
+        filename: PAGE_SPEC,
+        code: '({ provide: ProjectsStore, useValue: {} });',
+        options: [{ allowTokens: ['ProjectsStore'] }],
+        errors: [{ messageId: 'stateProvider', data: { token: 'ProjectsStore' } }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import { SelectedProject } from '$core/projects/selected-project'; ({ provide: SelectedProject, useValue: { slug: () => 'x' } });",
+        errors: [{ messageId: 'stateProvider', data: { token: 'SelectedProject' } }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import { SelectedProject } from '../../core/projects/selected-project'; ({ provide: SelectedProject, useFactory: () => ({}) });",
+        errors: [{ messageId: 'stateProvider', data: { token: 'SelectedProject' } }],
+      },
+      {
+        filename: LAYOUT_SPEC,
+        code: "import { EVENT_SOURCE as SOURCE } from '../core/events/domain-events'; ({ provide: SOURCE, useClass: Fake });",
+        errors: [{ messageId: 'stateProvider', data: { token: 'SOURCE' } }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import * as core from '$core/projects/selected-project'; ({ provide: core.SelectedProject, useExisting: Other });",
+        errors: [{ messageId: 'stateProvider', data: { token: 'core' } }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: 'req.flush({ entries: [] });',
+        errors: [{ messageId: 'notGolden' }],
+      },
+      { filename: PAGE_SPEC, code: 'req.flush([]);', errors: [{ messageId: 'notGolden' }] },
+      { filename: PAGE_SPEC, code: 'req.flush(null);', errors: [{ messageId: 'notGolden' }] },
+      {
+        filename: PAGE_SPEC,
+        code: "req.flush(null, { status: 200, statusText: 'OK' });",
+        errors: [{ messageId: 'notGolden' }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "req.flush({ a: 1 }, { status: 204, statusText: 'No Content' });",
+        errors: [{ messageId: 'notGolden' }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: `
+        const recorded = await goldenMaster('s', 'listProjects');
+        req.flush({ ...recorded, entries: [] });
+        req.flush(recorded.entries.slice(0, 1));
+        req.flush(structuredClone(recorded));
+      `,
+        errors: [
+          { messageId: 'notGolden' },
+          { messageId: 'notGolden' },
+          { messageId: 'notGolden' },
+        ],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "let list = await goldenMaster('s', 'op'); list = { entries: [] }; req.flush(list);",
+        errors: [{ messageId: 'notGolden' }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import { BODY } from './fixtures'; req.flush(BODY);",
+        errors: [{ messageId: 'notGolden' }],
+      },
+      {
+        filename: LAYOUT_SPEC,
+        code: "import { patchState } from '@ngrx/signals'; patchState(store, { projects: [] });",
+        errors: [{ messageId: 'patchState' }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import { patchState as set } from '@ngrx/signals'; set(store, {});",
+        errors: [{ messageId: 'patchState' }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: 'TestBed.overrideProvider(ProjectsStore, { useValue: {} });',
+        errors: [{ messageId: 'overrideProvider' }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: '({ provide: ProjectsStore, useValue: { projects: () => [] } });',
+        errors: [{ messageId: 'stateProvider', data: { token: 'ProjectsStore' } }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: '({ provide: stores.WorkStore, useClass: FakeWorkStore });',
+        errors: [{ messageId: 'stateProvider', data: { token: 'WorkStore' } }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import { ProjectsStore } from '$core/projects/projects.store';",
+        errors: [{ messageId: 'storeImport' }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import { type Project, ProjectsStore } from './projects.store.ts';",
+        errors: [{ messageId: 'storeImport' }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "await import('./projects.store');",
+        errors: [{ messageId: 'storeImport' }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import { recorded, fromGoldenMasters } from '@qits/angular/testing/browser';",
+        errors: [
+          { messageId: 'recorder', data: { name: 'recorded' } },
+          { messageId: 'recorder', data: { name: 'fromGoldenMasters' } },
+        ],
+      },
+    ],
+  },
+);
+
+describe('browser-spec-data-from-golden-masters messages', () => {
+  const { messages } = rules['browser-spec-data-from-golden-masters'].meta;
+  it('every data message says how to add a provider state and a pact interaction', () => {
+    for (const id of [
+      'patchState',
+      'overrideProvider',
+      'stateProvider',
+      'storeImport',
+      'notGolden',
+    ]) {
+      assert.match(messages[id], /add a provider state to the provider repository/, id);
+      assert.match(messages[id], /\(ProviderStates \+ golden-master recorder\)/, id);
+      assert.match(messages[id], /add a pact interaction for it in the consumer's pact spec/, id);
+      assert.match(
+        messages[id],
+        /Then answer with goldenMaster\('<new state>', '<operationId>'\)/,
+        id,
+      );
+    }
+    for (const id of ['patchState', 'overrideProvider', 'stateProvider', 'storeImport']) {
+      assert.match(messages[id], /Feed the data through HTTP from a golden master instead/, id);
+    }
+    assert.match(messages.recorder, /wrap the goldenMaster command there/);
+  });
+});

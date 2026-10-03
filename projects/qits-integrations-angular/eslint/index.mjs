@@ -7,6 +7,7 @@
  * The rules read TypeScript, so the app's config must already parse `.ts` (typescript-eslint or
  * angular-eslint does).
  */
+import browserSpecDataFromGoldenMasters from './rules/browser-spec-data-from-golden-masters.mjs';
 import clientOnlyInStores from './rules/client-only-in-stores.mjs';
 import consumeClientCalls from './rules/consume-client-calls.mjs';
 import pactNames from './rules/pact-names.mjs';
@@ -27,6 +28,7 @@ const plugin = {
     'page-suffix': pageSuffix,
     'page-has-screenshots': pageHasScreenshots,
     'route-matches-directory': routeMatchesDirectory,
+    'browser-spec-data-from-golden-masters': browserSpecDataFromGoldenMasters,
   },
   configs: {},
 };
@@ -45,6 +47,7 @@ plugin.configs.recommended = [
       'qits/page-suffix': 'error',
       'qits/page-has-screenshots': 'error',
       'qits/route-matches-directory': 'error',
+      'qits/browser-spec-data-from-golden-masters': 'error',
     },
   },
 ];

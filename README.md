@@ -306,6 +306,96 @@ assertPactFile(
   verification refuses one without them.
 - The path is a provider-state expression only when it has a `{param}`.
 
+## Screenshot data comes from golden masters: `@qits/angular/testing/browser`
+
+A screenshot test of a page or a layout shows backend data from golden masters only (epic
+qits-112). Three parts enforce it:
+
+- **Recordings.** `recorded(body)` deep-freezes a golden master body and registers it, and every
+  object and array inside it, in a `WeakMap`. `fromGoldenMasters(read, source?)` wraps a reader so
+  every body it gives is registered; `source` maps the reader's arguments to `{ provider, state,
+operationId }`, so errors name them. A part of a recording (`list.entries`, `list.entries[0]`) is a
+  recording too; a copy, a spread, a `slice()` or a `map()` is not.
+- **The guard.** `guardGoldenMasters()` makes `TestRequest.flush` (and `event`) throw, naming the
+  method and URL, when a 2xx answer carries anything that is not a recording. Any other status
+  reaches the app as an error and may carry any body: `flush(null, { status: 500, statusText:
+'Server Error' })` is fine. A 2xx answer with no body fails too, because an empty list is a
+  recorded state like any other; an operation that answers 204 No Content says so:
+  `flush(null, { status: 204, statusText: 'No Content' })`. A bare `flush(null)` (which Angular
+  turns into a 204) fails, so an empty answer is never an accident. By default the guard checks
+  only page and layout specs (`PAGE_AND_LAYOUT_SPECS`, from Vitest's `expect.getState().testPath`,
+  so Vitest globals must be on); pass `{ when }` to choose otherwise.
+- **Frozen.** A recording cannot be changed in place: a write throws in strict mode (every ES
+  module). Note that the app gets the frozen object too, so code that sorts or changes a response
+  in place throws in these specs; copy before changing.
+
+Data that does not come over HTTP, such as an event a fake event stream sends, goes through
+`assertRecorded(payload, 'event')`, which throws unless the payload is a recording.
+
+Browser-safe, unlike `@qits/angular/testing`. The golden masters are read on the Node side (a
+Vitest browser command) and arrive as fresh JSON, so identity is made in the browser: wrap the
+command, not the Node-side reader.
+
+**Every body a screenshot shows is one the provider verifies.** `pactedGoldenMasters(masters,
+pactFile)` from `@qits/angular/testing` (Node-side) wraps a reader so `body(state, operationId)`
+throws unless an interaction in the consumer's committed pact uses that provider state and
+`qits-call` operationId. Use it where the browser command reads the golden masters.
+
+**Every error says how to fix it.** The guard, `assertRecorded`, `pactedGoldenMasters` and the lint
+rule all end in the same advice: if no recorded state fits the case, add a provider state to the
+provider repository (ProviderStates + golden-master recorder), record it, and add a pact
+interaction for it in the consumer's pact spec next to the store, so the provider verifies it; then
+answer with `goldenMaster('<new state>', '<operationId>')`. The run-time errors name the provider
+and operation when the reader's `source` gives them. An empty 2xx answer asks for a recorded empty
+state (such as `'no projects exist'`); `patchState` and replaced providers ask for the data to come
+through HTTP from a golden master instead.
+
+```ts
+// vitest-browser.config.ts (Node side): the command gives only bodies the pacts verify
+import { goldenMasters, pactedGoldenMasters } from '@qits/angular/testing';
+const projects = pactedGoldenMasters(
+  goldenMasters('@qits/projects-golden-masters', 'qits-projects'),
+  'pacts/qits-landing-app_qits-projects-service.json',
+);
+// … commands: { goldenMaster: (_ctx, state, operationId) => projects.body(state, operationId) }
+
+// src/testing/browser/golden-master.ts: the one place that registers recordings
+import { commands } from 'vitest/browser';
+import { fromGoldenMasters } from '@qits/angular/testing/browser';
+
+const REPOSITORY = {
+  'qits-projects': 'qits-projects-service',
+  'qits-githost': 'qits-githost-service',
+};
+type Provider = keyof typeof REPOSITORY;
+export const goldenMaster = fromGoldenMasters(
+  (state: string, operationId: string, provider?: Provider) =>
+    commands.goldenMaster(state, operationId, provider),
+  (state, operationId, provider = 'qits-projects') => ({
+    provider: REPOSITORY[provider],
+    state,
+    operationId,
+  }),
+);
+
+// src/testing/browser/setup.ts (the browser specs' setup file)
+import { guardGoldenMasters } from '@qits/angular/testing/browser';
+guardGoldenMasters();
+
+// a page spec
+const list = await goldenMaster('a project exists', 'listProjects');
+http.expectOne('/projects/api/projects').flush(list);
+```
+
+The lint rule `qits/browser-spec-data-from-golden-masters` reports the common mistakes where they
+are written: `patchState`, replaced providers, stores and state-tree tokens, store imports, recordings made in the
+spec, and a `flush` whose body does not trace back to a call named like `goldenMaster`. The trace
+is a heuristic: a function parameter, or options that are not an object literal with a literal
+`status`, cannot be traced and pass. **The run-time guard is the real guarantee.** Option
+`allowTokens` (default `[]`) exempts named state-tree tokens from the provider check; it is for
+transport seams only, never data (for example `['EVENT_SOURCE']`, a fake event stream that never
+connects). It never exempts a `*Store`.
+
 ## Lint rules: `@qits/angular/eslint`
 
 An ESLint flat-config plugin. Spread its `recommended` config after your own; your config must
@@ -317,16 +407,17 @@ import qits from '@qits/angular/eslint';
 export default [...yourConfig, ...qits.configs.recommended];
 ```
 
-| Rule                           | What it enforces                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `qits/client-only-in-stores`   | Only `*.store.ts` files and specs import a generated client, so every backend call goes through a store. Type-only imports are fine. Files in `allow` (default `src/app/app.config*.ts`, `src/main*.ts`) may import it to set the client up.                                                                                                                                                                                                                                             |
-| `qits/consume-client-calls`    | In a store, every call to a generated client function is the first argument of `consume(call, paths)`. Awaiting it on its own, `.then`, passing the promise or the function elsewhere, and `…Resource` helpers (no promise to wrap) are reported. Option `consume` renames the wrapper.                                                                                                                                                                                                  |
-| `qits/store-has-pact`          | A store that imports a generated client has `<name>.store.pact.spec.ts` beside it.                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `qits/pact-names`              | In a `*.pact.spec.ts`, `new PactV4({ consumer, provider })` and `addGoldenInteraction(…, { provider, trigger: { app } })`: the consumer and trigger app equal the nearest `package.json` `name`; the provider is a repository name ending in a role (`-service`, `-frontend`, `-app`, `-daemon`, `-oci`, `-cli`, `-javalib`, `-jslib`). Give names as string literals or consts, or the rule cannot check them.                                                                          |
-| `qits/page-location`           | A `*.page.ts` or `*.layout.ts` file lives under the routes directory, and every component class under the routes directory lives in such a file. Other files there (a resolver, a guard, a `*.routes.ts`) and specs are fine.                                                                                                                                                                                                                                                            |
-| `qits/page-suffix`             | The exported component in a `*.page.ts` ends in `Page`, the one in a `*.layout.ts` ends in `Layout`, and a component named `…Page` / `…Layout` lives in such a file.                                                                                                                                                                                                                                                                                                                     |
-| `qits/page-has-screenshots`    | Every `*.page.ts` and `*.layout.ts` under the routes directory has `<name>.page.browser.spec.ts` / `<name>.layout.browser.spec.ts` beside it, and that spec calls `toMatchScreenshot`.                                                                                                                                                                                                                                                                                                   |
-| `qits/route-matches-directory` | In a route table, every route with `component` or `loadComponent` (and every `loadChildren`) imports from the directory its URL names: the `path`s from the top of the table through `children`, `''` skipped, `:param` as `[param]`, relative to the routes directory. `path: '**'` may render any page; `redirectTo` routes are skipped. A route table under the routes directory is mounted at its own directory. Imports through a path alias and non-literal paths are not checked. |
+| Rule                                         | What it enforces                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `qits/client-only-in-stores`                 | Only `*.store.ts` files and specs import a generated client, so every backend call goes through a store. Type-only imports are fine. Files in `allow` (default `src/app/app.config*.ts`, `src/main*.ts`) may import it to set the client up.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `qits/consume-client-calls`                  | In a store, every call to a generated client function is the first argument of `consume(call, paths)`. Awaiting it on its own, `.then`, passing the promise or the function elsewhere, and `…Resource` helpers (no promise to wrap) are reported. Option `consume` renames the wrapper.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `qits/store-has-pact`                        | A store that imports a generated client has `<name>.store.pact.spec.ts` beside it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `qits/pact-names`                            | In a `*.pact.spec.ts`, `new PactV4({ consumer, provider })` and `addGoldenInteraction(…, { provider, trigger: { app } })`: the consumer and trigger app equal the nearest `package.json` `name`; the provider is a repository name ending in a role (`-service`, `-frontend`, `-app`, `-daemon`, `-oci`, `-cli`, `-javalib`, `-jslib`). Give names as string literals or consts, or the rule cannot check them.                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `qits/page-location`                         | A `*.page.ts` or `*.layout.ts` file lives under the routes directory, and every component class under the routes directory lives in such a file. Other files there (a resolver, a guard, a `*.routes.ts`) and specs are fine.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `qits/page-suffix`                           | The exported component in a `*.page.ts` ends in `Page`, the one in a `*.layout.ts` ends in `Layout`, and a component named `…Page` / `…Layout` lives in such a file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `qits/page-has-screenshots`                  | Every `*.page.ts` and `*.layout.ts` under the routes directory has `<name>.page.browser.spec.ts` / `<name>.layout.browser.spec.ts` beside it, and that spec calls `toMatchScreenshot`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `qits/route-matches-directory`               | In a route table, every route with `component` or `loadComponent` (and every `loadChildren`) imports from the directory its URL names: the `path`s from the top of the table through `children`, `''` skipped, `:param` as `[param]`, relative to the routes directory. `path: '**'` may render any page; `redirectTo` routes are skipped. A route table under the routes directory is mounted at its own directory. Imports through a path alias and non-literal paths are not checked.                                                                                                                                                                                                                                                                                                                                       |
+| `qits/browser-spec-data-from-golden-masters` | In a `*.page.browser.spec.ts` or `*.layout.browser.spec.ts`: no `patchState`, no `TestBed.overrideProvider`, no `useValue`/`useFactory`/`useClass`/`useExisting` for a `*Store` token or for any token imported from the app's state tree (`$core/…` or a path with `/core/`, such as `SelectedProject`; option `allowTokens: ['EVENT_SOURCE']` exempts named state-tree tokens that are transport seams only, never data, and never a `*Store`), no import from a `*.store` file except `import type`, no `recorded`/`fromGoldenMasters` import; the first argument of `flush(…)` traces back to a golden-master call, unless the options give a literal `status` of 400 or more (or 204 with `null`). See [Screenshot data comes from golden masters](#screenshot-data-comes-from-golden-masters-qitsangulartestingbrowser). |
 
 Generated clients are `src/app/api/**` (relative to the nearest `package.json`) unless you pass
 `{ clients: ['<glob>', …] }` to `client-only-in-stores`, `consume-client-calls` and `store-has-pact`. A path alias such as

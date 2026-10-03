@@ -192,7 +192,7 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
 - **The publish is publish-if-absent** — a re-run finds its version in the registry and succeeds
   without touching it. Published versions are immutable; never try to re-publish one.
 
-## The other two entry points
+## The other entry points
 
 - **`@qits/angular/testing`** (`projects/qits-integrations-angular/testing/`, an ng-packagr
   secondary entry): the golden-master reader and pact helper (epic qits-546), moved from
@@ -201,6 +201,15 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   builder's globs are relative to `src/`) and starts a real pact-js mock server. A pact binds only
   the body paths an interaction lists in `consumes` (required); the golden master keeps the whole
   answer.
+- **`@qits/angular/testing/browser`** (`testing/browser/`, a nested ng-packagr entry): the
+  golden-master guard (epic qits-112) for browser specs. It must stay browser-safe, so it never
+  imports `@qits/angular/testing` (Node-only). `recorded()` deep-freezes a body and puts it and
+  everything in it in a `WeakSet`; `guardGoldenMasters()` patches `TestRequest.prototype.flush`
+  and `event`. Identity is made in the browser: a Vitest command sends JSON, so wrap the command,
+  not the Node reader. The lint rule `browser-spec-data-from-golden-masters` is only a heuristic;
+  the guard is the guarantee. `pactedGoldenMasters()` (in `@qits/angular/testing`, Node-side) refuses
+  a body no interaction in the committed pact uses. Every error ends in the same fix: a new provider
+  state plus a pact interaction for it.
 - **`@qits/angular/eslint`** (`projects/qits-integrations-angular/eslint/`): plain ESM, no build.
   ng-packagr copies the `.mjs` files as assets (minus `test/`), and the source `package.json`'s
   `exports["./eslint"]` points at them; ng-packagr merges that with the exports it generates.
