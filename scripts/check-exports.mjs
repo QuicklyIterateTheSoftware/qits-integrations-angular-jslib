@@ -66,6 +66,25 @@ for (const key of ['types', 'default']) {
   }
 }
 
+// Every other entry point and every command must be in the tarball too: the plain-ESM ones
+// (eslint, screenshots, bin) are copied as assets, so a missing glob only shows here.
+for (const [subpath, conditions] of Object.entries(dist.exports ?? {})) {
+  if (subpath === '.' || subpath === './package.json') continue;
+  const targets = typeof conditions === 'string' ? [conditions] : Object.values(conditions);
+  for (const target of targets) {
+    if (typeof target === 'string' && !existsSync(join(DIST, target))) {
+      fail(
+        `${DIST}/package.json exports["${subpath}"] points at ${target}, which is not in ${DIST}`,
+      );
+    }
+  }
+}
+for (const [command, target] of Object.entries(dist.bin ?? {})) {
+  if (!existsSync(join(DIST, target))) {
+    fail(`${DIST}/package.json bin["${command}"] points at ${target}, which is not in ${DIST}`);
+  }
+}
+
 // The workspace builds and tests against its own node_modules while the consumer resolves what the
 // published manifest declares. Both directions of drift ship a package whose imports resolve for
 // nobody but us.

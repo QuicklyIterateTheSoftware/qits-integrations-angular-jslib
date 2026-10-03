@@ -12,9 +12,10 @@
   "scripts": {
     "ng": "ng",
     "build": "ng build qits-integrations-angular",
-    "test": "pnpm test:eslint && ng test qits-integrations-angular",
+    "test": "pnpm test:eslint && pnpm test:screenshots && ng test qits-integrations-angular",
     "test:eslint": "node --test 'projects/qits-integrations-angular/eslint/test/*.test.mjs'",
-    "test:browser": "ng run qits-integrations-angular:test-browser",
+    "test:screenshots": "node --test projects/qits-integrations-angular/screenshots/test/screenshots.test.mjs",
+    "test:browser": "ng run qits-integrations-angular:test-browser && node --test projects/qits-integrations-angular/screenshots/test/vitest-run.test.mjs",
     "lint": "prettier --check . && ng lint qits-integrations-angular",
     "check-exports": "node scripts/check-exports.mjs",
     "format": "prettier --write ."

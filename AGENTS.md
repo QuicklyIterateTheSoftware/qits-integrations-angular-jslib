@@ -116,9 +116,9 @@ marked optional via a pnpm `packageExtensions` entry here and in every consumer.
 ## Commands
 
 - `pnpm build` — `ng build qits-integrations-angular` → APF output in `dist/qits-integrations-angular/`
-- `pnpm test` — `pnpm test:eslint` (the lint rules, `node --test`), then `ng test qits-integrations-angular` (vitest builder, jsdom; excludes `*.browser.spec.ts`)
+- `pnpm test` — `pnpm test:eslint` (the lint rules) and `pnpm test:screenshots` (the screenshot command), both `node --test`, then `ng test qits-integrations-angular` (vitest builder, jsdom; excludes `*.browser.spec.ts`)
 - `pnpm test:browser` — `*.browser.spec.ts` in headless Chromium (`ng run
-qits-integrations-angular:test-browser`); one-time `pnpm exec playwright install chromium`
+qits-integrations-angular:test-browser`), then the real Vitest run of `screenshotReferences()`; one-time `pnpm exec playwright install chromium`
 - `pnpm lint` — `ng lint qits-integrations-angular`
 - `pnpm check-exports` — verify `dist/qits-integrations-angular` is publishable (after `pnpm build`)
 
@@ -218,6 +218,22 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   Rule tests run with `node --test` and ESLint's `RuleTester`, on a throwaway app tree under
   `tmp/` (git-ignored). The roles `pact-names` accepts are the wrapper's repository roles; keep
   them in step.
+
+- **`@qits/angular/screenshots`** and the **`qits-angular`** command
+  (`projects/qits-integrations-angular/screenshots/`, `bin/`; epic qits-112): plain ESM, no build,
+  copied as assets like the lint rules; `exports["./screenshots"]` and `bin` in the source
+  `package.json`. `screenshotReferences()` is a Vitest plugin: in `configureVitest` it wraps
+  `browser.expect.toMatchScreenshot.resolveScreenshotPath` (Vitest calls it on the Node side for
+  every comparison, with the real spec path even under the Angular builder) and pushes a reporter
+  onto `vitest.config.reporters` (Vitest builds its reporters from that array after the hooks).
+  The reporter writes the record at `onTestRunEnd`: per spec, the resolved references, whether
+  every test passed, and the spec's sha256. `qits-angular screenshots --check | --prune` judges a
+  reference by place (spec gone: no run needed) or by that record (spec ran completely and is
+  unchanged); anything else is not judged, so a partial run never reports a false orphan. Not an
+  ESLint rule: ESLint visits source files, and an orphan's spec may not exist. Unit tests
+  (`pnpm test:screenshots`) drive the plugin with stand-ins; `vitest-run.test.mjs` (in
+  `pnpm test:browser`, needs Chromium) proves it in a real Vitest run. If a Vitest upgrade moves
+  either hook, that test fails; the command then finds no record and judges by place only.
 
 ## Conventions (inherited from the qits webui)
 

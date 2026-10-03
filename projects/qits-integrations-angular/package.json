@@ -46,9 +46,16 @@
     "tslib": "^2.3.0"
   },
   "sideEffects": false,
+  "bin": {
+    "qits-angular": "./bin/qits-angular.mjs"
+  },
   "exports": {
     "./eslint": {
       "default": "./eslint/index.mjs"
+    },
+    "./screenshots": {
+      "types": "./screenshots/index.d.mts",
+      "default": "./screenshots/index.mjs"
     }
   }
 }

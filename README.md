@@ -452,6 +452,43 @@ rule off for it above its `@Component`, and say why:
 export class OldPage {}
 ```
 
+## Reference screenshots no test uses: `@qits/angular/screenshots`
+
+Vitest writes a reference screenshot (`__screenshots__/<spec file>/<name>-<browser>-<platform>.png`)
+but never deletes one. A deleted spec or a renamed screenshot leaves its image behind. The
+`qits-angular screenshots` command finds these orphans.
+
+The browser run is the source of truth, not the spec's source text: the `screenshotReferences()`
+Vitest plugin records every reference a `toMatchScreenshot` call resolves, per spec file, so a name
+made in an `it.each` table, a loop or a template string counts exactly as Vitest resolves it. Add it
+to the browser tests' Vitest config (with the Angular builder, the `runnerConfig` file):
+
+```ts
+// vitest-browser.config.ts
+import { screenshotReferences } from '@qits/angular/screenshots';
+
+export default defineConfig({ plugins: [screenshotReferences()], test: { browser: { … } } });
+```
+
+At the end of the run it writes `node_modules/.cache/@qits/angular/screenshot-references.json`.
+Then:
+
+```sh
+qits-angular screenshots --check   # lists the orphans, exits 1 if there are any
+qits-angular screenshots --prune   # deletes them (only the platform's baselines job runs this)
+```
+
+A reference is an orphan when:
+
+- its spec file is gone (found without a test run, so `--check` is useful in `lint` too);
+- or the recorded run ran its spec completely (every test passed, nothing skipped or filtered), the
+  spec has not changed since, and no test asked for that reference.
+
+A spec that the record does not cover that way is not judged, so a partial run never reports a
+false orphan. With `UPDATE_SNAPSHOT` set (an update run, as Vitest reads it), `--check` lists the
+orphans and exits 0: the job that runs it prunes them next. The command understands Vitest's
+default reference layout only.
+
 ## Releasing
 
 There is no release command, and there is no longer a push that publishes anything.
@@ -532,10 +569,10 @@ pnpm ng build                                            # compiles against the 
 
 ## Commands
 
-| Command              | What it does                                                                                                                                   |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm build`         | `ng build qits-integrations-angular` → APF output in `dist/qits-integrations-angular/`                                                         |
-| `pnpm test`          | the lint-rule tests (`pnpm test:eslint`, `node --test`), then `ng test qits-integrations-angular` (vitest builder, jsdom)                      |
-| `pnpm test:browser`  | `*.browser.spec.ts` in headless Chromium (style freezing needs a real layout engine); needs a one-time `pnpm exec playwright install chromium` |
-| `pnpm lint`          | `ng lint qits-integrations-angular`                                                                                                            |
-| `pnpm check-exports` | verify `dist/qits-integrations-angular` is publishable (run it after `pnpm build`)                                                             |
+| Command              | What it does                                                                                                                                                                                               |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm build`         | `ng build qits-integrations-angular` → APF output in `dist/qits-integrations-angular/`                                                                                                                     |
+| `pnpm test`          | the lint-rule and screenshot-command tests (`pnpm test:eslint`, `pnpm test:screenshots`, `node --test`), then `ng test qits-integrations-angular` (vitest builder, jsdom)                                  |
+| `pnpm test:browser`  | `*.browser.spec.ts` in headless Chromium (style freezing needs a real layout engine), then `screenshotReferences()` in a real Vitest browser run; needs a one-time `pnpm exec playwright install chromium` |
+| `pnpm lint`          | `ng lint qits-integrations-angular`                                                                                                                                                                        |
+| `pnpm check-exports` | verify `dist/qits-integrations-angular` is publishable (run it after `pnpm build`)                                                                                                                         |

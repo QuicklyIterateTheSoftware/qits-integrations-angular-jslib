@@ -11,6 +11,17 @@
       "input": "eslint",
       "output": "eslint",
       "ignore": ["test/**"]
+    },
+    {
+      "glob": "**/*.{mjs,d.mts}",
+      "input": "screenshots",
+      "output": "screenshots",
+      "ignore": ["test/**"]
+    },
+    {
+      "glob": "*.mjs",
+      "input": "bin",
+      "output": "bin"
     }
   ]
 }
