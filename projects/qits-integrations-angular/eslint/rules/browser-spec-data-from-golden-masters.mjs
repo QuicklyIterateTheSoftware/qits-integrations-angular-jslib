@@ -7,6 +7,9 @@ const DEFAULT_GOLDEN_MASTER = '[gG]olden_?[mM]aster';
 /** An import of a store file: `./projects.store`, `$core/projects/projects.store.ts`. */
 const STORE_FILE = /(^|\/)[^/]+\.store(\.[cm]?[jt]s)?$/;
 
+/** An import from the app's state tree: `$core/…`, `../../core/…`, `src/app/core/…`. */
+const STATE_TREE = /^\$core\/|(^|\/)core\//;
+
 /** What `@qits/angular/testing/browser` registers recordings with; a spec that has it can fake one. */
 const RECORDERS = new Set(['recorded', 'fromGoldenMasters']);
 const BROWSER_TESTING = '@qits/angular/testing/browser';
@@ -19,7 +22,8 @@ const PROVIDER_KEYS = new Set(['useValue', 'useFactory', 'useClass', 'useExistin
 /**
  * A page's or layout's screenshot spec gets its backend data from golden masters and from nothing
  * else (epic qits-112). It may not set a store's state (`patchState`), replace a provider
- * (`TestBed.overrideProvider`, a `*Store` token with `useValue`/`useFactory`/`useClass`/
+ * (`TestBed.overrideProvider`, a `*Store` token or any token imported from the app's state tree,
+ * `$core/…` or a path with `/core/`, with `useValue`/`useFactory`/`useClass`/
  * `useExisting`), import a store file except for its types, or register its own recordings. The
  * first argument of `flush(…)` must trace back to a golden-master call, unless the answer is an
  * error (a literal `status` of 400 or more) or a literal 204 with no body.
@@ -49,8 +53,8 @@ export default {
         'A screenshot spec does not set state with patchState: answer the store’s request with a golden master.',
       overrideProvider:
         'A screenshot spec does not replace providers: answer the requests with golden masters.',
-      storeProvider:
-        "A screenshot spec does not replace '{{token}}': let the real store ask, and answer it with a golden master.",
+      stateProvider:
+        "A screenshot spec does not replace '{{token}}', which holds app state: let the real one load its data, and answer its requests with golden masters.",
       storeImport:
         "A screenshot spec imports '{{source}}' for its types only (import type): the store gets its data from a golden master.",
       recorder:
@@ -65,6 +69,8 @@ export default {
     const golden = new RegExp(context.options[0]?.goldenMaster ?? DEFAULT_GOLDEN_MASTER);
     const source = context.sourceCode ?? context.getSourceCode();
     const patchStates = new Set(['patchState']);
+    /** Local names a value import from the state tree binds: every one is app state. */
+    const stateTokens = new Set();
 
     const nameOf = (node) =>
       node?.type === 'Identifier'
@@ -156,6 +162,15 @@ export default {
       (node.type === 'Identifier' && node.name === 'undefined');
 
     return {
+      Program(program) {
+        for (const node of program.body) {
+          if (node.type !== 'ImportDeclaration' || node.importKind === 'type') continue;
+          if (!STATE_TREE.test(String(node.source.value))) continue;
+          for (const specifier of node.specifiers) {
+            if (specifier.importKind !== 'type') stateTokens.add(specifier.local.name);
+          }
+        }
+      },
       ImportDeclaration(node) {
         const from = node.source.value;
         for (const specifier of node.specifiers) {
@@ -213,11 +228,17 @@ export default {
         for (const property of node.properties) {
           if (property.type !== 'Property' || property.computed) continue;
           const key = property.key.name ?? property.key.value;
-          if (key === 'provide') token = nameOf(property.value);
-          else if (PROVIDER_KEYS.has(key)) replaces = true;
+          if (key === 'provide') {
+            const value = property.value;
+            // `ns.Token` from a namespace import of the state tree is that namespace's token.
+            token =
+              value.type === 'MemberExpression' && stateTokens.has(nameOf(value.object))
+                ? nameOf(value.object)
+                : nameOf(value);
+          } else if (PROVIDER_KEYS.has(key)) replaces = true;
         }
-        if (replaces && token && /Store$/.test(token)) {
-          context.report({ node, messageId: 'storeProvider', data: { token } });
+        if (replaces && token && (/Store$/.test(token) || stateTokens.has(token))) {
+          context.report({ node, messageId: 'stateProvider', data: { token } });
         }
       },
     };

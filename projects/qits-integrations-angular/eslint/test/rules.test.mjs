@@ -686,6 +686,20 @@ tester.run(
       },
       // A store provided as it is.
       { filename: PAGE_SPEC, code: '({ providers: [ProjectsStore] });' },
+      // A state-tree token provided as it is, or imported for its type only.
+      {
+        filename: PAGE_SPEC,
+        code: "import { SelectedProject } from '$core/projects/selected-project'; ({ providers: [SelectedProject] });",
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import type { SelectedProject } from '$core/projects/selected-project'; ({ provide: SelectedProject, useValue: {} });",
+      },
+      // A token from outside the state tree.
+      {
+        filename: PAGE_SPEC,
+        code: "import { AppOrigins } from '$shared/app-origins'; ({ provide: AppOrigins, useValue: {} });",
+      },
       // Other specs are not checked.
       {
         filename: at('src/app/ui/card.component.browser.spec.ts'),
@@ -697,6 +711,26 @@ tester.run(
       },
     ],
     invalid: [
+      {
+        filename: PAGE_SPEC,
+        code: "import { SelectedProject } from '$core/projects/selected-project'; ({ provide: SelectedProject, useValue: { slug: () => 'x' } });",
+        errors: [{ messageId: 'stateProvider', data: { token: 'SelectedProject' } }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import { SelectedProject } from '../../core/projects/selected-project'; ({ provide: SelectedProject, useFactory: () => ({}) });",
+        errors: [{ messageId: 'stateProvider', data: { token: 'SelectedProject' } }],
+      },
+      {
+        filename: LAYOUT_SPEC,
+        code: "import { EVENT_SOURCE as SOURCE } from '../core/events/domain-events'; ({ provide: SOURCE, useClass: Fake });",
+        errors: [{ messageId: 'stateProvider', data: { token: 'SOURCE' } }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import * as core from '$core/projects/selected-project'; ({ provide: core.SelectedProject, useExisting: Other });",
+        errors: [{ messageId: 'stateProvider', data: { token: 'core' } }],
+      },
       {
         filename: PAGE_SPEC,
         code: 'req.flush({ entries: [] });',
@@ -756,12 +790,12 @@ tester.run(
       {
         filename: PAGE_SPEC,
         code: '({ provide: ProjectsStore, useValue: { projects: () => [] } });',
-        errors: [{ messageId: 'storeProvider', data: { token: 'ProjectsStore' } }],
+        errors: [{ messageId: 'stateProvider', data: { token: 'ProjectsStore' } }],
       },
       {
         filename: PAGE_SPEC,
         code: '({ provide: stores.WorkStore, useClass: FakeWorkStore });',
-        errors: [{ messageId: 'storeProvider', data: { token: 'WorkStore' } }],
+        errors: [{ messageId: 'stateProvider', data: { token: 'WorkStore' } }],
       },
       {
         filename: PAGE_SPEC,
