@@ -6,7 +6,9 @@ import {
   otlpExportUrl,
   ownDomainUrlPattern,
   resetQitsIntegrationForTesting,
+  setTelemetrySdkLoaderForTesting,
 } from './init-qits-integration';
+import { TelemetryErrorHandler, setErrorLogger } from './telemetry-error-handler';
 
 describe('initQitsIntegration', () => {
   let originalFetch: typeof fetch;
@@ -100,6 +102,111 @@ describe('initQitsIntegration', () => {
     expect(isTelemetryActive()).toBe(true);
     // installFetchCallerAttribution + FetchInstrumentation both wrap the stubbed fetch.
     expect(window.fetch).not.toBe(mock);
+  });
+
+  describe('the lazily loaded SDK', () => {
+    const lit = { telemetry: { serviceName: 'demo', resourceAttributes: {} } };
+    type Loaded = Awaited<ReturnType<Parameters<typeof setTelemetrySdkLoaderForTesting>[0]>>;
+
+    /** A loader whose promise the test settles, around an SDK that hands out `emit`. */
+    function deferredLoader(emit: ReturnType<typeof vi.fn>) {
+      let settle!: (sdk: Loaded) => void;
+      let fail!: (error: Error) => void;
+      const loader = vi.fn(
+        () =>
+          new Promise<Loaded>((resolve, reject) => {
+            settle = resolve;
+            fail = reject;
+          }),
+      );
+      setTelemetrySdkLoaderForTesting(loader);
+      const sdk = { startTelemetrySdk: vi.fn(() => ({ emit }) as never) } as unknown as Loaded;
+      return { loader, resolve: () => settle(sdk), reject: (e: Error) => fail(e) };
+    }
+
+    beforeEach(() => vi.spyOn(console, 'error').mockImplementation(() => undefined));
+    afterEach(() => vi.restoreAllMocks());
+
+    it('is never loaded while dark', async () => {
+      const loader = vi.fn();
+      setTelemetrySdkLoaderForTesting(loader);
+      stubConfig({ telemetry: null });
+      await initQitsIntegration();
+      stubConfig({}, false);
+      resetQitsIntegrationForTesting();
+      setTelemetrySdkLoaderForTesting(loader);
+      await initQitsIntegration();
+      expect(loader).not.toHaveBeenCalled();
+    });
+
+    it('is loaded once when lit, and errors reach the real SDK logger', async () => {
+      // Wraps the real module: the export itself runs on Node's http transport under vitest, out
+      // of reach of a fetch stub, so the test stops at the SDK logger the exporter drains.
+      let emit: ReturnType<typeof vi.spyOn> | undefined;
+      let settings: unknown;
+      const real = vi.fn(async (): Promise<Loaded> => {
+        const sdk = await import('./telemetry-sdk');
+        return {
+          startTelemetrySdk: (s: Parameters<typeof sdk.startTelemetrySdk>[0]) => {
+            settings = s;
+            const logger = sdk.startTelemetrySdk(s);
+            emit = vi.spyOn(logger, 'emit');
+            return logger;
+          },
+        };
+      });
+      setTelemetrySdkLoaderForTesting(real);
+      const mock = stubConfig(lit);
+      await initQitsIntegration();
+      await initQitsIntegration();
+      expect(real).toHaveBeenCalledTimes(1);
+      expect(isTelemetryActive()).toBe(true);
+      expect(window.fetch).not.toBe(mock);
+      expect(settings).toMatchObject({
+        serviceName: 'demo',
+        traceExportUrl: otlpExportUrl('traces'),
+        logExportUrl: otlpExportUrl('logs'),
+      });
+
+      new TelemetryErrorHandler().handleError(new Error('shipped'));
+      expect(emit).toHaveBeenCalledWith(expect.objectContaining({ body: 'shipped' }));
+    });
+
+    it('ships errors raised while the SDK loads, once it arrives', async () => {
+      const emit = vi.fn();
+      const { loader, resolve } = deferredLoader(emit);
+      stubConfig(lit);
+      const init = initQitsIntegration();
+      new TelemetryErrorHandler().handleError(new Error('early'));
+      await vi.waitFor(() => expect(loader).toHaveBeenCalled());
+      new TelemetryErrorHandler().handleError(new Error('while loading'));
+      expect(emit).not.toHaveBeenCalled();
+      resolve();
+      await init;
+      expect(emit.mock.calls.map(([record]) => record.body)).toEqual(['early', 'while loading']);
+      expect(emit).toHaveBeenCalledWith(expect.objectContaining({ timestamp: expect.any(Number) }));
+    });
+
+    it('drops errors held during the config fetch when telemetry turns out dark', async () => {
+      const emit = vi.fn();
+      stubConfig({ telemetry: null });
+      const init = initQitsIntegration();
+      new TelemetryErrorHandler().handleError(new Error('early'));
+      await init;
+      // A logger set later must not receive the dropped record.
+      setErrorLogger({ emit } as never);
+      expect(emit).not.toHaveBeenCalled();
+    });
+
+    it('stays dark, never throws, when the SDK chunk fails to load', async () => {
+      const { loader, reject } = deferredLoader(vi.fn());
+      stubConfig(lit);
+      const init = initQitsIntegration();
+      await vi.waitFor(() => expect(loader).toHaveBeenCalled());
+      reject(new Error('ChunkLoadError'));
+      await expect(init).resolves.toBeUndefined();
+      expect(isTelemetryActive()).toBe(false);
+    });
   });
 
   describe('trace headers on cross-origin fetches', () => {

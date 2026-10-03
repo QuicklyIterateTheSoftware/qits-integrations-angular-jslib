@@ -23,8 +23,12 @@ traces + logs through its own backend's passthrough:
 - uncaught errors shipped as ERROR-severity log records via a provided Angular `ErrorHandler`.
 
 Everything is gated by the backend's `api/config.json` relay: an app whose backend reports no
-telemetry target gets `telemetry: null` and the library stays **dark** — no SDK objects constructed,
-`window.fetch` untouched, inert dead weight. There is no build-time configuration; the config relay
+telemetry target gets `telemetry: null` and the library stays **dark** — the OpenTelemetry SDK is
+never downloaded, `window.fetch` untouched. The SDK (~100 kB minified) is a separate lazy chunk that
+`initQitsIntegration()` loads with a dynamic `import()` only when the relay reports a telemetry
+target, so it is never part of a consumer's initial bundle; only `@opentelemetry/api` (~14 kB) is.
+Errors the `ErrorHandler` sees while the config and the SDK load are held and shipped once it
+arrives (dropped if telemetry turns out dark). There is no build-time configuration; the config relay
 is the only runtime channel.
 
 That is the standalone case today and also the qits case: qits currently injects no

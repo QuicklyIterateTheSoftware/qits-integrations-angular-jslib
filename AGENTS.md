@@ -25,7 +25,11 @@ Ported verbatim from the qits fixture (`testing-repo-quarkus-angular`), each enc
 (details in qits' `docs/features/2026-07-06_spa-observability.md` and
 `2026-07-11_spa-telemetry-meta-enrichment.md`):
 
-- `init-qits-integration.ts` — exporter URLs are used **verbatim** by the proto exporters
+- `init-qits-integration.ts` + `telemetry-sdk.ts` — the SDK lives in `telemetry-sdk.ts` and is
+  reached **only** through the dynamic `import()` in `init-qits-integration.ts`, so ng-packagr
+  emits it as its own FESM chunk and the consumer's bundler keeps it out of the initial bundle.
+  A static import of that module, or of any SDK package (anything but `@opentelemetry/api` and
+  type-only imports) from the eager files, pulls it all back in. Exporter URLs are used **verbatim** by the proto exporters
   (resolve per-signal URLs from `document.baseURI`); `ignoreUrls` excludes the `api/otel/v1/`
   passthrough (else exports instrument themselves recursively); 1 s flush (iframe removal fires
   no pagehide — the default 5 s buffer silently loses spans).
