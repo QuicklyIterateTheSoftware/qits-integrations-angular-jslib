@@ -2,7 +2,8 @@
 import { after, describe, it } from 'node:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { RuleTester } from 'eslint';
+import { strict as assert } from 'node:assert';
+import { Linter, RuleTester } from 'eslint';
 import tseslint from 'typescript-eslint';
 import qits from '../index.mjs';
 
@@ -536,4 +537,95 @@ tester.run('route-matches-directory', rules['route-matches-directory'], {
       ],
     },
   ],
+});
+
+const SHOTS = "await expect.element(view).toMatchScreenshot('loaded');";
+touch('src/app/routes/projects/projects.page.browser.spec.ts', SHOTS);
+touch('src/app/routes/shell.layout.browser.spec.ts', SHOTS);
+touch('src/app/routes/users/users.page.browser.spec.ts', "it('renders', () => {});");
+touch('src/pages/home/home.page.browser.spec.ts', SHOTS);
+
+tester.run('page-has-screenshots', rules['page-has-screenshots'], {
+  valid: [
+    { filename: at('src/app/routes/projects/projects.page.ts'), code: COMPONENT('ProjectsPage') },
+    { filename: at('src/app/routes/shell.layout.ts'), code: COMPONENT('ShellLayout') },
+    // Outside the routes directory: page-location reports it, this rule does not.
+    { filename: at('src/app/ui/orphan.page.ts'), code: COMPONENT('OrphanPage') },
+    // A spec, a resolver: not a page.
+    { filename: at('src/app/routes/admin/admin.page.spec.ts'), code: COMPONENT('HostComponent') },
+    {
+      filename: at('src/app/routes/admin/admin.resolver.ts'),
+      code: 'export const adminResolver = () => null;',
+    },
+    {
+      filename: at('src/pages/home/home.page.ts'),
+      code: COMPONENT('HomePage'),
+      options: [{ routes: 'src/pages' }],
+    },
+  ],
+  invalid: [
+    {
+      filename: at('src/app/routes/admin/admin.page.ts'),
+      code: COMPONENT('AdminPage'),
+      errors: [
+        {
+          messageId: 'noSpec',
+          data: { kind: 'page', spec: 'admin.page.browser.spec.ts' },
+          line: 1,
+        },
+      ],
+    },
+    {
+      filename: at('src/app/routes/admin/admin.layout.ts'),
+      code: COMPONENT('AdminLayout'),
+      errors: [
+        { messageId: 'noSpec', data: { kind: 'layout', spec: 'admin.layout.browser.spec.ts' } },
+      ],
+    },
+    {
+      filename: at('src/app/routes/users/users.page.ts'),
+      code: COMPONENT('UsersPage'),
+      errors: [
+        { messageId: 'noScreenshot', data: { kind: 'page', spec: 'users.page.browser.spec.ts' } },
+      ],
+    },
+    // No component class: reported on the file.
+    {
+      filename: at('src/app/routes/empty/empty.page.ts'),
+      code: 'export const nothing = 1;',
+      errors: [{ messageId: 'noSpec', line: 1, column: 1 }],
+    },
+    {
+      filename: at('src/pages/about/about.page.ts'),
+      code: COMPONENT('AboutPage'),
+      options: [{ routes: 'src/pages' }],
+      errors: [{ messageId: 'noSpec', data: { kind: 'page', spec: 'about.page.browser.spec.ts' } }],
+    },
+  ],
+});
+
+describe('page-has-screenshots opt-out', () => {
+  const lint = (code) =>
+    new Linter().verify(
+      code,
+      [
+        {
+          files: ['**/*.ts'],
+          languageOptions: { parser: tseslint.parser },
+          ...qits.configs.recommended[0],
+        },
+      ],
+      at('src/app/routes/old/old.page.ts'),
+    );
+  it('a disable comment above @Component silences it', () => {
+    const reason =
+      '// eslint-disable-next-line qits/page-has-screenshots -- redirects, shows nothing';
+    assert.deepEqual(lint(`${reason}\n${COMPONENT('OldPage')}`), []);
+  });
+  it('without the comment it reports', () => {
+    assert.deepEqual(
+      lint(COMPONENT('OldPage')).map((m) => m.ruleId),
+      ['qits/page-has-screenshots'],
+    );
+  });
 });

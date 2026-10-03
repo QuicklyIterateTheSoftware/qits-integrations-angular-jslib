@@ -10,6 +10,7 @@
 import clientOnlyInStores from './rules/client-only-in-stores.mjs';
 import consumeClientCalls from './rules/consume-client-calls.mjs';
 import pactNames from './rules/pact-names.mjs';
+import pageHasScreenshots from './rules/page-has-screenshots.mjs';
 import pageLocation from './rules/page-location.mjs';
 import pageSuffix from './rules/page-suffix.mjs';
 import routeMatchesDirectory from './rules/route-matches-directory.mjs';
@@ -24,6 +25,7 @@ const plugin = {
     'pact-names': pactNames,
     'page-location': pageLocation,
     'page-suffix': pageSuffix,
+    'page-has-screenshots': pageHasScreenshots,
     'route-matches-directory': routeMatchesDirectory,
   },
   configs: {},
@@ -41,6 +43,7 @@ plugin.configs.recommended = [
       'qits/pact-names': 'error',
       'qits/page-location': 'error',
       'qits/page-suffix': 'error',
+      'qits/page-has-screenshots': 'error',
       'qits/route-matches-directory': 'error',
     },
   },

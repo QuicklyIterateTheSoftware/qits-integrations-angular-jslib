@@ -36,7 +36,8 @@ Two more entry points, both documented in the repository README:
 
 - `@qits/angular/testing`: golden masters and Pact V4 consumer pacts for specs (Node only; needs
   `@pact-foundation/pact`).
-- `@qits/angular/eslint`: lint rules (`client-only-in-stores`, `store-has-pact`, `pact-names`) as
+- `@qits/angular/eslint`: lint rules (`client-only-in-stores`, `store-has-pact`, `pact-names`, the route rules,
+  `page-has-screenshots`) as
   a flat-config plugin: `export default [...yourConfig, ...qits.configs.recommended];`
 
 The rest of the consumer contract — the backend endpoints, the capture and state-snapshot APIs,

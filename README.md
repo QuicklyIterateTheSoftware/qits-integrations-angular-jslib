@@ -325,6 +325,7 @@ export default [...yourConfig, ...qits.configs.recommended];
 | `qits/pact-names`              | In a `*.pact.spec.ts`, `new PactV4({ consumer, provider })` and `addGoldenInteraction(…, { provider, trigger: { app } })`: the consumer and trigger app equal the nearest `package.json` `name`; the provider is a repository name ending in a role (`-service`, `-frontend`, `-app`, `-daemon`, `-oci`, `-cli`, `-javalib`, `-jslib`). Give names as string literals or consts, or the rule cannot check them.                                                                          |
 | `qits/page-location`           | A `*.page.ts` or `*.layout.ts` file lives under the routes directory, and every component class under the routes directory lives in such a file. Other files there (a resolver, a guard, a `*.routes.ts`) and specs are fine.                                                                                                                                                                                                                                                            |
 | `qits/page-suffix`             | The exported component in a `*.page.ts` ends in `Page`, the one in a `*.layout.ts` ends in `Layout`, and a component named `…Page` / `…Layout` lives in such a file.                                                                                                                                                                                                                                                                                                                     |
+| `qits/page-has-screenshots`    | Every `*.page.ts` and `*.layout.ts` under the routes directory has `<name>.page.browser.spec.ts` / `<name>.layout.browser.spec.ts` beside it, and that spec calls `toMatchScreenshot`.                                                                                                                                                                                                                                                                                                   |
 | `qits/route-matches-directory` | In a route table, every route with `component` or `loadComponent` (and every `loadChildren`) imports from the directory its URL names: the `path`s from the top of the table through `children`, `''` skipped, `:param` as `[param]`, relative to the routes directory. `path: '**'` may render any page; `redirectTo` routes are skipped. A route table under the routes directory is mounted at its own directory. Imports through a path alias and non-literal paths are not checked. |
 
 Generated clients are `src/app/api/**` (relative to the nearest `package.json`) unless you pass
@@ -336,9 +337,20 @@ Generated clients are `src/app/api/**` (relative to the nearest `package.json`) 
 `projects/:slug/work` renders `src/app/routes/projects/[slug]/work/project-work.page.ts`
 (`ProjectWorkPage`). A route with `children` renders a layout, `<name>.layout.ts` with a class
 ending in `Layout`, in the directory of its own path (path `''` is `src/app/routes/`). Components
-that are not routed stay outside (`ui/components/`, `patterns/`). The three route rules take
+that are not routed stay outside (`ui/components/`, `patterns/`). The four route rules take
 `{ routes: 'src/app/routes', routeTables: ['src/app/app.routes.ts', 'src/app/**/*.routes.ts'] }`
-(the defaults shown), relative to the nearest `package.json`.
+(the defaults shown), relative to the nearest `package.json`; `page-has-screenshots` reads only
+`routes`.
+
+**Every page has screenshots.** A page or layout with no screenshots fails `page-has-screenshots`.
+A page with nothing to show, such as one that only redirects, is not exempt by itself. Turn the
+rule off for it above its `@Component`, and say why:
+
+```ts
+// eslint-disable-next-line qits/page-has-screenshots -- redirects to /projects, renders nothing
+@Component({ selector: 'app-old', template: '' })
+export class OldPage {}
+```
 
 ## Releasing
 
