@@ -10,38 +10,65 @@
  * - A recording is frozen, so changing it in place throws (specs are ES modules, so strict mode).
  *   A spec cannot take a recording and make it say something else.
  *
+ * Every error says how to fix it: when no recorded state fits, add one to the provider and a pact
+ * interaction for it, so the provider verifies what the screenshot shows.
+ *
  * Identity is set up here, in the browser: a Vitest browser command runs on the Node side and sends
  * JSON, so every call gives a new object. Wrap the command, never the Node-side reader.
  */
 import { HttpEventType, type HttpEvent } from '@angular/common/http';
 import { TestRequest } from '@angular/common/http/testing';
 
-const recordings = new WeakSet<object>();
+/** Where a recording came from, as far as the reader knows; it makes error messages exact. */
+export interface RecordingSource {
+  /** The provider's repository name, such as `qits-projects-service`. */
+  readonly provider?: string;
+  readonly state?: string;
+  readonly operationId?: string;
+}
+
+const recordings = new WeakMap<object, RecordingSource>();
 
 /** A spec file whose data must come from golden masters: a page's or a layout's screenshots. */
 export const PAGE_AND_LAYOUT_SPECS = /\.(page|layout)\.browser\.spec\.[cm]?[jt]sx?$/;
 
 /**
- * Registers `body`, a golden master body, as a recording and returns it, deep-frozen. Every object
- * and array inside it is registered too. Only objects and arrays can be recordings: a recording of
- * a bare string, number or boolean throws.
+ * The fix for data no recording holds. `provider` and `operationId` are named when known, and left
+ * as placeholders when not.
  */
-export function recorded<T>(body: T): T {
+export function goldenMasterAdvice(source: RecordingSource = {}): string {
+  const provider = source.provider ?? '<provider repository>';
+  const op = source.operationId ?? '<operationId>';
+  return (
+    `If no recorded state fits this case, add a provider state to ${provider} (ProviderStates + ` +
+    'golden-master recorder), record it, and add a pact interaction for it in the consumer’s pact ' +
+    `spec next to the store (provider state '<new state>', operationId '${op}'), so the provider ` +
+    `verifies it. Then answer with goldenMaster('<new state>', '${op}').`
+  );
+}
+
+/**
+ * Registers `body`, a golden master body, as a recording and returns it, deep-frozen. Every object
+ * and array inside it is registered too. `source` names where it came from, for error messages.
+ * Only objects and arrays can be recordings: a bare string, number or boolean throws.
+ */
+export function recorded<T>(body: T, source: RecordingSource = {}): T {
   if (body === null || typeof body !== 'object') {
     throw new TypeError(
-      `golden-master guard: only a JSON object or array can be a recording, not ${describe(body)}`,
+      `golden-master guard: only a JSON object or array can be a recording, not ${describe(body)}. ` +
+        'Pass the whole JSON body a golden master holds, as the reader gave it.',
     );
   }
-  register(body);
+  register(body, source);
   return body;
 }
 
-function register(value: object): void {
+function register(value: object, source: RecordingSource): void {
   if (recordings.has(value)) return;
-  recordings.add(value);
+  recordings.set(value, source);
   for (const key of Reflect.ownKeys(value)) {
     const child = (value as Record<PropertyKey, unknown>)[key];
-    if (child !== null && typeof child === 'object') register(child);
+    if (child !== null && typeof child === 'object') register(child, source);
   }
   Object.freeze(value);
 }
@@ -52,14 +79,41 @@ export function isRecorded(value: unknown): boolean {
 }
 
 /**
+ * The source of the first recording found in `value` (a copy of a recording keeps the recorded
+ * objects inside it), searched breadth-first over at most 1000 objects; `{}` when there is none.
+ */
+function sourceIn(value: unknown): RecordingSource {
+  const queue: unknown[] = [value];
+  for (let seen = 0; queue.length && seen < 1000; seen++) {
+    const next = queue.shift();
+    if (next === null || typeof next !== 'object') continue;
+    const source = recordings.get(next);
+    if (source) return source;
+    queue.push(...Object.values(next));
+  }
+  return {};
+}
+
+/** `(copied from '<state>' / <operationId> of <provider>)`, when a copy says where it came from. */
+function copiedFrom(source: RecordingSource): string {
+  if (!source.state && !source.operationId) return '';
+  const what = [source.state && `'${source.state}'`, source.operationId]
+    .filter(Boolean)
+    .join(' / ');
+  return `, copied from ${what}${source.provider ? ` of ${source.provider}` : ''}`;
+}
+
+/**
  * `value`, when it is a recording; throws otherwise. For data that reaches a page by another way
  * than HTTP, such as an event a fake event stream sends: `send(assertRecorded(payload, 'event'))`.
  */
 export function assertRecorded<T>(value: T, what = 'value'): T {
   if (!isRecorded(value)) {
+    const source = sourceIn(value);
     throw new Error(
-      `golden-master guard: the ${what} is not a golden master recording (${describe(value)}). ` +
-        'Take it from a recorded body; to show other data, record a new provider state.',
+      `golden-master guard: the ${what} is not a golden master recording (${describe(value)}` +
+        `${copiedFrom(source)}). Take it as it is from a body goldenMaster(…) gave, or a part of ` +
+        `one, never a literal, a copy or a spread. ${goldenMasterAdvice(source)}`,
     );
   }
   return value;
@@ -67,17 +121,20 @@ export function assertRecorded<T>(value: T, what = 'value'): T {
 
 /**
  * `read` (a golden master reader, such as the `goldenMaster` Vitest browser command), with every
- * body it gives registered as a recording:
+ * body it gives registered as a recording. `source` says, from the reader's arguments, which
+ * provider, state and operation a body is; the errors then name them:
  *
  *   export const goldenMaster = fromGoldenMasters(
  *     (state: string, operationId: string) => commands.goldenMaster(state, operationId),
+ *     (state, operationId) => ({ provider: 'qits-projects-service', state, operationId }),
  *   );
  */
 export function fromGoldenMasters<A extends unknown[]>(
   read: (...args: A) => unknown,
+  source?: (...args: A) => RecordingSource,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped JSON by default, as goldenMasters().body
 ): <T = any>(...args: A) => Promise<T> {
-  return async <T>(...args: A) => recorded((await read(...args)) as T);
+  return async <T>(...args: A) => recorded((await read(...args)) as T, source?.(...args));
 }
 
 /** Options for {@link guardGoldenMasters}. */
@@ -146,20 +203,32 @@ function checkAnswer(request: TestRequest, body: unknown, status: number | undef
   const empty = body === null || body === undefined || body === '';
   if (empty && status === 204) return;
   if (isRecorded(body)) return;
+  if (empty) {
+    return fail(
+      request,
+      status ?? 204,
+      'with no body. An empty answer is a recorded state too: record an empty state in the ' +
+        "provider (for example 'no projects exist') and answer with goldenMaster('<that state>', " +
+        "'<operationId>'). " +
+        goldenMasterAdvice() +
+        ' Only an operation that answers 204 No Content may flush nothing, and says so: ' +
+        "flush(null, { status: 204, statusText: 'No Content' }).",
+    );
+  }
+  const source = sourceIn(body);
   fail(
     request,
-    status ?? (empty ? 204 : 200),
-    empty
-      ? 'with no body. An empty answer is a recorded state too: flush its recording. Only an ' +
-          'operation that answers 204 No Content may flush nothing, and says so: ' +
-          'flush(null, { status: 204 }).'
-      : `with a body that is not a golden master recording (${describe(body)}). Flush a recorded ` +
-          'body or a part of one, never a literal, a copy, a spread or a slice. To show other ' +
-          'data, record a new provider state.',
+    status ?? 200,
+    `with a body that is not a golden master recording (${describe(body)}${copiedFrom(source)}). ` +
+      'Flush a body goldenMaster(…) gave, or a part of one, as it is: never a literal, a copy, a ' +
+      `spread or a slice. ${goldenMasterAdvice(source)}`,
   );
 }
 
 function checkEvent(request: TestRequest, sent: HttpEvent<unknown>): void {
+  const only =
+    'Send only Sent, UploadProgress, ResponseHeader or DownloadProgress events without text, and ' +
+    'answer with flush(<a body goldenMaster(…) gave>).';
   switch (sent.type) {
     case HttpEventType.Sent:
     case HttpEventType.UploadProgress:
@@ -167,11 +236,11 @@ function checkEvent(request: TestRequest, sent: HttpEvent<unknown>): void {
       return;
     case HttpEventType.DownloadProgress:
       if (sent.partialText === undefined) return;
-      return fail(request, 200, 'with a download progress event that carries text.');
+      return fail(request, 200, `with a download progress event that carries text. ${only}`);
     case HttpEventType.Response:
       return checkAnswer(request, sent.body, sent.status);
     default:
-      return fail(request, 200, 'with a user event, which may carry any data.');
+      return fail(request, 200, `with a user event, which may carry any data. ${only}`);
   }
 }
 
@@ -179,7 +248,7 @@ function fail(request: TestRequest, status: number, why: string): never {
   const { method, urlWithParams } = request.request;
   throw new Error(
     `golden-master guard: ${method} ${urlWithParams} was answered ${status} ${why} ` +
-      'A screenshot of a page or layout shows backend data from golden masters only.',
+      '(A screenshot of a page or layout shows backend data from golden masters only.)',
   );
 }
 

@@ -207,7 +207,9 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   everything in it in a `WeakSet`; `guardGoldenMasters()` patches `TestRequest.prototype.flush`
   and `event`. Identity is made in the browser: a Vitest command sends JSON, so wrap the command,
   not the Node reader. The lint rule `browser-spec-data-from-golden-masters` is only a heuristic;
-  the guard is the guarantee.
+  the guard is the guarantee. `pactedGoldenMasters()` (in `@qits/angular/testing`, Node-side) refuses
+  a body no interaction in the committed pact uses. Every error ends in the same fix: a new provider
+  state plus a pact interaction for it.
 - **`@qits/angular/eslint`** (`projects/qits-integrations-angular/eslint/`): plain ESM, no build.
   ng-packagr copies the `.mjs` files as assets (minus `test/`), and the source `package.json`'s
   `exports["./eslint"]` points at them; ng-packagr merges that with the exports it generates.

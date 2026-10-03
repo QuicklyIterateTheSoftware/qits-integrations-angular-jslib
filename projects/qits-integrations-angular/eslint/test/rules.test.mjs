@@ -695,6 +695,17 @@ tester.run(
         filename: PAGE_SPEC,
         code: "import type { SelectedProject } from '$core/projects/selected-project'; ({ provide: SelectedProject, useValue: {} });",
       },
+      // A transport seam the app allows, under its name or an alias.
+      {
+        filename: PAGE_SPEC,
+        code: "import { EVENT_SOURCE } from '$core/events/domain-events'; ({ provide: EVENT_SOURCE, useValue: () => ({}) });",
+        options: [{ allowTokens: ['EVENT_SOURCE'] }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import { EVENT_SOURCE as SOURCE } from '../../core/events/domain-events'; ({ provide: SOURCE, useFactory: () => () => ({}) });",
+        options: [{ allowTokens: ['EVENT_SOURCE'] }],
+      },
       // A token from outside the state tree.
       {
         filename: PAGE_SPEC,
@@ -711,6 +722,23 @@ tester.run(
       },
     ],
     invalid: [
+      // allowTokens exempts only the tokens it names.
+      {
+        filename: PAGE_SPEC,
+        code: "import { EVENT_SOURCE } from '$core/events/domain-events'; import { SelectedProject } from '$core/projects/selected-project'; import { AppOrigins } from '$core/app-origins'; [{ provide: EVENT_SOURCE, useValue: () => ({}) }, { provide: SelectedProject, useValue: {} }, { provide: AppOrigins, useValue: {} }];",
+        options: [{ allowTokens: ['EVENT_SOURCE'] }],
+        errors: [
+          { messageId: 'stateProvider', data: { token: 'SelectedProject' } },
+          { messageId: 'stateProvider', data: { token: 'AppOrigins' } },
+        ],
+      },
+      // It never exempts a store.
+      {
+        filename: PAGE_SPEC,
+        code: '({ provide: ProjectsStore, useValue: {} });',
+        options: [{ allowTokens: ['ProjectsStore'] }],
+        errors: [{ messageId: 'stateProvider', data: { token: 'ProjectsStore' } }],
+      },
       {
         filename: PAGE_SPEC,
         code: "import { SelectedProject } from '$core/projects/selected-project'; ({ provide: SelectedProject, useValue: { slug: () => 'x' } });",
@@ -823,3 +851,29 @@ tester.run(
     ],
   },
 );
+
+describe('browser-spec-data-from-golden-masters messages', () => {
+  const { messages } = rules['browser-spec-data-from-golden-masters'].meta;
+  it('every data message says how to add a provider state and a pact interaction', () => {
+    for (const id of [
+      'patchState',
+      'overrideProvider',
+      'stateProvider',
+      'storeImport',
+      'notGolden',
+    ]) {
+      assert.match(messages[id], /add a provider state to the provider repository/, id);
+      assert.match(messages[id], /\(ProviderStates \+ golden-master recorder\)/, id);
+      assert.match(messages[id], /add a pact interaction for it in the consumer's pact spec/, id);
+      assert.match(
+        messages[id],
+        /Then answer with goldenMaster\('<new state>', '<operationId>'\)/,
+        id,
+      );
+    }
+    for (const id of ['patchState', 'overrideProvider', 'stateProvider', 'storeImport']) {
+      assert.match(messages[id], /Feed the data through HTTP from a golden master instead/, id);
+    }
+    assert.match(messages.recorder, /wrap the goldenMaster command there/);
+  });
+});

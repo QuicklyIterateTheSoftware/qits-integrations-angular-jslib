@@ -17,6 +17,13 @@ const BROWSER_TESTING = '@qits/angular/testing/browser';
 /** Array methods that give an element of the array, so of a recording when the array is one. */
 const ELEMENT_OF = new Set(['at', 'find', 'findLast']);
 
+/** The fix when no recorded state holds the data a case needs. */
+const NEW_STATE =
+  "If no recorded state fits this case, add a provider state to the provider repository that serves this call (ProviderStates + golden-master recorder), record it, and add a pact interaction for it in the consumer's pact spec next to the store (provider state '<new state>', operationId '<operationId>'), so the provider verifies it. Then answer with goldenMaster('<new state>', '<operationId>').";
+
+/** The fix for data put in by hand: feed it through HTTP from a golden master. */
+const VIA_HTTP = `Feed the data through HTTP from a golden master instead: let the real store request it, and answer with http.expectOne(…).flush(await goldenMaster('<state>', '<operationId>')). ${NEW_STATE}`;
+
 const PROVIDER_KEYS = new Set(['useValue', 'useFactory', 'useClass', 'useExisting']);
 
 /**
@@ -24,7 +31,8 @@ const PROVIDER_KEYS = new Set(['useValue', 'useFactory', 'useClass', 'useExistin
  * else (epic qits-112). It may not set a store's state (`patchState`), replace a provider
  * (`TestBed.overrideProvider`, a `*Store` token or any token imported from the app's state tree,
  * `$core/…` or a path with `/core/`, with `useValue`/`useFactory`/`useClass`/
- * `useExisting`), import a store file except for its types, or register its own recordings. The
+ * `useExisting`; option `allowTokens` exempts state-tree tokens that are transport seams only,
+ * never data, such as an event source), import a store file except for its types, or register its own recordings. The
  * first argument of `flush(…)` must trace back to a golden-master call, unless the answer is an
  * error (a literal `status` of 400 or more) or a literal 204 with no body.
  *
@@ -44,32 +52,32 @@ export default {
     schema: [
       {
         type: 'object',
-        properties: { goldenMaster: { type: 'string' } },
+        properties: {
+          goldenMaster: { type: 'string' },
+          allowTokens: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+        },
         additionalProperties: false,
       },
     ],
     messages: {
-      patchState:
-        'A screenshot spec does not set state with patchState: answer the store’s request with a golden master.',
-      overrideProvider:
-        'A screenshot spec does not replace providers: answer the requests with golden masters.',
-      stateProvider:
-        "A screenshot spec does not replace '{{token}}', which holds app state: let the real one load its data, and answer its requests with golden masters.",
-      storeImport:
-        "A screenshot spec imports '{{source}}' for its types only (import type): the store gets its data from a golden master.",
+      patchState: `A screenshot spec does not set state with patchState. ${VIA_HTTP}`,
+      overrideProvider: `A screenshot spec does not replace providers. ${VIA_HTTP}`,
+      stateProvider: `A screenshot spec does not replace '{{token}}', which holds app state. ${VIA_HTTP}`,
+      storeImport: `A screenshot spec imports '{{source}}' for its types only: write \`import type\`. ${VIA_HTTP}`,
       recorder:
-        "A screenshot spec does not register recordings itself: import '{{name}}' in a testing helper, and take bodies from that helper.",
-      notGolden:
-        'flush(…) answers with data that does not come from a golden master. Flush a golden-master body or a part of it; for an error, give a literal status of 400 or more.',
+        "A screenshot spec does not register recordings itself. Import '{{name}}' in a testing helper (such as src/testing/browser/golden-master.ts), wrap the goldenMaster command there, and take bodies from that helper's goldenMaster(…).",
+      notGolden: `flush(…) answers with data that does not come from a golden master. Flush a body goldenMaster(…) gave, or a part of it, as it is: never a literal, a copy, a spread or a slice. ${NEW_STATE} For an error answer, give a literal status of 400 or more; for 204 No Content, flush(null, { status: 204, statusText: 'No Content' }).`,
     },
   },
   create(context) {
     const file = context.physicalFilename ?? context.filename;
     if (!PAGE_AND_LAYOUT_SPECS.test(file)) return {};
     const golden = new RegExp(context.options[0]?.goldenMaster ?? DEFAULT_GOLDEN_MASTER);
+    // Transport seams only, never data: a token that only cuts the network off (an event source).
+    const allowTokens = new Set(context.options[0]?.allowTokens ?? []);
     const source = context.sourceCode ?? context.getSourceCode();
     const patchStates = new Set(['patchState']);
-    /** Local names a value import from the state tree binds: every one is app state. */
+    /** Local names a value import from the state tree binds, minus the allowed seams. */
     const stateTokens = new Set();
 
     const nameOf = (node) =>
@@ -167,7 +175,10 @@ export default {
           if (node.type !== 'ImportDeclaration' || node.importKind === 'type') continue;
           if (!STATE_TREE.test(String(node.source.value))) continue;
           for (const specifier of node.specifiers) {
-            if (specifier.importKind !== 'type') stateTokens.add(specifier.local.name);
+            if (specifier.importKind === 'type') continue;
+            const imported = specifier.imported?.name ?? specifier.imported?.value;
+            if (allowTokens.has(imported) || allowTokens.has(specifier.local.name)) continue;
+            stateTokens.add(specifier.local.name);
           }
         }
       },

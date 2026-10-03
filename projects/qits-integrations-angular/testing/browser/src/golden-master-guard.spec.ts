@@ -4,6 +4,7 @@ import { TestBed } from '@angular/core/testing';
 import {
   assertRecorded,
   fromGoldenMasters,
+  goldenMasterAdvice,
   guardGoldenMasters,
   isRecorded,
   PAGE_AND_LAYOUT_SPECS,
@@ -16,7 +17,7 @@ interface List {
   entries: { project: { id: string; slug: string; tags: string[] } }[];
   total: number;
 }
-const read = async (): Promise<List> => JSON.parse(LIST);
+const read = async (_state?: string, _operationId?: string): Promise<List> => JSON.parse(LIST);
 
 describe('recorded', () => {
   it('registers the body and everything inside it', () => {
@@ -63,6 +64,7 @@ describe('recorded', () => {
     expect(() => assertRecorded({ id: 'p1' }, 'event')).toThrow(
       /the event is not a golden master recording/,
     );
+    expect(() => assertRecorded({ id: 'p1' }, 'event')).toThrow(goldenMasterAdvice());
   });
 });
 
@@ -125,16 +127,47 @@ describe('guardGoldenMasters', () => {
     req.flush(null, { status: 500, statusText: 'Server Error' });
   });
 
+  it('names the provider, state and operation a copy came from, and the fix', async () => {
+    const goldenMaster = fromGoldenMasters(read, (state?: string, operationId?: string) => ({
+      provider: 'qits-projects-service',
+      state,
+      operationId,
+    }));
+    const list = await goldenMaster<List>('a project exists', 'listProjects');
+    const req = request();
+    let message = '';
+    try {
+      req.flush(list.entries.slice(0, 1));
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain(
+      "(an array of 1, copied from 'a project exists' / listProjects of qits-projects-service)",
+    );
+    expect(message).toContain(
+      'add a provider state to qits-projects-service (ProviderStates + golden-master recorder)',
+    );
+    expect(message).toContain(
+      "add a pact interaction for it in the consumer’s pact spec next to the store (provider state '<new state>', operationId 'listProjects')",
+    );
+    expect(message).toContain("Then answer with goldenMaster('<new state>', 'listProjects').");
+    req.flush(null, { status: 500, statusText: 'Server Error' });
+  });
+
   it('fails a literal', () => {
     const req = request();
     expect(() => req.flush({ entries: [], total: 0 })).toThrow(/not a golden master recording/);
     expect(() => req.flush('[]')).toThrow(/\(a string\)/);
+    expect(() => req.flush({ total: 0 })).toThrow(goldenMasterAdvice());
     req.flush(null, { status: 500, statusText: 'Server Error' });
   });
 
   it('fails a 2xx answer with no body unless it says 204', () => {
     const req = request();
     expect(() => req.flush(null)).toThrow(/answered 204 with no body/);
+    expect(() => req.flush(null)).toThrow(
+      /record an empty state in the provider \(for example 'no projects exist'\)/,
+    );
     expect(() => req.flush(null, { status: 200, statusText: 'OK' })).toThrow(/with no body/);
     req.flush(null, { status: 204, statusText: 'No Content' });
     expect(answers).toEqual([null]);

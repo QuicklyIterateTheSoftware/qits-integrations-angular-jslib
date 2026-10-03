@@ -3,3 +3,4 @@
  * Node-side only (it reads node_modules), for specs, never for app code.
  */
 export * from './golden-master-pact';
+export * from './pacted-golden-masters';
