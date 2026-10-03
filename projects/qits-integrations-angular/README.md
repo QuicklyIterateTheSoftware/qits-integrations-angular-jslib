@@ -9,10 +9,10 @@ stays dark.
 This file is the package's README: ng-packagr copies it into the published tarball, so it is what
 the registry shows. The repository README is the full contract.
 
-Published to qits' internal registry under the `@qits` scope, so point the scope at it in `.npmrc`:
+Published to qits' own registry under the `@qits` scope, so point the scope at it in `.npmrc`:
 
 ```ini
-@qits:registry=http://localhost:8081/artifacts/npm/npm/
+@qits:registry=https://registry.qits.wohlben.eu/artifacts/npm/npm/
 ```
 
 ```bash

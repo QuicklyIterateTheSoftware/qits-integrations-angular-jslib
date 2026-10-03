@@ -39,25 +39,24 @@ in the capture's goal as JSON — what the app _knew_, not just what it rendered
 
 `@qits/angular` is published to qits' own npm registry, hosted by qits-artifacts. Nothing is
 published to npmjs.org, so a consumer routes the `@qits` scope — and, ideally, everything else —
-through the platform. One committed `.npmrc` carries the routing and no credential:
+through the platform. One committed `.npmrc` carries the routing:
 
 ```ini
-registry=http://localhost:8082/artifacts/npm/npmjs/   # pull-through cache of npmjs
-@qits:registry=http://localhost:8081/artifacts/npm/npm/
+registry=https://mirror.qits.wohlben.eu/npm/npmjs/        # pull-through cache of npmjs
+@qits:registry=https://registry.qits.wohlben.eu/artifacts/npm/npm/
 ```
 
 ```bash
 pnpm add @qits/angular
 ```
 
-Those are the **local platform's** host-published addresses — the ports a developer on the
-deployment host already dials. They are two services since the byte-plane split: the cache belongs
-to qits-platform-mirror, the hosted scope to qits-artifacts. Inside the platform's own network the
-aliases are `http://qits-platform-mirror:8080/artifacts/npm/npmjs/` and
-`http://qits-artifacts:8080/artifacts/npm/npm/`, which is what qits-ci's pipelines write
-into `~/.npmrc` from `$QITS_NPM_PROXY_URL` / `$QITS_NPM_REGISTRY_URL`; a consumer repo's committed
-file is overwritten by that preamble in CI, so it only has to be right for humans. The registry
-takes no credential in either direction — see the qits-artifacts-service README for the posture.
+Those two hosts are code under the platform's public domain (qits-731) — `wohlben.eu` is the live
+platform's — the same addresses from a workstation, from `qits-net`, from anywhere: there is no
+separate in-network alias any more. qits-ci's own pipelines derive the identical pair from
+`QITS_DOMAIN`; a consumer repo's committed file only has to carry the same two lines. Both hosts
+answer 401 anonymously — put a bearer or the commissioned client pair's Basic credential in
+`~/.npmrc`, keyed by the scheme-less URL (`//mirror.qits.wohlben.eu/npm/npmjs/:_authToken=...` and
+the hosted equivalent) — see the qits-artifacts-service README for the posture.
 
 The tarball ships **prebuilt** (the ng-packagr output), so an install runs no build: no `prepare`
 hook, no `pnpm.onlyBuiltDependencies` allowlist, no Angular toolchain in the consumer.
@@ -393,7 +392,7 @@ pnpm build && pnpm check-exports
 cd dist/qits-integrations-angular && npm pack --dry-run   # prebuilt fesm + types + manifest, no sources
 
 pnpm dlx @angular/cli@22 new smoke --minimal --skip-git --defaults && cd smoke
-printf '@qits:registry=http://localhost:8081/artifacts/npm/npm/\n' > .npmrc
+printf '@qits:registry=https://registry.qits.wohlben.eu/artifacts/npm/npm/\n' > .npmrc
 pnpm add @qits/angular
 pnpm ng build                                            # compiles against the installed types
 ```
