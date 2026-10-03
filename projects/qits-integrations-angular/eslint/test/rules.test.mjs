@@ -629,3 +629,163 @@ describe('page-has-screenshots opt-out', () => {
     );
   });
 });
+
+const PAGE_SPEC = at('src/app/routes/projects/project-list.page.browser.spec.ts');
+const LAYOUT_SPEC = at('src/app/routes/shell.layout.browser.spec.ts');
+tester.run(
+  'browser-spec-data-from-golden-masters',
+  rules['browser-spec-data-from-golden-masters'],
+  {
+    valid: [
+      // A golden-master call, awaited, flushed directly.
+      {
+        filename: PAGE_SPEC,
+        code: "req.flush(await commands.goldenMaster('a project exists', 'listProjects'));",
+      },
+      // Through a const, a field, an element, a destructured part and a find().
+      {
+        filename: PAGE_SPEC,
+        code: `
+        const list = await goldenMaster('a project exists', 'listProjects');
+        const { entries } = list;
+        http.expectOne('/a').flush(list);
+        http.expectOne('/b').flush(list.entries[0]);
+        http.expectOne('/c').flush(entries);
+        http.expectOne('/d').flush(list.entries.find((e) => e.project));
+        http.expectOne('/e').flush(list as unknown as object);
+      `,
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "for (const entry of (await githostGoldenMaster('s', 'op')).entries) req.flush(entry);",
+      },
+      // An error answer may carry any body.
+      {
+        filename: PAGE_SPEC,
+        code: "req.flush(null, { status: 500, statusText: 'Server Error' });",
+      },
+      {
+        filename: LAYOUT_SPEC,
+        code: "req.flush({ message: 'gone' }, { status: 404, statusText: 'x' });",
+      },
+      // A no-content operation says so.
+      { filename: PAGE_SPEC, code: "req.flush(null, { status: 204, statusText: 'No Content' });" },
+      // A parameter cannot be traced, nor options that are not a literal: the run-time guard checks.
+      { filename: PAGE_SPEC, code: 'const answer = (body, options) => req.flush(body, options);' },
+      { filename: PAGE_SPEC, code: 'req.flush({ a: 1 }, options);' },
+      // Types from a store are fine.
+      {
+        filename: PAGE_SPEC,
+        code: "import type { Project } from '$core/projects/projects.store';",
+      },
+      { filename: PAGE_SPEC, code: "import { type Project } from './projects.store';" },
+      // A provider that is not a store.
+      {
+        filename: PAGE_SPEC,
+        code: '({ provide: EVENT_SOURCE, useValue: () => ({ onmessage: null, close() {} }) });',
+      },
+      // A store provided as it is.
+      { filename: PAGE_SPEC, code: '({ providers: [ProjectsStore] });' },
+      // Other specs are not checked.
+      {
+        filename: at('src/app/ui/card.component.browser.spec.ts'),
+        code: "patchState(store, { x: 1 }); req.flush({ a: 1 }); import { recorded } from '@qits/angular/testing/browser';",
+      },
+      {
+        filename: at('src/app/routes/projects/project-list.page.spec.ts'),
+        code: 'req.flush({ a: 1 });',
+      },
+    ],
+    invalid: [
+      {
+        filename: PAGE_SPEC,
+        code: 'req.flush({ entries: [] });',
+        errors: [{ messageId: 'notGolden' }],
+      },
+      { filename: PAGE_SPEC, code: 'req.flush([]);', errors: [{ messageId: 'notGolden' }] },
+      { filename: PAGE_SPEC, code: 'req.flush(null);', errors: [{ messageId: 'notGolden' }] },
+      {
+        filename: PAGE_SPEC,
+        code: "req.flush(null, { status: 200, statusText: 'OK' });",
+        errors: [{ messageId: 'notGolden' }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "req.flush({ a: 1 }, { status: 204, statusText: 'No Content' });",
+        errors: [{ messageId: 'notGolden' }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: `
+        const recorded = await goldenMaster('s', 'listProjects');
+        req.flush({ ...recorded, entries: [] });
+        req.flush(recorded.entries.slice(0, 1));
+        req.flush(structuredClone(recorded));
+      `,
+        errors: [
+          { messageId: 'notGolden' },
+          { messageId: 'notGolden' },
+          { messageId: 'notGolden' },
+        ],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "let list = await goldenMaster('s', 'op'); list = { entries: [] }; req.flush(list);",
+        errors: [{ messageId: 'notGolden' }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import { BODY } from './fixtures'; req.flush(BODY);",
+        errors: [{ messageId: 'notGolden' }],
+      },
+      {
+        filename: LAYOUT_SPEC,
+        code: "import { patchState } from '@ngrx/signals'; patchState(store, { projects: [] });",
+        errors: [{ messageId: 'patchState' }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import { patchState as set } from '@ngrx/signals'; set(store, {});",
+        errors: [{ messageId: 'patchState' }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: 'TestBed.overrideProvider(ProjectsStore, { useValue: {} });',
+        errors: [{ messageId: 'overrideProvider' }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: '({ provide: ProjectsStore, useValue: { projects: () => [] } });',
+        errors: [{ messageId: 'storeProvider', data: { token: 'ProjectsStore' } }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: '({ provide: stores.WorkStore, useClass: FakeWorkStore });',
+        errors: [{ messageId: 'storeProvider', data: { token: 'WorkStore' } }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import { ProjectsStore } from '$core/projects/projects.store';",
+        errors: [{ messageId: 'storeImport' }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import { type Project, ProjectsStore } from './projects.store.ts';",
+        errors: [{ messageId: 'storeImport' }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "await import('./projects.store');",
+        errors: [{ messageId: 'storeImport' }],
+      },
+      {
+        filename: PAGE_SPEC,
+        code: "import { recorded, fromGoldenMasters } from '@qits/angular/testing/browser';",
+        errors: [
+          { messageId: 'recorder', data: { name: 'recorded' } },
+          { messageId: 'recorder', data: { name: 'fromGoldenMasters' } },
+        ],
+      },
+    ],
+  },
+);
