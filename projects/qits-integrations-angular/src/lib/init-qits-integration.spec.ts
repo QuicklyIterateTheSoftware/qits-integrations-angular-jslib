@@ -4,6 +4,7 @@ import {
   initQitsIntegration,
   isTelemetryActive,
   otlpExportUrl,
+  ownDomainUrlPattern,
   resetQitsIntegrationForTesting,
 } from './init-qits-integration';
 
@@ -99,6 +100,52 @@ describe('initQitsIntegration', () => {
     expect(isTelemetryActive()).toBe(true);
     // installFetchCallerAttribution + FetchInstrumentation both wrap the stubbed fetch.
     expect(window.fetch).not.toBe(mock);
+  });
+
+  describe('trace headers on cross-origin fetches', () => {
+    const lit = { telemetry: { serviceName: 'demo', resourceAttributes: {} } };
+
+    /** The headers the stub saw for `url`, as a plain lower-case map. */
+    async function headersSent(mock: ReturnType<typeof vi.fn>, url: string) {
+      await window.fetch(url);
+      const init = mock.mock.calls.at(-1)?.[1] as RequestInit | undefined;
+      return Object.fromEntries(new Headers(init?.headers).entries());
+    }
+
+    it('by default, sends traceparent to subdomains of the page host only', async () => {
+      const mock = stubConfig(lit);
+      await initQitsIntegration();
+      const sibling = `${location.protocol}//projects.${location.host}/projects/api/x`;
+      expect(await headersSent(mock, sibling)).toHaveProperty('traceparent');
+      expect(await headersSent(mock, 'https://elsewhere.test/x')).not.toHaveProperty('traceparent');
+    });
+
+    it('honors propagateTraceHeaderCorsUrls instead of the default', async () => {
+      const mock = stubConfig(lit);
+      await initQitsIntegration({ propagateTraceHeaderCorsUrls: [/^https:\/\/api\.test\//] });
+      expect(await headersSent(mock, 'https://api.test/x')).toHaveProperty('traceparent');
+      const sibling = `${location.protocol}//projects.${location.host}/x`;
+      expect(await headersSent(mock, sibling)).not.toHaveProperty('traceparent');
+    });
+  });
+});
+
+describe('ownDomainUrlPattern', () => {
+  const pattern = ownDomainUrlPattern('qits.example.org');
+
+  it('matches the host and its subdomains, on any port and scheme http(s)', () => {
+    expect(pattern.test('https://qits.example.org/x')).toBe(true);
+    expect(pattern.test('https://projects.qits.example.org/projects/api/x')).toBe(true);
+    expect(pattern.test('http://a.b.qits.example.org:8080')).toBe(true);
+    expect(pattern.test('https://ci.qits.example.org?x=1')).toBe(true);
+  });
+
+  it('matches nothing else', () => {
+    expect(pattern.test('https://example.org/x')).toBe(false);
+    expect(pattern.test('https://evilqits.example.org/x')).toBe(false);
+    expect(pattern.test('https://qits.example.org.evil.test/x')).toBe(false);
+    expect(pattern.test('https://evil.test/qits.example.org')).toBe(false);
+    expect(pattern.test('https://qits-example.org/x')).toBe(false);
   });
 });
 

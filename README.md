@@ -11,7 +11,12 @@ The library packages the SPA half of the qits observability convention
 When the backend's identity relay reports a telemetry target, the app exports OTLP protobuf
 traces + logs through its own backend's passthrough:
 
-- document-load + fetch spans (client spans with `traceparent` propagation into the backend trace);
+- document-load + fetch spans (client spans with `traceparent` propagation into the backend trace).
+  Same-origin fetches always carry the trace headers; cross-origin ones only to the page's own host
+  and its subdomains (the sibling apps of a platform app at the apex). Change that with
+  `initQitsIntegration({ propagateTraceHeaderCorsUrls: [/^https:\/\/api\.example\.org\//] })`, or `[]`
+  for same-origin only. Name only origins whose CORS allows `traceparent`, `tracestate` and
+  `baggage`: the browser refuses a request whose preflight does not;
 - `Navigation` spans and `app.route.path`/`app.route.url` stamped on **every** span and log record;
 - click/submit interaction spans, named by a `data-track-event` DOM attribute;
 - `code.*` caller attribution on fetch spans (which file/method issued the request);

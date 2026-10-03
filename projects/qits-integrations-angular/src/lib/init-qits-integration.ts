@@ -16,6 +16,14 @@ import { setErrorLogger } from './telemetry-error-handler';
 export interface QitsIntegrationOptions {
   /** Where to fetch the identity relay; default 'api/config.json' (base-relative). */
   configUrl?: string;
+  /**
+   * Cross-origin URLs whose fetches carry the trace headers (`traceparent`, `tracestate`,
+   * `baggage`), as OpenTelemetry's `propagateTraceHeaderCorsUrls`. Same-origin fetches always
+   * carry them. Default: the page's own host and its subdomains (see `ownDomainUrlPattern`).
+   * Pass `[]` to propagate same-origin only. Name only origins whose CORS allows those headers:
+   * the browser refuses a request whose preflight does not.
+   */
+  propagateTraceHeaderCorsUrls?: (string | RegExp)[];
 }
 
 interface TelemetryRelay {
@@ -34,6 +42,16 @@ export function isTelemetryActive(): boolean {
 // The proto exporters POST via fetch() — FetchInstrumentation must exclude them or every export
 // spawns a span exporting itself, forever.
 export const OTLP_PASSTHROUGH_URL_PATTERN = /\/api\/otel\/v1\//;
+
+/**
+ * Matches http(s) URLs on `hostname` or any of its subdomains, on any port. With the app at the
+ * platform apex (`qits.example.org`), that is every sibling app (`projects.qits.example.org`);
+ * other domains stay out, so a third-party API never sees a header its CORS may refuse.
+ */
+export function ownDomainUrlPattern(hostname: string): RegExp {
+  const host = hostname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^https?://([^/?#@]+\\.)?${host}(:\\d+)?([/?#]|$)`, 'i');
+}
 
 // The exporters use a user-provided url verbatim (no /v1/<signal> appended) and resolve it
 // against location.href, not <base> — so build absolute per-signal URLs from the rebased base.
@@ -123,7 +141,14 @@ export async function initQitsIntegration(options?: QitsIntegrationOptions): Pro
   registerInstrumentations({
     instrumentations: [
       new DocumentLoadInstrumentation(),
-      new FetchInstrumentation({ ignoreUrls: [OTLP_PASSTHROUGH_URL_PATTERN] }),
+      new FetchInstrumentation({
+        ignoreUrls: [OTLP_PASSTHROUGH_URL_PATTERN],
+        // Sibling platform apps are cross-origin: without this they get no traceparent, and
+        // their server spans start a new trace instead of joining the browser's.
+        propagateTraceHeaderCorsUrls: options?.propagateTraceHeaderCorsUrls ?? [
+          ownDomainUrlPattern(location.hostname),
+        ],
+      }),
       // Clicks/submits become spans; synchronous work in the handler (zoneless apps use the
       // stack context manager) nests under them, so a submit-fired POST gets the interaction as
       // its trace root. Work behind an await/setTimeout escapes — accepted, no zone.js shipped.
