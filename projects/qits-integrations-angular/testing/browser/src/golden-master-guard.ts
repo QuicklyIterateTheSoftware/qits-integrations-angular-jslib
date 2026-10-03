@@ -1,6 +1,7 @@
 /**
- * The golden-master guard (epic qits-112): a screenshot test of a page or layout shows backend data
- * from golden masters only, and the run fails when it shows anything else.
+ * The golden-master guard (epic qits-112): a browser spec shows backend data from golden masters
+ * only, and the run fails when it shows anything else. Only the specs of UI components (by default
+ * those under `src/app/ui/`) may use synthetic data.
  *
  * - {@link recorded} (or a reader wrapped with {@link fromGoldenMasters}) deep-freezes a golden
  *   master body and registers it, and every object and array inside it, as a recording.
@@ -11,7 +12,7 @@
  *   A spec cannot take a recording and make it say something else.
  *
  * Every error says how to fix it: when no recorded state fits, add one to the provider and a pact
- * interaction for it, so the provider verifies what the screenshot shows.
+ * interaction for it, so the provider verifies what the spec shows.
  *
  * Identity is set up here, in the browser: a Vitest browser command runs on the Node side and sends
  * JSON, so every call gives a new object. Wrap the command, never the Node-side reader.
@@ -29,8 +30,47 @@ export interface RecordingSource {
 
 const recordings = new WeakMap<object, RecordingSource>();
 
-/** A spec file whose data must come from golden masters: a page's or a layout's screenshots. */
-export const PAGE_AND_LAYOUT_SPECS = /\.(page|layout)\.browser\.spec\.[cm]?[jt]sx?$/;
+/** A browser spec file. Its data must come from golden masters, unless it is a UI component's. */
+export const BROWSER_SPECS = /\.browser\.spec\.[cm]?[jt]sx?$/;
+
+/** Browser specs that may use synthetic data: the UI components. As the lint rule's default. */
+export const DEFAULT_SYNTHETIC_ALLOWED: readonly string[] = ['src/app/ui/**'];
+
+/**
+ * A glob (`**`, `*`, `?`) as a regex that matches a path ending in it at a segment boundary, so
+ * `src/app/ui/**` matches `/home/me/app/src/app/ui/card.browser.spec.ts`.
+ */
+function globTail(glob: string): RegExp {
+  let out = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === '*' && glob[i + 1] === '*') {
+      i++;
+      if (glob[i + 1] === '/') {
+        i++;
+        out += '(?:.*/)?';
+      } else {
+        out += '.*';
+      }
+    } else if (c === '*') out += '[^/]*';
+    else if (c === '?') out += '[^/]';
+    else out += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`(?:^|/)${out}$`);
+}
+
+/**
+ * Whether the spec at `file` must take its backend data from golden masters: a browser spec that
+ * no glob in `syntheticAllowed` matches. A glob matches the end of the path at a `/`, so a
+ * project-relative glob works on an absolute path.
+ */
+export function goldenMastersRequired(
+  file: string,
+  syntheticAllowed: readonly string[] = DEFAULT_SYNTHETIC_ALLOWED,
+): boolean {
+  const path = file.split('\\').join('/');
+  return BROWSER_SPECS.test(path) && !syntheticAllowed.some((glob) => globTail(glob).test(path));
+}
 
 /**
  * The fix for data no recording holds. `provider` and `operationId` are named when known, and left
@@ -141,10 +181,16 @@ export function fromGoldenMasters<A extends unknown[]>(
 export interface GoldenMasterGuardOptions {
   /**
    * Whether the guard checks the running test. Default: when the running test file (Vitest's
-   * `expect.getState().testPath`, with globals on) matches {@link PAGE_AND_LAYOUT_SPECS}, and
-   * always when the test file is not known.
+   * `expect.getState().testPath`, with globals on) is a browser spec that `syntheticAllowed` does
+   * not name ({@link goldenMastersRequired}), and always when the test file is not known.
    */
   readonly when?: () => boolean;
+  /**
+   * Globs for the browser specs that may use synthetic data, relative to the project root (as the
+   * lint rule's option of the same name). Default {@link DEFAULT_SYNTHETIC_ALLOWED},
+   * `['src/app/ui/**']`. Ignored when `when` is given.
+   */
+  readonly syntheticAllowed?: readonly string[];
 }
 
 /** The current test file, from Vitest's global `expect`; undefined without one. */
@@ -153,9 +199,9 @@ function testFile(): string | undefined {
   return expect?.getState?.().testPath;
 }
 
-const pagesAndLayouts = (): boolean => {
+const requiredFor = (syntheticAllowed?: readonly string[]) => (): boolean => {
   const file = testFile();
-  return file === undefined || PAGE_AND_LAYOUT_SPECS.test(file);
+  return file === undefined || goldenMastersRequired(file, syntheticAllowed);
 };
 
 let uninstall: (() => void) | undefined;
@@ -176,7 +222,7 @@ let uninstall: (() => void) | undefined;
  */
 export function guardGoldenMasters(options: GoldenMasterGuardOptions = {}): () => void {
   uninstall?.();
-  const when = options.when ?? pagesAndLayouts;
+  const when = options.when ?? requiredFor(options.syntheticAllowed);
   const proto = TestRequest.prototype;
   const flush = proto.flush;
   const event = proto.event;
@@ -248,7 +294,8 @@ function fail(request: TestRequest, status: number, why: string): never {
   const { method, urlWithParams } = request.request;
   throw new Error(
     `golden-master guard: ${method} ${urlWithParams} was answered ${status} ${why} ` +
-      '(A screenshot of a page or layout shows backend data from golden masters only.)',
+      '(A browser spec shows backend data from golden masters only; only UI components may use ' +
+      'synthetic data.)',
   );
 }
 

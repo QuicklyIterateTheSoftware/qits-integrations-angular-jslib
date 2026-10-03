@@ -711,17 +711,46 @@ tester.run(
         filename: PAGE_SPEC,
         code: "import { AppOrigins } from '$shared/app-origins'; ({ provide: AppOrigins, useValue: {} });",
       },
-      // Other specs are not checked.
+      // UI components may use synthetic data: browser specs under src/app/ui/ are not checked.
       {
         filename: at('src/app/ui/card.component.browser.spec.ts'),
         code: "patchState(store, { x: 1 }); req.flush({ a: 1 }); import { recorded } from '@qits/angular/testing/browser';",
       },
+      {
+        filename: at('src/app/ui/forms/field.browser.spec.ts'),
+        code: 'req.flush({ a: 1 });',
+      },
+      // syntheticAllowed names other places that may.
+      {
+        filename: at('src/app/widgets/chip.browser.spec.ts'),
+        code: 'req.flush({ a: 1 });',
+        options: [{ syntheticAllowed: ['src/app/widgets/**'] }],
+      },
+      // Specs that do not run in the browser are not checked.
       {
         filename: at('src/app/routes/projects/project-list.page.spec.ts'),
         code: 'req.flush({ a: 1 });',
       },
     ],
     invalid: [
+      // Every browser spec outside the UI tree is checked, not only page and layout specs.
+      {
+        filename: at('src/app/patterns/project-list.patterns.browser.spec.ts'),
+        code: 'req.flush({ a: 1 });',
+        errors: [{ messageId: 'notGolden' }],
+      },
+      {
+        filename: at('src/app/projects/project-card.browser.spec.ts'),
+        code: 'patchState(store, { x: 1 });',
+        errors: [{ messageId: 'patchState' }],
+      },
+      // A custom syntheticAllowed replaces the default, so src/app/ui/ is checked again.
+      {
+        filename: at('src/app/ui/card.component.browser.spec.ts'),
+        code: 'req.flush({ a: 1 });',
+        options: [{ syntheticAllowed: ['src/app/widgets/**'] }],
+        errors: [{ messageId: 'notGolden' }],
+      },
       // allowTokens exempts only the tokens it names.
       {
         filename: PAGE_SPEC,

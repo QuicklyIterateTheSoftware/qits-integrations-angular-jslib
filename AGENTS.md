@@ -202,7 +202,9 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   the body paths an interaction lists in `consumes` (required); the golden master keeps the whole
   answer.
 - **`@qits/angular/testing/browser`** (`testing/browser/`, a nested ng-packagr entry): the
-  golden-master guard (epic qits-112) for browser specs. It must stay browser-safe, so it never
+  golden-master guard (epic qits-112) for browser specs: every browser spec takes its backend data
+  from golden masters, except the UI components' (`syntheticAllowed`, default `['src/app/ui/**']`,
+  the same option in the guard and the lint rule). Only UI components may use synthetic data. It must stay browser-safe, so it never
   imports `@qits/angular/testing` (Node-only). `recorded()` deep-freezes a body and puts it and
   everything in it in a `WeakSet`; `guardGoldenMasters()` patches `TestRequest.prototype.flush`
   and `event`. Identity is made in the browser: a Vitest command sends JSON, so wrap the command,

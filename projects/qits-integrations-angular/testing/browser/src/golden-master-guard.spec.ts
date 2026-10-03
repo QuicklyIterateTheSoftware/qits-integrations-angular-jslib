@@ -5,9 +5,9 @@ import {
   assertRecorded,
   fromGoldenMasters,
   goldenMasterAdvice,
+  goldenMastersRequired,
   guardGoldenMasters,
   isRecorded,
-  PAGE_AND_LAYOUT_SPECS,
   recorded,
 } from './golden-master-guard';
 
@@ -199,14 +199,75 @@ describe('guardGoldenMasters', () => {
 });
 
 describe('guardGoldenMasters by default', () => {
-  it('checks page and layout screenshot specs only', () => {
-    expect(PAGE_AND_LAYOUT_SPECS.test('src/app/routes/x/x.page.browser.spec.ts')).toBe(true);
-    expect(PAGE_AND_LAYOUT_SPECS.test('src/app/routes/shell.layout.browser.spec.ts')).toBe(true);
-    expect(PAGE_AND_LAYOUT_SPECS.test('src/app/ui/card.component.browser.spec.ts')).toBe(false);
-    expect(PAGE_AND_LAYOUT_SPECS.test('src/app/routes/x/x.page.spec.ts')).toBe(false);
+  it('checks every browser spec except the UI components', () => {
+    expect(goldenMastersRequired('/w/app/src/app/routes/x/x.page.browser.spec.ts')).toBe(true);
+    expect(goldenMastersRequired('/w/app/src/app/routes/shell.layout.browser.spec.ts')).toBe(true);
+    expect(
+      goldenMastersRequired('/w/app/src/app/patterns/project-list.patterns.browser.spec.ts'),
+    ).toBe(true);
+    expect(goldenMastersRequired('/w/app/src/app/ui/card.component.browser.spec.ts')).toBe(false);
+    expect(goldenMastersRequired('/w/app/src/app/ui/forms/field.browser.spec.ts')).toBe(false);
+    expect(goldenMastersRequired('C:\\w\\app\\src\\app\\ui\\card.browser.spec.ts')).toBe(false);
+    expect(goldenMastersRequired('/w/app/src/app/routes/x/x.page.spec.ts')).toBe(false);
   });
 
-  it('leaves this spec file alone, as it is neither', () => {
+  it('takes other globs from syntheticAllowed', () => {
+    const allowed = ['src/app/widgets/**', '**/*.demo.browser.spec.ts'];
+    expect(goldenMastersRequired('/w/app/src/app/widgets/chip.browser.spec.ts', allowed)).toBe(
+      false,
+    );
+    expect(goldenMastersRequired('/w/app/src/app/x/chip.demo.browser.spec.ts', allowed)).toBe(
+      false,
+    );
+    expect(goldenMastersRequired('/w/app/src/app/ui/card.browser.spec.ts', allowed)).toBe(true);
+    expect(goldenMastersRequired('/w/app/other-src/app/widgets/x.browser.spec.ts', allowed)).toBe(
+      true,
+    );
+  });
+
+  describe('on the running test file', () => {
+    let http: HttpTestingController;
+    let unguard: () => void = () => undefined;
+    const runningAs = (testPath: string) => {
+      const state = expect.getState();
+      vi.spyOn(expect, 'getState').mockReturnValue({ ...state, testPath });
+    };
+    const answer = () => {
+      TestBed.inject(HttpClient).get('/api/x').subscribe();
+      http.expectOne('/api/x').flush({ hand: 'written' });
+    };
+
+    beforeEach(() => {
+      TestBed.configureTestingModule({
+        providers: [provideHttpClient(), provideHttpClientTesting()],
+      });
+      http = TestBed.inject(HttpTestingController);
+    });
+    afterEach(() => {
+      unguard();
+      vi.restoreAllMocks();
+    });
+
+    it('checks a patterns spec', () => {
+      runningAs('/w/app/src/app/patterns/list.patterns.browser.spec.ts');
+      unguard = guardGoldenMasters();
+      expect(answer).toThrow(/not a golden master recording/);
+    });
+
+    it('leaves a UI component spec alone', () => {
+      runningAs('/w/app/src/app/ui/card.component.browser.spec.ts');
+      unguard = guardGoldenMasters();
+      expect(answer).not.toThrow();
+    });
+
+    it('takes syntheticAllowed', () => {
+      runningAs('/w/app/src/app/ui/card.component.browser.spec.ts');
+      unguard = guardGoldenMasters({ syntheticAllowed: ['src/app/widgets/**'] });
+      expect(answer).toThrow(/not a golden master recording/);
+    });
+  });
+
+  it('leaves this spec file alone, as it is not a browser spec', () => {
     TestBed.configureTestingModule({
       providers: [provideHttpClient(), provideHttpClientTesting()],
     });

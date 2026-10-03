@@ -1,5 +1,11 @@
-/** The screenshot specs of a page or a layout; other specs are not checked. */
-export const PAGE_AND_LAYOUT_SPECS = /\.(page|layout)\.browser\.spec\.[cm]?[jt]sx?$/;
+import { relative, sep } from 'node:path';
+import { globRegex, nearestPackage } from '../project.mjs';
+
+/** A browser spec; other specs are not checked. */
+export const BROWSER_SPECS = /\.browser\.spec\.[cm]?[jt]sx?$/;
+
+/** Browser specs that may use synthetic data, relative to the project root: the UI components. */
+export const DEFAULT_SYNTHETIC_ALLOWED = ['src/app/ui/**'];
 
 /** A call that reads a golden master: `goldenMaster(…)`, `commands.goldenMaster(…)`, `githostGoldenMaster(…)`. */
 const DEFAULT_GOLDEN_MASTER = '[gG]olden_?[mM]aster';
@@ -27,8 +33,9 @@ const VIA_HTTP = `Feed the data through HTTP from a golden master instead: let t
 const PROVIDER_KEYS = new Set(['useValue', 'useFactory', 'useClass', 'useExisting']);
 
 /**
- * A page's or layout's screenshot spec gets its backend data from golden masters and from nothing
- * else (epic qits-112). It may not set a store's state (`patchState`), replace a provider
+ * A browser spec gets its backend data from golden masters and from nothing else (epic qits-112).
+ * Only the specs of UI components may use synthetic data: option `syntheticAllowed` (globs relative
+ * to the project root, default `['src/app/ui/**']`) names the browser specs the rule skips. It may not set a store's state (`patchState`), replace a provider
  * (`TestBed.overrideProvider`, a `*Store` token or any token imported from the app's state tree,
  * `$core/…` or a path with `/core/`, with `useValue`/`useFactory`/`useClass`/
  * `useExisting`; option `allowTokens` exempts state-tree tokens that are transport seams only,
@@ -47,7 +54,7 @@ export default {
     type: 'problem',
     docs: {
       description:
-        "A page's or layout's screenshot spec gets its backend data from golden masters only.",
+        'A browser spec gets its backend data from golden masters only, unless it tests a UI component.',
     },
     schema: [
       {
@@ -55,23 +62,30 @@ export default {
         properties: {
           goldenMaster: { type: 'string' },
           allowTokens: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+          syntheticAllowed: { type: 'array', items: { type: 'string' } },
         },
         additionalProperties: false,
       },
     ],
     messages: {
-      patchState: `A screenshot spec does not set state with patchState. ${VIA_HTTP}`,
-      overrideProvider: `A screenshot spec does not replace providers. ${VIA_HTTP}`,
-      stateProvider: `A screenshot spec does not replace '{{token}}', which holds app state. ${VIA_HTTP}`,
-      storeImport: `A screenshot spec imports '{{source}}' for its types only: write \`import type\`. ${VIA_HTTP}`,
+      patchState: `A browser spec does not set state with patchState. ${VIA_HTTP}`,
+      overrideProvider: `A browser spec does not replace providers. ${VIA_HTTP}`,
+      stateProvider: `A browser spec does not replace '{{token}}', which holds app state. ${VIA_HTTP}`,
+      storeImport: `A browser spec imports '{{source}}' for its types only: write \`import type\`. ${VIA_HTTP}`,
       recorder:
-        "A screenshot spec does not register recordings itself. Import '{{name}}' in a testing helper (such as src/testing/browser/golden-master.ts), wrap the goldenMaster command there, and take bodies from that helper's goldenMaster(…).",
+        "A browser spec does not register recordings itself. Import '{{name}}' in a testing helper (such as src/testing/browser/golden-master.ts), wrap the goldenMaster command there, and take bodies from that helper's goldenMaster(…).",
       notGolden: `flush(…) answers with data that does not come from a golden master. Flush a body goldenMaster(…) gave, or a part of it, as it is: never a literal, a copy, a spread or a slice. ${NEW_STATE} For an error answer, give a literal status of 400 or more; for 204 No Content, flush(null, { status: 204, statusText: 'No Content' }).`,
     },
   },
   create(context) {
     const file = context.physicalFilename ?? context.filename;
-    if (!PAGE_AND_LAYOUT_SPECS.test(file)) return {};
+    if (!BROWSER_SPECS.test(file)) return {};
+    const root = nearestPackage(file)?.dir ?? context.cwd;
+    const projectPath = relative(root, file).split(sep).join('/');
+    const synthetic = (context.options[0]?.syntheticAllowed ?? DEFAULT_SYNTHETIC_ALLOWED).map(
+      globRegex,
+    );
+    if (synthetic.some((glob) => glob.test(projectPath))) return {};
     const golden = new RegExp(context.options[0]?.goldenMaster ?? DEFAULT_GOLDEN_MASTER);
     // Transport seams only, never data: a token that only cuts the network off (an event source).
     const allowTokens = new Set(context.options[0]?.allowTokens ?? []);
