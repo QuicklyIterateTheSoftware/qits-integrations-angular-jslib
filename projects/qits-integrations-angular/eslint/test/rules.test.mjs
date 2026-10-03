@@ -1,4 +1,4 @@
-// node --test: the three rules against a throwaway app tree under <repo>/tmp (git-ignored).
+// node --test: the rules against a throwaway app tree under <repo>/tmp (git-ignored).
 import { after, describe, it } from 'node:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -240,6 +240,300 @@ tester.run('pact-names', rules['pact-names'], {
           trigger: { kind: 'ui', app: 'qits-landing', interaction: 'x' },
         });`,
       errors: [{ messageId: 'unresolved' }, { messageId: 'consumer' }],
+    },
+  ],
+});
+
+const COMPONENT = (name) => `@Component({ selector: 'x', template: '' })\nexport class ${name} {}`;
+
+tester.run('page-location', rules['page-location'], {
+  valid: [
+    { filename: at('src/app/routes/projects/projects.page.ts'), code: COMPONENT('ProjectsPage') },
+    { filename: at('src/app/routes/shell.layout.ts'), code: COMPONENT('ShellLayout') },
+    // Not a component: a route's resolver or guard sits beside its page.
+    {
+      filename: at('src/app/routes/projects/[slug]/project.resolver.ts'),
+      code: 'export const projectResolver = () => null;',
+    },
+    {
+      filename: at('src/app/routes/projects/projects.page.spec.ts'),
+      code: COMPONENT('HostComponent'),
+    },
+    { filename: at('src/app/ui/components/card.ts'), code: COMPONENT('Card') },
+    {
+      filename: at('src/pages/home/home.page.ts'),
+      code: COMPONENT('HomePage'),
+      options: [{ routes: 'src/pages' }],
+    },
+  ],
+  invalid: [
+    {
+      filename: at('src/app/projects/projects.page.ts'),
+      code: COMPONENT('ProjectsPage'),
+      errors: [
+        {
+          messageId: 'outsideRoutes',
+          data: {
+            kind: 'page',
+            routes: 'src/app/routes',
+            file: 'src/app/projects/projects.page.ts',
+          },
+        },
+      ],
+    },
+    {
+      filename: at('src/app/shell.layout.ts'),
+      code: COMPONENT('ShellLayout'),
+      errors: [
+        {
+          messageId: 'outsideRoutes',
+          data: { kind: 'layout', routes: 'src/app/routes', file: 'src/app/shell.layout.ts' },
+        },
+      ],
+    },
+    {
+      filename: at('src/app/routes/projects/project-card.ts'),
+      code: COMPONENT('ProjectCard'),
+      errors: [{ messageId: 'notAPage', data: { name: 'ProjectCard', routes: 'src/app/routes' } }],
+    },
+  ],
+});
+
+tester.run('page-suffix', rules['page-suffix'], {
+  valid: [
+    { filename: at('src/app/routes/projects/projects.page.ts'), code: COMPONENT('ProjectsPage') },
+    { filename: at('src/app/routes/shell.layout.ts'), code: COMPONENT('ShellLayout') },
+    { filename: at('src/app/ui/components/card.ts'), code: COMPONENT('Card') },
+    // Not a component: the name is free.
+    { filename: at('src/app/core/page.ts'), code: 'export class NextPage {}' },
+    {
+      filename: at('src/app/routes/projects/projects.page.spec.ts'),
+      code: COMPONENT('HostLayout'),
+    },
+  ],
+  invalid: [
+    {
+      filename: at('src/app/routes/projects/projects.page.ts'),
+      code: COMPONENT('ProjectsComponent'),
+      errors: [
+        {
+          messageId: 'suffix',
+          data: { name: 'ProjectsComponent', suffix: 'Page', file: '.page.ts' },
+        },
+      ],
+    },
+    {
+      filename: at('src/app/routes/shell.layout.ts'),
+      code: COMPONENT('ShellPage'),
+      errors: [
+        { messageId: 'suffix', data: { name: 'ShellPage', suffix: 'Layout', file: '.layout.ts' } },
+      ],
+    },
+    {
+      filename: at('src/app/ui/components/settings.ts'),
+      code: COMPONENT('SettingsPage'),
+      errors: [
+        {
+          messageId: 'wrongFile',
+          data: { name: 'SettingsPage', suffix: 'page', extension: 'page' },
+        },
+      ],
+    },
+    {
+      filename: at('src/app/routes/projects/projects.page.ts'),
+      code: `${COMPONENT('ProjectsPage')}\n@Component({ template: '' })\nclass FrameLayout {}`,
+      errors: [
+        {
+          messageId: 'wrongFile',
+          data: { name: 'FrameLayout', suffix: 'layout', extension: 'layout' },
+        },
+      ],
+    },
+  ],
+});
+
+touch('src/app/routes/settings/index.ts');
+const ROUTES = at('src/app/app.routes.ts');
+const IMPORTS = `
+  import { ShellLayout } from './routes/shell.layout';
+  import { ProjectsPage } from './routes/projects/projects.page';
+  import { NotFoundPage } from './routes/not-found/not-found.page';
+`;
+
+tester.run('route-matches-directory', rules['route-matches-directory'], {
+  valid: [
+    {
+      filename: ROUTES,
+      code: `${IMPORTS}
+        export const routes: Routes = [
+          {
+            path: '',
+            component: ShellLayout,
+            children: [
+              { path: '', redirectTo: 'projects', pathMatch: 'full' },
+              { path: 'projects', component: ProjectsPage },
+              {
+                path: 'projects/:slug',
+                loadComponent: () => import('./routes/projects/[slug]/project.layout').then((m) => m.ProjectLayout),
+                children: [
+                  {
+                    path: 'work',
+                    loadComponent: () =>
+                      import('./routes/projects/[slug]/work/project-work.page').then((m) => m.ProjectWorkPage),
+                  },
+                ],
+              },
+              { path: 'settings', loadComponent: () => import('./routes/settings') },
+              { path: 'admin', loadChildren: () => import('./routes/admin/admin.routes') },
+              { path: '**', component: NotFoundPage },
+            ],
+          },
+        ];`,
+    },
+    // A route table under the routes directory is mounted at its own directory.
+    {
+      filename: at('src/app/routes/admin/admin.routes.ts'),
+      code: `
+        import { AdminPage } from './admin.page';
+        export default [
+          { path: '', component: AdminPage },
+          { path: 'users/:id', loadComponent: () => import('./users/[id]/user.page') },
+        ] satisfies Routes;`,
+    },
+    // Not a route table.
+    {
+      filename: at('src/app/core/menu.ts'),
+      code: `${IMPORTS}\nconst items = [{ path: 'x', component: ProjectsPage }];`,
+    },
+    // A path alias or a dynamic path cannot be checked.
+    {
+      filename: ROUTES,
+      code: `
+        import { HomePage } from '@app/home.page';
+        export const routes = [
+          { path: 'home', component: HomePage },
+          { path: segment, loadComponent: () => import('./routes/x/x.page') },
+        ];`,
+    },
+    {
+      filename: at('src/routing.ts'),
+      code: `${IMPORTS.replaceAll('./routes', './pages')}\nexport const routes = [{ path: 'projects', component: ProjectsPage }];`,
+      options: [{ routes: 'src/pages', routeTables: ['src/routing.ts'] }],
+    },
+  ],
+  invalid: [
+    {
+      filename: ROUTES,
+      code: `${IMPORTS}
+        export const routes: Routes = [
+          {
+            path: '',
+            component: ShellLayout,
+            children: [{ path: 'projects/:slug', component: ProjectsPage }],
+          },
+        ];`,
+      errors: [
+        {
+          messageId: 'misplaced',
+          data: {
+            route: '/projects/:slug',
+            what: 'its component',
+            actual: 'src/app/routes/projects',
+            expected: 'src/app/routes/projects/[slug]',
+          },
+        },
+      ],
+    },
+    {
+      filename: ROUTES,
+      code: `
+        export const routes = [
+          {
+            path: 'projects/:slug',
+            children: [
+              {
+                path: 'work',
+                loadComponent: () => import('./routes/work/project-work.page').then((m) => m.ProjectWorkPage),
+              },
+            ],
+          },
+        ];`,
+      errors: [
+        {
+          messageId: 'misplaced',
+          data: {
+            route: '/projects/:slug/work',
+            what: 'its component',
+            actual: 'src/app/routes/work',
+            expected: 'src/app/routes/projects/[slug]/work',
+          },
+        },
+      ],
+    },
+    {
+      filename: ROUTES,
+      code: `
+        import { ProjectCard } from './ui/components/project-card';
+        export const routes = [{ path: 'card', component: ProjectCard }];`,
+      errors: [
+        {
+          messageId: 'misplaced',
+          data: {
+            route: '/card',
+            what: 'its component',
+            actual: 'src/app/ui/components',
+            expected: 'src/app/routes/card',
+          },
+        },
+      ],
+    },
+    // The shell itself belongs at the top of the routes directory.
+    {
+      filename: ROUTES,
+      code: `
+        import { ShellLayout } from './routes/shell/shell.layout';
+        export const routes = [{ path: '', component: ShellLayout, children: [] }];`,
+      errors: [
+        {
+          messageId: 'misplaced',
+          data: {
+            route: '/',
+            what: 'its component',
+            actual: 'src/app/routes/shell',
+            expected: 'src/app/routes',
+          },
+        },
+      ],
+    },
+    {
+      filename: ROUTES,
+      code: "export const routes = [{ path: 'admin', loadChildren: () => import('./admin/admin.routes') }];",
+      errors: [
+        {
+          messageId: 'misplaced',
+          data: {
+            route: '/admin',
+            what: 'its child routes',
+            actual: 'src/app/admin',
+            expected: 'src/app/routes/admin',
+          },
+        },
+      ],
+    },
+    {
+      filename: at('src/app/routes/admin/admin.routes.ts'),
+      code: "export default [{ path: 'users', loadComponent: () => import('../users/users.page') }];",
+      errors: [
+        {
+          messageId: 'misplaced',
+          data: {
+            route: '/admin/users',
+            what: 'its component',
+            actual: 'src/app/routes/users',
+            expected: 'src/app/routes/admin/users',
+          },
+        },
+      ],
     },
   ],
 });

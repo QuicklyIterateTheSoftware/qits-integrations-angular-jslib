@@ -108,3 +108,58 @@ export function importVisitors(onImport) {
 
 export const isStore = (file) => /\.store\.[mc]?[jt]s$/.test(file);
 export const isSpec = (file) => /\.(spec|test)\.[mc]?[jt]sx?$/.test(file);
+
+/** Where the routed components live, relative to the project root, unless a rule is told otherwise. */
+export const DEFAULT_ROUTES = 'src/app/routes';
+
+/** The files that declare routes, unless a rule is told otherwise. */
+export const DEFAULT_ROUTE_TABLES = ['src/app/app.routes.ts', 'src/app/**/*.routes.ts'];
+
+/** The `routes` / `routeTables` options every route-aware rule takes. */
+export const ROUTES_SCHEMA = {
+  type: 'object',
+  properties: {
+    routes: { type: 'string', minLength: 1 },
+    routeTables: { type: 'array', items: { type: 'string' }, minItems: 1 },
+  },
+  additionalProperties: false,
+};
+
+/**
+ * One file's place in the route layout. `file` is the linted file relative to the project root,
+ * `routes` the routes directory, `under(path)` says whether a project path is in it, `toProject`
+ * turns an absolute path into a project path, and `isRouteTable` whether the linted file is one.
+ */
+export function routeLayout(context) {
+  const options = context.options[0] ?? {};
+  const routes = (options.routes ?? DEFAULT_ROUTES).replace(/^\.\//, '').replace(/\/+$/, '');
+  const tables = (options.routeTables ?? DEFAULT_ROUTE_TABLES).map(globRegex);
+  const absolute = context.physicalFilename ?? context.filename;
+  const root = nearestPackage(absolute)?.dir ?? context.cwd;
+  const toProject = (path) => relative(root, path).split(sep).join('/');
+  const file = toProject(absolute);
+  return {
+    absolute,
+    file,
+    routes,
+    toProject,
+    under: (path) => path === routes || path.startsWith(`${routes}/`),
+    isRouteTable: tables.some((g) => g.test(file)),
+  };
+}
+
+/** `x.page.ts` is a page, `x.layout.ts` a layout; anything else is neither. */
+export function pageKind(file) {
+  const m = /\.(page|layout)\.[mc]?tsx?$/.exec(file);
+  if (!m) return undefined;
+  return m[1] === 'page' ? 'Page' : 'Layout';
+}
+
+/** Whether a class carries Angular's `@Component(...)` (or `@ng.Component(...)`). */
+export function isComponentClass(node) {
+  return (node.decorators ?? []).some((d) => {
+    const callee = d.expression?.type === 'CallExpression' ? d.expression.callee : d.expression;
+    if (callee?.type === 'Identifier') return callee.name === 'Component';
+    return callee?.type === 'MemberExpression' && callee.property.name === 'Component';
+  });
+}

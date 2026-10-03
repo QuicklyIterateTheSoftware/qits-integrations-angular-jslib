@@ -10,6 +10,9 @@
 import clientOnlyInStores from './rules/client-only-in-stores.mjs';
 import consumeClientCalls from './rules/consume-client-calls.mjs';
 import pactNames from './rules/pact-names.mjs';
+import pageLocation from './rules/page-location.mjs';
+import pageSuffix from './rules/page-suffix.mjs';
+import routeMatchesDirectory from './rules/route-matches-directory.mjs';
 import storeHasPact from './rules/store-has-pact.mjs';
 
 const plugin = {
@@ -19,6 +22,9 @@ const plugin = {
     'consume-client-calls': consumeClientCalls,
     'store-has-pact': storeHasPact,
     'pact-names': pactNames,
+    'page-location': pageLocation,
+    'page-suffix': pageSuffix,
+    'route-matches-directory': routeMatchesDirectory,
   },
   configs: {},
 };
@@ -33,6 +39,9 @@ plugin.configs.recommended = [
       'qits/consume-client-calls': 'error',
       'qits/store-has-pact': 'error',
       'qits/pact-names': 'error',
+      'qits/page-location': 'error',
+      'qits/page-suffix': 'error',
+      'qits/route-matches-directory': 'error',
     },
   },
 ];
