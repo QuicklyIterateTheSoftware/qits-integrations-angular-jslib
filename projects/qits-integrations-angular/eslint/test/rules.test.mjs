@@ -23,6 +23,18 @@ touch('package.json', JSON.stringify({ name: 'qits-demo-app' }));
 touch('src/app/core/projects/projects.store.pact.spec.ts');
 const at = (path) => join(app, path);
 
+// A second app whose tsconfig gives the $layout alias, through `extends` and with comments.
+touch('aliased/package.json', JSON.stringify({ name: 'qits-aliased-app' }));
+touch(
+  'aliased/tsconfig.json',
+  '/* app config */\n{ "extends": "./tsconfig.base.json", "compilerOptions": { "strict": true, }, }',
+);
+touch(
+  'aliased/tsconfig.base.json',
+  '{\n  // aliases\n  "compilerOptions": { "paths": { "$core/*": ["./src/app/core/*"], "$layout/*": ["./src/app/layout/*"] } }\n}',
+);
+const inAliased = (path) => join(app, 'aliased', path);
+
 const tester = new RuleTester({ languageOptions: { parser: tseslint.parser } });
 const { rules } = qits;
 
@@ -266,6 +278,11 @@ tester.run('page-location', rules['page-location'], {
       code: COMPONENT('HomePage'),
       options: [{ routes: 'src/pages' }],
     },
+    // With the $layout alias, a layout may live in its directory, and other components there too.
+    { filename: inAliased('src/app/layout/shell.layout.ts'), code: COMPONENT('ShellLayout') },
+    { filename: inAliased('src/app/layout/shell/shell.layout.ts'), code: COMPONENT('ShellLayout') },
+    { filename: inAliased('src/app/layout/frame.ts'), code: COMPONENT('FrameComponent') },
+    { filename: inAliased('src/app/routes/shell.layout.ts'), code: COMPONENT('ShellLayout') },
   ],
   invalid: [
     {
@@ -282,13 +299,39 @@ tester.run('page-location', rules['page-location'], {
         },
       ],
     },
+    // Without the $layout alias, a layout lives under routes/ only.
     {
-      filename: at('src/app/shell.layout.ts'),
+      filename: at('src/app/layout/shell.layout.ts'),
       code: COMPONENT('ShellLayout'),
       errors: [
         {
+          messageId: 'layoutNoAlias',
+          data: { routes: 'src/app/routes', file: 'src/app/layout/shell.layout.ts' },
+        },
+      ],
+    },
+    {
+      filename: inAliased('src/app/shell.layout.ts'),
+      code: COMPONENT('ShellLayout'),
+      errors: [
+        {
+          messageId: 'layoutOutside',
+          data: {
+            routes: 'src/app/routes',
+            layouts: 'src/app/layout',
+            file: 'src/app/shell.layout.ts',
+          },
+        },
+      ],
+    },
+    // The $layout directory takes layouts, not pages.
+    {
+      filename: inAliased('src/app/layout/home.page.ts'),
+      code: COMPONENT('HomePage'),
+      errors: [
+        {
           messageId: 'outsideRoutes',
-          data: { kind: 'layout', routes: 'src/app/routes', file: 'src/app/shell.layout.ts' },
+          data: { kind: 'page', routes: 'src/app/routes', file: 'src/app/layout/home.page.ts' },
         },
       ],
     },
@@ -304,6 +347,7 @@ tester.run('page-suffix', rules['page-suffix'], {
   valid: [
     { filename: at('src/app/routes/projects/projects.page.ts'), code: COMPONENT('ProjectsPage') },
     { filename: at('src/app/routes/shell.layout.ts'), code: COMPONENT('ShellLayout') },
+    { filename: inAliased('src/app/layout/shell.layout.ts'), code: COMPONENT('ShellLayout') },
     { filename: at('src/app/ui/components/card.ts'), code: COMPONENT('Card') },
     // Not a component: the name is free.
     { filename: at('src/app/core/page.ts'), code: 'export class NextPage {}' },
@@ -336,7 +380,7 @@ tester.run('page-suffix', rules['page-suffix'], {
       errors: [
         {
           messageId: 'wrongFile',
-          data: { name: 'SettingsPage', suffix: 'page', extension: 'page' },
+          data: { name: 'SettingsPage', suffix: 'page', extension: 'page', where: '' },
         },
       ],
     },
@@ -346,7 +390,12 @@ tester.run('page-suffix', rules['page-suffix'], {
       errors: [
         {
           messageId: 'wrongFile',
-          data: { name: 'FrameLayout', suffix: 'layout', extension: 'layout' },
+          data: {
+            name: 'FrameLayout',
+            suffix: 'layout',
+            extension: 'layout',
+            where: ' (or the $layout alias directory)',
+          },
         },
       ],
     },
@@ -414,6 +463,17 @@ tester.run('route-matches-directory', rules['route-matches-directory'], {
         export const routes = [
           { path: 'home', component: HomePage },
           { path: segment, loadComponent: () => import('./routes/x/x.page') },
+        ];`,
+    },
+    // With the $layout alias, a layout there is shared and may serve any URL.
+    {
+      filename: inAliased('src/app/app.routes.ts'),
+      code: `
+        import { ShellLayout } from './layout/shell.layout';
+        export const routes = [
+          { path: '', loadComponent: () => import('./layout/shell.layout'), children: [] },
+          { path: 'admin', component: ShellLayout, children: [] },
+          { path: 'admin/:id', loadComponent: () => import('./layout/admin/admin.layout.ts') },
         ];`,
     },
     {
@@ -506,6 +566,38 @@ tester.run('route-matches-directory', rules['route-matches-directory'], {
         },
       ],
     },
+    // Without the alias, the layout directory is just another wrong place.
+    {
+      filename: ROUTES,
+      code: "export const routes = [{ path: '', loadComponent: () => import('./layout/shell.layout') }];",
+      errors: [
+        {
+          messageId: 'misplaced',
+          data: {
+            route: '/',
+            what: 'its component',
+            actual: 'src/app/layout',
+            expected: 'src/app/routes',
+          },
+        },
+      ],
+    },
+    // With it, a page there is still checked against its URL.
+    {
+      filename: inAliased('src/app/app.routes.ts'),
+      code: "export const routes = [{ path: 'home', loadComponent: () => import('./layout/home.page') }];",
+      errors: [
+        {
+          messageId: 'misplaced',
+          data: {
+            route: '/home',
+            what: 'its component',
+            actual: 'src/app/layout',
+            expected: 'src/app/routes/home',
+          },
+        },
+      ],
+    },
     {
       filename: ROUTES,
       code: "export const routes = [{ path: 'admin', loadChildren: () => import('./admin/admin.routes') }];",
@@ -544,6 +636,7 @@ touch('src/app/routes/projects/projects.page.browser.spec.ts', SHOTS);
 touch('src/app/routes/shell.layout.browser.spec.ts', SHOTS);
 touch('src/app/routes/users/users.page.browser.spec.ts', "it('renders', () => {});");
 touch('src/pages/home/home.page.browser.spec.ts', SHOTS);
+touch('aliased/src/app/layout/shell.layout.browser.spec.ts', SHOTS);
 
 tester.run('page-has-screenshots', rules['page-has-screenshots'], {
   valid: [
@@ -562,8 +655,18 @@ tester.run('page-has-screenshots', rules['page-has-screenshots'], {
       code: COMPONENT('HomePage'),
       options: [{ routes: 'src/pages' }],
     },
+    { filename: inAliased('src/app/layout/shell.layout.ts'), code: COMPONENT('ShellLayout') },
+    // Without the alias, a layout outside routes/ is page-location's to report.
+    { filename: at('src/app/layout/frame.layout.ts'), code: COMPONENT('FrameLayout') },
   ],
   invalid: [
+    {
+      filename: inAliased('src/app/layout/frame.layout.ts'),
+      code: COMPONENT('FrameLayout'),
+      errors: [
+        { messageId: 'noSpec', data: { kind: 'layout', spec: 'frame.layout.browser.spec.ts' } },
+      ],
+    },
     {
       filename: at('src/app/routes/admin/admin.page.ts'),
       code: COMPONENT('AdminPage'),

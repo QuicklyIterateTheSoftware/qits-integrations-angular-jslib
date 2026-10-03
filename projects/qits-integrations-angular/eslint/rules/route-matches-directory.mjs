@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
-import { ROUTES_SCHEMA, routeLayout } from '../project.mjs';
+import { ROUTES_SCHEMA, pageKind, routeLayout } from '../project.mjs';
 
 /** A property of an object literal by its plain key, or undefined. */
 function property(object, key) {
@@ -61,7 +61,8 @@ function dynamicImport(node, keys) {
  * `[param]`) is the directory of the component's file, relative to the routes directory. A
  * `loadChildren` route points at the route table of that directory. A route table under the
  * routes directory is mounted at its own directory. `path: '**'` may render any page;
- * `redirectTo` routes render nothing and are skipped.
+ * `redirectTo` routes render nothing and are skipped. A `*.layout.ts` under the `$layout` alias
+ * directory is shared, not tied to one URL, so it is not checked.
  */
 export default {
   meta: {
@@ -117,6 +118,10 @@ export default {
       return layout.toProject(dirname(absolute));
     };
 
+    /** Whether an import names a `*.layout.ts` (written with or without its extension). */
+    const isLayoutFile = (absolute) =>
+      pageKind(absolute) === 'Layout' || /\.layout$/.test(absolute);
+
     /** Where the component of `component: X` was imported from. */
     const staticImport = (id) => {
       let scope = source.getScope(id);
@@ -145,6 +150,7 @@ export default {
       const expected = [layout.routes, ...dirs].join('/');
       const actual = directoryOf(absolute);
       if (actual === expected) return;
+      if (what === 'its component' && layout.inLayouts(actual) && isLayoutFile(absolute)) return;
       context.report({
         node: valueNode,
         messageId: 'misplaced',

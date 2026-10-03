@@ -6,7 +6,8 @@ import { ROUTES_SCHEMA, isComponentClass, isSpec, pageKind, routeLayout } from '
 const SCREENSHOT = /\btoMatchScreenshot\s*\(/;
 
 /**
- * Every page and layout under the routes directory has screenshot tests beside it: `x.page.ts`
+ * Every page and layout under the routes directory, and every layout under the `$layout` alias
+ * directory, has screenshot tests beside it: `x.page.ts`
  * needs `x.page.browser.spec.ts`, `x.layout.ts` needs `x.layout.browser.spec.ts`, and that spec
  * calls `toMatchScreenshot`. A page with nothing to show (a redirect) opts out with an
  * `eslint-disable-next-line` comment that gives the reason.
@@ -16,7 +17,7 @@ export default {
     type: 'problem',
     docs: {
       description:
-        'Every page and layout under the routes directory has a sibling <name>.browser.spec.ts that takes screenshots.',
+        'Every page and layout under the routes directory (and layout under $layout) has a sibling <name>.browser.spec.ts that takes screenshots.',
     },
     schema: [ROUTES_SCHEMA],
     messages: {
@@ -29,7 +30,9 @@ export default {
     const layout = routeLayout(context);
     if (isSpec(layout.file)) return {};
     const kind = pageKind(layout.file);
-    if (!kind || !layout.under(layout.file)) return {};
+    const checked =
+      layout.under(layout.file) || (kind === 'Layout' && layout.inLayouts(layout.file));
+    if (!kind || !checked) return {};
     const spec = layout.absolute.replace(/\.([mc]?tsx?)$/, '.browser.spec.$1');
     let messageId;
     if (!existsSync(spec)) messageId = 'noSpec';

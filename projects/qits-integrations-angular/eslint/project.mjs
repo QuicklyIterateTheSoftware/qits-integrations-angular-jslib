@@ -125,10 +125,76 @@ export const ROUTES_SCHEMA = {
   additionalProperties: false,
 };
 
+/** The path alias whose directory may also hold routed layouts. */
+export const LAYOUT_ALIAS = '$layout';
+
+/** JSON with comments and trailing commas (a tsconfig) as a value; undefined when it is not. */
+function parseJsonc(text) {
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j;
+    } else if (c === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++;
+      out += '\n';
+    } else if (c === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      i = end < 0 ? text.length : end + 1;
+    } else out += c;
+  }
+  try {
+    return JSON.parse(out.replace(/,(\s*[}\]])/g, '$1'));
+  } catch {
+    return undefined;
+  }
+}
+
+const layoutDirs = new Map();
+
+/**
+ * Where the `$layout/*` path alias points, as an absolute directory, from `<root>/tsconfig.json`
+ * (following a relative `extends`); undefined when the project has no such alias.
+ */
+export function layoutAliasDir(root) {
+  if (layoutDirs.has(root)) return layoutDirs.get(root);
+  let paths;
+  let pathsBase;
+  let baseUrl;
+  const seen = new Set();
+  for (let config = resolve(root, 'tsconfig.json'); config && !seen.has(config);) {
+    seen.add(config);
+    const json = existsSync(config) ? parseJsonc(readFileSync(config, 'utf8')) : undefined;
+    if (!json) break;
+    const options = json.compilerOptions ?? {};
+    // The nearest config that sets a value wins; a relative path is relative to that config.
+    if (paths === undefined && options.paths) [paths, pathsBase] = [options.paths, dirname(config)];
+    if (baseUrl === undefined && typeof options.baseUrl === 'string')
+      baseUrl = resolve(dirname(config), options.baseUrl);
+    const parent = typeof json.extends === 'string' ? json.extends : undefined;
+    if (!parent?.startsWith('.')) break;
+    config = resolve(dirname(config), parent.endsWith('.json') ? parent : `${parent}.json`);
+  }
+  const target = paths?.[`${LAYOUT_ALIAS}/*`]?.[0];
+  const dir =
+    typeof target === 'string' && target.endsWith('/*')
+      ? resolve(baseUrl ?? pathsBase, target.slice(0, -2))
+      : undefined;
+  layoutDirs.set(root, dir);
+  return dir;
+}
+
+const inside = (dir) => (path) => dir !== undefined && (path === dir || path.startsWith(`${dir}/`));
+
 /**
  * One file's place in the route layout. `file` is the linted file relative to the project root,
- * `routes` the routes directory, `under(path)` says whether a project path is in it, `toProject`
- * turns an absolute path into a project path, and `isRouteTable` whether the linted file is one.
+ * `routes` the routes directory, `under(path)` says whether a project path is in it, `layouts` the
+ * directory of the `$layout` alias (undefined without one), `inLayouts(path)` whether a project
+ * path is in that, `toProject` turns an absolute path into a project path, and `isRouteTable`
+ * whether the linted file is one.
  */
 export function routeLayout(context) {
   const options = context.options[0] ?? {};
@@ -138,12 +204,16 @@ export function routeLayout(context) {
   const root = nearestPackage(absolute)?.dir ?? context.cwd;
   const toProject = (path) => relative(root, path).split(sep).join('/');
   const file = toProject(absolute);
+  const aliasDir = layoutAliasDir(root);
+  const layouts = aliasDir && toProject(aliasDir);
   return {
     absolute,
     file,
     routes,
+    layouts,
     toProject,
-    under: (path) => path === routes || path.startsWith(`${routes}/`),
+    under: inside(routes),
+    inLayouts: inside(layouts),
     isRouteTable: tables.some((g) => g.test(file)),
   };
 }

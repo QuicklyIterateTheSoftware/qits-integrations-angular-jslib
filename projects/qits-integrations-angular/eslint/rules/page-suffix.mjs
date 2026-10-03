@@ -17,7 +17,7 @@ export default {
     messages: {
       suffix: "'{{name}}' is the component of a {{file}} file: name it …{{suffix}}.",
       wrongFile:
-        "'{{name}}' is named as a {{suffix}}: put it in a <name>.{{extension}}.ts file under the routes directory, or rename it.",
+        "'{{name}}' is named as a {{suffix}}: put it in a <name>.{{extension}}.ts file under the routes directory{{where}}, or rename it.",
     },
   },
   create(context) {
@@ -43,7 +43,12 @@ export default {
         context.report({
           node: node.id,
           messageId: 'wrongFile',
-          data: { name, suffix: named.toLowerCase(), extension: named.toLowerCase() },
+          data: {
+            name,
+            suffix: named.toLowerCase(),
+            extension: named.toLowerCase(),
+            where: named === 'Layout' ? ' (or the $layout alias directory)' : '',
+          },
         });
       }
     };
