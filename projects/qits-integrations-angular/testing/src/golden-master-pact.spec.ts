@@ -68,6 +68,29 @@ function project(): string {
             file: 'list-mixed.json',
             frozen: { ids: ['$.entries[*].id'], listFilteredTo: '$.entries' },
           },
+          {
+            operationId: 'listTransitions',
+            method: 'GET',
+            path: '/transitions',
+            status: 200,
+            file: 'list-transitions.json',
+          },
+          {
+            operationId: 'listCriteria',
+            method: 'GET',
+            path: '/criteria',
+            status: 200,
+            file: 'list-criteria.json',
+            frozen: { ids: ['$.criteria[*].predicate.entityId'] },
+          },
+          {
+            operationId: 'listSizes',
+            method: 'GET',
+            path: '/sizes',
+            status: 200,
+            file: 'list-sizes.json',
+            frozen: { ids: ['$.entries[*].id'] },
+          },
         ],
       },
     ],
@@ -84,6 +107,35 @@ function project(): string {
       entries: [
         { id: ID, parts: [{ size: 1 }, { size: 2 }] },
         { id: ID.replace(/1$/, '2'), parts: [] },
+      ],
+    }),
+  );
+  // A BACK transition carries no `gates`: the elements do not share one shape.
+  writeFileSync(
+    join(tree, 'list-transitions.json'),
+    JSON.stringify({
+      transitions: [
+        { kind: 'FORWARD', to: 'READY', gates: ['CRITERIA'] },
+        { kind: 'BACK', to: 'REPORTED' },
+      ],
+    }),
+  );
+  // An APPROVAL criterion's predicate is `{}`, an ENTITY_STATUS one's is populated.
+  writeFileSync(
+    join(tree, 'list-criteria.json'),
+    JSON.stringify({
+      criteria: [
+        { kind: 'APPROVAL', predicate: {} },
+        { kind: 'ENTITY_STATUS', predicate: { entityId: ID, status: 'VERIFIED' } },
+      ],
+    }),
+  );
+  writeFileSync(
+    join(tree, 'list-sizes.json'),
+    JSON.stringify({
+      entries: [
+        { id: ID, size: 3, tags: ['a', 'b'] },
+        { id: ID.replace(/1$/, '2'), size: 4, tags: ['c', 'd'] },
       ],
     }),
   );
@@ -188,6 +240,87 @@ describe('golden-master-pact', () => {
       const rule = mixed.response.matchingRules.body['$.entries'].matchers[0];
       expect(rule.match).toBe('arrayContains');
       expect(rule.variants).toHaveLength(2);
+    });
+
+    /** The `arrayContains` variants of the rule at `path`, as `{ index, rules }`. */
+    function variants(
+      interaction: { response: { matchingRules: { body: object } } },
+      path: string,
+    ) {
+      const body = interaction.response.matchingRules.body as Record<
+        string,
+        { matchers: { match: string; variants?: { index: number; rules: object }[] }[] }
+      >;
+      expect(body[path].matchers).toHaveLength(1);
+      expect(body[path].matchers[0].match).toBe('arrayContains');
+      return body[path].matchers[0].variants ?? [];
+    }
+
+    it('matches an array whose elements differ in their keys by each shape’s own template', async () => {
+      const list = await written('listTransitions', ['transitions']);
+      // Not "each like the first": that would demand the FORWARD's `gates` of the BACK.
+      expect(Object.keys(list.response.matchingRules.body)).toEqual(['$.transitions']);
+      expect(list.response.body.content).toEqual({
+        transitions: [
+          { kind: 'FORWARD', to: 'READY', gates: ['CRITERIA'] },
+          { kind: 'BACK', to: 'REPORTED' },
+        ],
+      });
+      const [forward, back] = variants(list, '$.transitions');
+      expect(forward.index).toBe(0);
+      expect(Object.keys(forward.rules).sort()).toEqual([
+        '$.gates',
+        '$.gates[*]',
+        '$.kind',
+        '$.to',
+      ]);
+      // The BACK is bound field by field too, without the `gates` it does not carry.
+      expect(back.index).toBe(1);
+      expect(back.rules).toEqual({
+        '$.kind': { combine: 'AND', matchers: [{ match: 'type' }] },
+        '$.to': { combine: 'AND', matchers: [{ match: 'type' }] },
+      });
+    });
+
+    it('matches an empty-object element next to a populated one by each shape’s own template', async () => {
+      const list = await written('listCriteria', ['criteria']);
+      expect(list.response.body.content.criteria[0]).toEqual({ kind: 'APPROVAL', predicate: {} });
+      const [approval, status] = variants(list, '$.criteria');
+      expect(approval.rules).toEqual({
+        '$.kind': { combine: 'AND', matchers: [{ match: 'type' }] },
+      });
+      // The frozen lists still apply inside a variant.
+      expect(Object.keys(status.rules).sort()).toEqual([
+        '$.kind',
+        '$.predicate.entityId',
+        '$.predicate.status',
+      ]);
+      expect(
+        (status.rules as Record<string, { matchers: { match: string }[] }>)['$.predicate.entityId']
+          .matchers[0].match,
+      ).toBe('regex');
+    });
+
+    it('matches a homogeneous array as "exactly the recorded count, each like the first"', async () => {
+      const list = await written('listSizes', ['entries']);
+      expect(list.response.body.content).toEqual({
+        entries: [
+          { id: ID, size: 3, tags: ['a', 'a'] },
+          { id: ID, size: 3, tags: ['a', 'a'] },
+        ],
+      });
+      const rules = list.response.matchingRules.body;
+      expect(Object.keys(rules).sort()).toEqual([
+        '$.entries',
+        '$.entries[*].id',
+        '$.entries[*].size',
+        '$.entries[*].tags',
+        '$.entries[*].tags[*]',
+      ]);
+      expect(rules['$.entries'].matchers).toEqual([{ match: 'type', min: 2, max: 2 }]);
+      expect(rules['$.entries[*].id'].matchers[0].match).toBe('regex');
+      expect(rules['$.entries[*].size'].matchers[0].match).toBe('number');
+      expect(rules['$.entries[*].tags'].matchers[0]).toEqual({ match: 'type', min: 2, max: 2 });
     });
 
     it('requests with the query the recording was made with', async () => {

@@ -300,8 +300,11 @@ assertPactFile(
   only: no body, no `Content-Type`. A path the recorded body does not hold throws (an empty array holds every path below it).
 - **Matchers come from the index's `frozen` lists**: ids get a uuid regex, instants an ISO-8601
   regex, every other leaf a type match. `listFilteredTo` arrays match "contains an element of each
-  recorded shape" (`arrayContaining`); other arrays match the recorded length exactly, or
-  `arrayContaining` when their elements differ in which fields are null or which arrays are empty.
+  recorded shape" (`arrayContaining`); other arrays match the recorded length exactly, each element
+  like the first, when every element has one shape, and otherwise `arrayContaining` with each
+  shape's own template. A shape is which keys each object has, which leaves are null, strings,
+  numbers or booleans, and every nested array's elements: a BACK transition without `gates`, or a
+  `predicate: {}` next to a populated one, is a shape of its own.
 - **Every interaction carries `comments.references`** (`qits-call`, `qits-trigger`). The provider's
   verification refuses one without them.
 - The path is a provider-state expression only when it has a `{param}`.

@@ -31,12 +31,19 @@
  * - a leaf that is null where it was recorded: exactly `null`;
  * - `frozen.listFilteredTo`: `arrayContaining`, one variant per shape: the answer contains the
  *   state's entries, among whatever else the provider holds ("contains", never "every element");
- * - every other array: exactly the recorded number of elements, each matched against the first.
+ * - an array whose elements all share one shape: exactly the recorded number of elements, each
+ *   matched against the first;
+ * - any other array: `arrayContaining` as well, one variant per shape, each variant that shape's
+ *   own template: the answer holds at least one element of every recorded shape, in any order.
  *
- * An array whose elements differ in shape (which fields are null, which arrays are empty: a
- * PROJECT repository has no `component`, a repository not counted yet has no `languages`) cannot
- * be matched against one template: Pact has no "type or null". It becomes `arrayContaining` with
- * one variant per shape, so the answer must hold at least one element of each shape, in any order.
+ * A SHAPE is everything a template binds apart from the values: which keys each object has, which
+ * leaves are null, strings, numbers or booleans, and, recursively, every nested array's elements.
+ * Elements that differ in any of these cannot share a template: "each like the first" demands the
+ * first element's keys of every element (a BACK transition has no `gates`, an APPROVAL criterion's
+ * `predicate` is `{}` where an ENTITY_STATUS one's is populated), and Pact has no "type or null"
+ * (a PROJECT repository has no `component`). Not positional either: the provider answers some
+ * lists in no guaranteed order (its recorder sorts them, and the index does not say which), so
+ * matching element `[i]` against recorded element `[i]` would bind an order nobody promised.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -372,22 +379,23 @@ function matched(value: Json, path: string, op: GoldenOperation): unknown {
 }
 
 /**
- * A recorded array, wrapped in matchers. Elements that agree on their shape (which paths are null,
- * which arrays are empty) share one template.
+ * A recorded array, wrapped in matchers. Elements of one {@link shape} share one template.
  *
+ * - An array whose elements all share one shape is "exactly the recorded count, each like the
+ *   template".
  * - The `listFilteredTo` array is the state's own entries in a list that also holds whatever else
  *   the provider has: it is matched as "contains an element of each shape" (`arrayContaining`),
  *   never "every element looks like this", because the other entries may look different.
- * - Any other array with elements of more than one shape is matched the same way.
- * - Any other array is "exactly the recorded count, each like the template".
+ * - Any other array holds elements of more than one shape, so no single template fits them all:
+ *   it is matched the same way, each variant by its own shape's template, nested arrays included.
  */
 function matchedArray(values: Json[], path: string, op: GoldenOperation): unknown {
   if (values.length === 0) return [];
   const element = `${path}[*]`;
   const shapes = new Map<string, Json>();
   for (const value of values) {
-    const shape = nullShape(value);
-    if (!shapes.has(shape)) shapes.set(shape, value);
+    const key = shape(value);
+    if (!shapes.has(key)) shapes.set(key, value);
   }
   if (path === op.listFilteredTo || shapes.size > 1) {
     return MatchersV3.arrayContaining(...[...shapes.values()].map((v) => matched(v, element, op)));
@@ -397,21 +405,18 @@ function matchedArray(values: Json[], path: string, op: GoldenOperation): unknow
 }
 
 /**
- * Which paths inside `value` are null and which arrays are empty: elements that agree can share
- * one template.
+ * Everything the template made from `value` binds apart from the values themselves: the object's
+ * keys (in a fixed order), each leaf's type or null, and each nested array's elements in order.
+ * Two values of one shape are matched by one template; values of different shapes are not.
  */
-function nullShape(value: Json, path = ''): string {
-  if (value === null) return `${path}=null;`;
-  if (Array.isArray(value)) {
-    if (value.length === 0) return `${path}=[];`;
-    return value.map((v) => nullShape(v, `${path}[]`)).join('');
-  }
+function shape(value: Json): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return `[${value.map(shape).join(',')}]`;
   if (typeof value === 'object') {
-    return Object.entries(value)
-      .map(([key, child]) => nullShape(child, `${path}.${key}`))
-      .join('');
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${shape(value[key])}`).join(',')}}`;
   }
-  return '';
+  return typeof value;
 }
 
 /**
