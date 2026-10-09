@@ -1,7 +1,7 @@
 import { nearestAppComponent } from './app-component';
 import { captureOptions, captureRelay } from './capture-config';
 import { buildCapturePayload, type CaptureSelection } from './capture-payload';
-import { CaptureError, captureTargetUrl, postCapture } from './capture-transport';
+import { CaptureError, postCapture } from './capture-transport';
 import { freezeDocument, freezeElement } from './document-freeze';
 import { selectorFor } from './element-selector';
 
@@ -30,7 +30,7 @@ export async function captureNow(target?: Element): Promise<CaptureResult> {
     throw new CaptureError('Could not freeze the document');
   }
   const selection = target ? buildSelection(target, maxBytes) : undefined;
-  return postCapture(buildCapturePayload(dom, relay, selection), captureTargetUrl(relay));
+  return postCapture(buildCapturePayload(dom, relay, selection), relay.ingestUrl);
 }
 
 /**

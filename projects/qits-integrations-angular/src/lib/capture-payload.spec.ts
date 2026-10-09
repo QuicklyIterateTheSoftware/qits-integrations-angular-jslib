@@ -49,9 +49,9 @@ describe('buildCapturePayload', () => {
     });
   });
 
-  it('appPath strips the <base> prefix — rebased service-proxy deploys report the app-side path', () => {
-    setBase('/workspaces/service/work/svc-1/');
-    history.replaceState(null, '', '/workspaces/service/work/svc-1/greeting/anna');
+  it('appPath strips the <base> prefix — rebased deploys report the app-side path', () => {
+    setBase('/my-app/');
+    history.replaceState(null, '', '/my-app/greeting/anna');
     expect(buildCapturePayload(DOM, RELAY).page.appPath).toBe('greeting/anna');
   });
 
