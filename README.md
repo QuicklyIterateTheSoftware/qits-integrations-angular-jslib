@@ -303,7 +303,29 @@ assertPactFile(
   `predicate: {}` next to a populated one, is a shape of its own.
 - **Every interaction carries `comments.references`** (`qits-call`, `qits-trigger`). The provider's
   verification refuses one without them.
+- **A call a library makes for the app names the library**: `via: { repository, artifact, version }`
+  (type `Via`) adds `comments.references.qits-via` with those three strings, as the Java
+  `qits-pact-consumer` writes it (`qits-ui-components-jslib`, `@qits/ui-components`, the version the
+  app resolves). `trigger.app` stays the app. Without `via` there is no `qits-via`.
+- **An answer that is not JSON** (a blob's bytes) is recorded with `file: null`, and its
+  `responseHeaders` hold the `Content-Type` when the provider records it. Give the interaction
+  `consumes: []` and `response: { contentType: 'image/png', body: <example bytes> }` (type
+  `NonJsonResponse`): the pact binds the status, `Content-Type` as `image/png.*` (refused when the
+  recording names another media type), and a body of that media type by Pact's content-type matcher,
+  never the bytes. The mock server answers with the example bytes; without `body` only the header
+  is bound.
 - The path is a provider-state expression only when it has a `{param}`.
+- **The library's version is no contract.** `assertPactFile` and `assertPactPart` mask
+  `qits-via.version` on both sides: a difference in it alone rewrites the committed file and logs
+  `qits-via version refreshed <old> → <new> (<file>)`, without `QITS_GOLDEN_UPDATE`. Any other
+  difference still fails.
+
+**Several specs, one pact file.** Where each store's pact spec writes its own calls to one provider,
+each checks only its part with `assertPactPart(generated, committed, operations, updateSwitch)`:
+`operations` are the `qits-call.operationId`s the spec owns, or `{ operationId, interactions }` to own
+an operation's interactions for the named UI interactions only (`qits-trigger.interaction`). It
+ignores metadata and order, refuses an interaction the spec does not own, and with
+`QITS_GOLDEN_UPDATE=true` replaces only its part, under a lock file.
 
 ## Browser spec data comes from golden masters: `@qits/angular/testing/browser`
 

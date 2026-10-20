@@ -197,7 +197,10 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   entry. Its spec runs under `ng test` (the `../testing/**` include in `angular.json`, because the
   builder's globs are relative to `src/`) and starts a real pact-js mock server. A pact binds only
   the body paths an interaction lists in `consumes` (required); the golden master keeps the whole
-  answer.
+  answer. `via` adds `qits-via` (a library's call, ticket qits-1284), `response` pacts an answer
+  that is not JSON, and `assertPactPart` (`pact-part.ts`, promoted from qits-landing-app) checks one
+  spec's part of a shared pact file. `pact-compare.ts` is internal: both comparisons mask
+  `qits-via.version` and rewrite the file on a version-only difference instead of failing.
 - **`@qits/angular/testing/browser`** (`testing/browser/`, a nested ng-packagr entry): the
   golden-master guard (epic qits-112) for browser specs: every browser spec takes its backend data
   from golden masters, except the UI components' (`syntheticAllowed`, default `['src/app/ui/**']`,

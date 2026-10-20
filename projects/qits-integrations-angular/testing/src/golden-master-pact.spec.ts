@@ -11,6 +11,11 @@ import {
 } from './golden-master-pact';
 
 const PACKAGE = '@qits/demo-golden-masters';
+/** The smallest PNG: one transparent pixel. */
+const PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+  'base64',
+);
 const ID = '00000000-0000-4000-8000-000000000001';
 
 /** A throwaway project holding a golden-master package in its node_modules. */
@@ -82,6 +87,14 @@ function project(): string {
             status: 200,
             file: 'list-criteria.json',
             frozen: { ids: ['$.criteria[*].predicate.entityId'] },
+          },
+          {
+            operationId: 'getPicture',
+            method: 'GET',
+            path: '/things/{thingId}/picture',
+            status: 200,
+            responseHeaders: { 'Content-Type': 'image/png' },
+            file: null,
           },
           {
             operationId: 'listSizes',
@@ -213,6 +226,109 @@ describe('golden-master-pact', () => {
     expect(rules['$.backup']).toBeUndefined();
     // The state's entries sit in a list that holds others too: "contains", not "every element".
     expect(list.response.matchingRules.body['$.entries'].matchers[0].match).toBe('arrayContains');
+  });
+
+  describe('via', () => {
+    const via = {
+      repository: 'qits-demo-jslib',
+      artifact: '@qits/demo',
+      version: '2026.1020.1',
+    } as const;
+
+    /** Adds getThing, with `via` when given, and returns the interaction as written. */
+    async function written(withVia?: typeof via) {
+      const masters = goldenMasters(PACKAGE, 'qits-demo', root);
+      const dir = join(root, 'pacts-via');
+      const pact = new PactV4({ consumer: 'qits-demo-app', provider: 'qits-demo-service', dir });
+      await addGoldenInteraction(pact, masters, {
+        provider: 'qits-demo-service',
+        state: 'a thing exists',
+        operationId: 'getThing',
+        trigger: { kind: 'ui', app: 'qits-demo-app', interaction: 'open-thing' },
+        consumes: ['name'],
+        via: withVia,
+      }).executeTest(async (server) => {
+        await fetch(`${server.url}/things/${ID}`);
+      });
+      const file = join(dir, 'qits-demo-app-qits-demo-service.json');
+      return JSON.parse(readFileSync(file, 'utf8')).interactions[0];
+    }
+
+    it('names the library as qits-via, and keeps the consumer as the trigger’s app', async () => {
+      const references = (await written(via)).comments.references;
+      expect(references['qits-via']).toEqual(via);
+      // All three strings. The key order on disk is pact-core's (alphabetical), not the call order.
+      expect(Object.values(references['qits-via']).every((v) => typeof v === 'string')).toBe(true);
+      expect(references['qits-trigger'].app).toBe('qits-demo-app');
+    });
+
+    it('writes no qits-via without a via', async () => {
+      expect(Object.keys((await written()).comments.references)).toEqual([
+        'qits-call',
+        'qits-trigger',
+      ]);
+    });
+  });
+
+  describe('an answer that is not JSON', () => {
+    const add = (
+      pact: PactV4,
+      response?: { contentType: string; body?: Uint8Array },
+      consumes: readonly string[] = [],
+    ) =>
+      addGoldenInteraction(pact, goldenMasters(PACKAGE, 'qits-demo', root), {
+        provider: 'qits-demo-service',
+        state: 'a thing exists',
+        operationId: 'getPicture',
+        trigger: { kind: 'ui', app: 'qits-demo-app', interaction: 'show-picture' },
+        consumes,
+        response,
+      });
+
+    it('binds the status, the Content-Type and a body of that media type', async () => {
+      const dir = join(root, 'pacts-blob');
+      const pact = new PactV4({ consumer: 'qits-demo-app', provider: 'qits-demo-service', dir });
+      await add(pact, { contentType: 'image/png', body: PNG }).executeTest(async (server) => {
+        const answer = await fetch(`${server.url}/things/${ID}/picture`);
+        expect(answer.headers.get('content-type')).toMatch(/^image\/png/);
+        expect(Buffer.from(await answer.arrayBuffer()).equals(PNG)).toBe(true);
+      });
+      const file = join(dir, 'qits-demo-app-qits-demo-service.json');
+      const response = JSON.parse(readFileSync(file, 'utf8')).interactions[0].response;
+      expect(response.status).toBe(200);
+      expect(response.matchingRules.header['Content-Type'].matchers[0]).toEqual({
+        match: 'regex',
+        regex: 'image/png.*',
+      });
+      // The bytes are an example only: the body is bound by its media type.
+      expect(response.matchingRules.body['$'].matchers[0]).toEqual({
+        match: 'contentType',
+        value: 'image/png',
+      });
+    });
+
+    it('binds the status alone on an answer recorded without a body', async () => {
+      const dir = join(root, 'pacts-status');
+      const pact = new PactV4({ consumer: 'qits-demo-app', provider: 'qits-demo-service', dir });
+      await add(pact).executeTest(async (server) => {
+        await fetch(`${server.url}/things/${ID}/picture`);
+      });
+      const file = join(dir, 'qits-demo-app-qits-demo-service.json');
+      const response = JSON.parse(readFileSync(file, 'utf8')).interactions[0].response;
+      expect(response.body).toBeUndefined();
+      expect(response.headers).toBeUndefined();
+    });
+
+    it('refuses another media type than the recorded one, and consumed paths', () => {
+      const pact = new PactV4({ consumer: 'c-app', provider: 'p-service', dir: root });
+      expect(() => add(pact, { contentType: 'image/jpeg' })).toThrow(
+        'golden master a thing exists/getPicture: the consumer expects image/jpeg, the provider recorded image/png',
+      );
+      expect(() => add(pact, { contentType: 'image/png' }, ['id'])).toThrow(
+        /a response that is not JSON has no body paths to consume/,
+      );
+      expect(() => add(pact, undefined, ['id'])).toThrow(/getPicture has no JSON body/);
+    });
   });
 
   describe('consumes', () => {
@@ -436,5 +552,49 @@ describe('golden-master-pact', () => {
     expect(() => assertPactFile(generated, committed, 'QITS_TEST_UPDATE')).not.toThrow();
     writeFileSync(committed, pact('1', 'a'));
     expect(() => assertPactFile(generated, committed, 'QITS_TEST_UPDATE')).toThrow(/differs/);
+  });
+
+  describe('assertPactFile and the qits-via version', () => {
+    const pact = (version: string, name = 'a') =>
+      JSON.stringify({
+        metadata: {},
+        interactions: [
+          {
+            description: 'open: getThing',
+            comments: {
+              references: {
+                'qits-via': { repository: 'qits-demo-jslib', artifact: '@qits/demo', version },
+              },
+            },
+            response: { body: { name } },
+          },
+          { description: 'open: listThings' },
+        ],
+      });
+    let generated: string;
+    let committed: string;
+    beforeEach(() => {
+      generated = join(root, 'generated.json');
+      committed = join(root, 'committed.json');
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    it('rewrites a difference in the version alone, and says so', () => {
+      const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+      writeFileSync(generated, pact('2'));
+      writeFileSync(committed, pact('1'));
+      expect(() => assertPactFile(generated, committed, 'QITS_TEST_UPDATE')).not.toThrow();
+      expect(readFileSync(committed, 'utf8')).toBe(pact('2'));
+      expect(info).toHaveBeenCalledWith(`qits-via version refreshed 1 → 2 (${committed})`);
+    });
+
+    it('still fails on any other difference, the version changed or not', () => {
+      writeFileSync(committed, pact('1'));
+      writeFileSync(generated, pact('2', 'b'));
+      expect(() => assertPactFile(generated, committed, 'QITS_TEST_UPDATE')).toThrow(/differs/);
+      writeFileSync(generated, pact('1', 'b'));
+      expect(() => assertPactFile(generated, committed, 'QITS_TEST_UPDATE')).toThrow(/differs/);
+      expect(readFileSync(committed, 'utf8')).toBe(pact('1'));
+    });
   });
 });

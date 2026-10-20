@@ -9,13 +9,20 @@
  *   a recorded answer instead of a hand-written one;
  * - adds a Pact V4 interaction for a recorded answer to a `@pact-foundation/pact` `PactV4`
  *   ({@link addGoldenInteraction}), with matchers from the index's `frozen` lists;
- * - compares the pact a run wrote with the committed one ({@link assertPactFile}).
+ * - compares the pact a run wrote with the committed one ({@link assertPactFile}; one spec's part of
+ *   a file several specs write: `assertPactPart` in `pact-part.ts`).
  *
  * THE PACT BINDS ONLY WHAT THE CONSUMER READS. The golden master holds the provider's whole answer;
  * each interaction names the body paths its consumer actually reads (`consumes`), and the pact's
  * body holds those and nothing else. Every other field stays free for the provider to change.
  * `consumes: []` means the consumer relies on the status alone: the pact then has no body and no
- * `Content-Type`.
+ * `Content-Type`. An answer that is not JSON (a blob's bytes) is recorded without a body; its
+ * interaction names the media type it expects (`response`), and the pact binds that `Content-Type`
+ * and, given example bytes, a body of that media type.
+ *
+ * A call a LIBRARY makes on the consumer's behalf names the library too (`via`, written as
+ * `comments.references.qits-via`); the comparison with the committed pact ignores the library's
+ * version label, and refreshes it in place.
  *
  * Pacts name both sides by REPOSITORY name (`qits-landing-app`, `qits-projects-service`), so a
  * component's frontend and backend stay distinct; the committed file is
@@ -48,6 +55,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { MatchersV3, type PactV4 } from '@pact-foundation/pact';
+import {
+  maskViaVersions,
+  reportViaRefresh,
+  sortedInteractions,
+  type PactInteraction,
+} from './pact-compare';
 
 /** pact-js does not export its V4 builder types; this is what `willRespondWith` returns. */
 type V4InteractionWithResponse = ReturnType<
@@ -69,7 +82,10 @@ export interface GoldenOperation {
   /** The JSON body the recording sent (a write's request); undefined when it sent none. */
   readonly body: Json | undefined;
   readonly status: number;
-  readonly file: string;
+  /** The recorded body's file; null when the answer has no JSON body (a 204, a blob's bytes). */
+  readonly file: string | null;
+  /** The response headers the provider recorded because consumers read them, by name. */
+  readonly responseHeaders: Readonly<Record<string, string>>;
   readonly ids: ReadonlySet<string>;
   readonly instants: ReadonlySet<string>;
   readonly listFilteredTo: string | null;
@@ -88,7 +104,8 @@ interface Index {
       query?: Record<string, string>;
       body?: Json;
       status: number;
-      file: string;
+      responseHeaders?: Record<string, string>;
+      file: string | null;
       frozen?: { ids?: string[]; instants?: string[]; listFilteredTo?: string | null };
     }[];
   }[];
@@ -98,7 +115,10 @@ interface Index {
 export interface GoldenMasters {
   /** The index entry; throws naming the state and operation when there is none. */
   operation(state: string, operationId: string): GoldenOperation;
-  /** The recorded body. A fresh copy every call, so a spec may change it freely. */
+  /**
+   * The recorded body. A fresh copy every call, so a spec may change it freely. Throws when the
+   * answer was recorded without a JSON body (`file: null`).
+   */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped JSON by default, so specs read fields without casts
   body<T = any>(state: string, operationId: string): T;
 }
@@ -161,6 +181,7 @@ export function goldenMasters(
       body: op.body,
       status: op.status,
       file: op.file,
+      responseHeaders: { ...(op.responseHeaders ?? {}) },
       ids: new Set(op.frozen?.ids ?? []),
       instants: new Set(op.frozen?.instants ?? []),
       listFilteredTo: op.frozen?.listFilteredTo ?? null,
@@ -169,8 +190,15 @@ export function goldenMasters(
 
   return {
     operation,
-    body: (state, operationId) =>
-      JSON.parse(readFileSync(join(tree(), operation(state, operationId).file), 'utf8')),
+    body: (state, operationId) => {
+      const file = operation(state, operationId).file;
+      if (file === null) {
+        throw new Error(
+          `${provider}'s golden master '${state}' / ${operationId} has no JSON body: the answer is empty or not JSON`,
+        );
+      }
+      return JSON.parse(readFileSync(join(tree(), file), 'utf8'));
+    },
   };
 }
 
@@ -204,6 +232,41 @@ function triggerName(trigger: Trigger): string {
   }
 }
 
+/**
+ * The library a call goes through (ticket qits-1284, the JS side of qits-1163): for a pact of a call
+ * a library makes on behalf of the consuming app, which library, and which version of it the app
+ * pins. Written as `comments.references.qits-via`, in this key order, all strings, as the Java
+ * `eu.wohlben.qits.pact.consumer.Via` writes it.
+ */
+export interface Via {
+  /** The library's repository name, as a pact names it (`qits-ui-components-jslib`). */
+  readonly repository: string;
+  /** The library's package coordinate: the npm name (`@qits/ui-components`), or maven's `groupId:artifactId`. */
+  readonly artifact: string;
+  /** The version of `artifact` the consuming app resolves. */
+  readonly version: string;
+}
+
+/**
+ * An answer that is not JSON (a blob's bytes, an image), as the consumer reads it. Its golden master
+ * records no body (`file: null`), so the interaction binds the status, the `Content-Type` and, given
+ * `body`, that a body of that media type comes back, never the bytes themselves.
+ */
+export interface NonJsonResponse {
+  /**
+   * The media type the consumer expects (`image/png`). The pact matches the answer's `Content-Type`
+   * as this media type followed by anything; when the recording holds a `Content-Type`, it is the
+   * example and must name the same media type.
+   */
+  readonly contentType: string;
+  /**
+   * Example bytes the mock server answers with. The pact binds them by media type only (Pact's
+   * content-type matcher), so they must be a valid instance of `contentType`. Omitted: the answer
+   * binds no body, only the header.
+   */
+  readonly body?: Uint8Array;
+}
+
 /** One interaction to add: which recorded answer, who calls it, and what caused the call. */
 export interface GoldenInteraction {
   /** The provider's repository name, as the pact and `qits-call.app` name it. */
@@ -220,9 +283,16 @@ export interface GoldenInteraction {
    * - `entries[]`: the elements themselves, without any of their fields (the consumer counts them).
    *
    * `[]` (empty): the consumer reads the status only, so the pact has no body. A path that is not
-   * in the recorded body throws.
+   * in the recorded body throws. Must be `[]` with {@link response}.
    */
   readonly consumes: readonly string[];
+  /**
+   * The library the call goes through, when a library makes it on the consumer's behalf: the
+   * interaction then carries `qits-via` as well. `trigger.app` stays the consumer.
+   */
+  readonly via?: Via;
+  /** Set for an answer that is not JSON; see {@link NonJsonResponse}. */
+  readonly response?: NonJsonResponse;
 }
 
 /**
@@ -235,7 +305,10 @@ export interface GoldenInteraction {
  * - the recorded status, and the parts of the recorded body named in `consumes`, under matchers
  *   (see the file comment);
  * - `comments.references`: `qits-call` (provider and operation) and `qits-trigger`, which the
- *   provider's verification requires.
+ *   provider's verification requires, and `qits-via` (repository, artifact, version) when `via`
+ *   is set;
+ * - for a `response` that is not JSON: its `Content-Type` and, given example bytes, a body of that
+ *   media type, in place of a JSON body.
  *
  * The description is `<trigger>: <operationId>`, so one call made by two triggers is two
  * interactions.
@@ -243,10 +316,19 @@ export interface GoldenInteraction {
 export function addGoldenInteraction(
   pact: PactV4,
   masters: GoldenMasters,
-  { provider, state, operationId, trigger, consumes }: GoldenInteraction,
+  { provider, state, operationId, trigger, consumes, via, response: nonJson }: GoldenInteraction,
 ): V4InteractionWithResponse {
   const op = masters.operation(state, operationId);
-  const body = consumed(masters.body<Json>(state, operationId), consumes, op);
+  if (nonJson && consumes.length) {
+    throw new Error(
+      `golden master ${state}/${operationId}: a response that is not JSON has no body paths to consume`,
+    );
+  }
+  // Read only when consumed: a status-only interaction may stand on an answer recorded without a body.
+  const body = consumes.length
+    ? consumed(masters.body<Json>(state, operationId), consumes, op)
+    : undefined;
+  const contentType = nonJson ? nonJsonContentType(nonJson.contentType, op) : undefined;
   const path = /\{\w+}/.test(op.path)
     ? MatchersV3.fromProviderState(op.path.replace(/\{(\w+)}/g, '$${$1}'), examplePath(op))
     : op.path;
@@ -259,6 +341,12 @@ export function addGoldenInteraction(
   for (const [key, value] of Object.entries(trigger)) {
     interaction = interaction.reference('qits-trigger', key, value);
   }
+  if (via) {
+    interaction = interaction
+      .reference('qits-via', 'repository', via.repository)
+      .reference('qits-via', 'artifact', via.artifact)
+      .reference('qits-via', 'version', via.version);
+  }
   const query = op.query;
   const sent = op.body;
   // The request as recorded: its query, and a write's JSON body, matched exactly.
@@ -270,11 +358,38 @@ export function addGoldenInteraction(
         })
       : interaction.withRequest(op.method, path);
   return request.willRespondWith(op.status, (response) => {
+    if (nonJson && contentType) {
+      response.headers({ 'Content-Type': contentType });
+      if (nonJson.body) response.body(nonJson.contentType, Buffer.from(nonJson.body));
+      return;
+    }
     if (body === undefined) return;
     response
       .headers({ 'Content-Type': MatchersV3.regex('application/json.*', 'application/json') })
       .jsonBody(matched(body, '$', op));
   });
+}
+
+/**
+ * The `Content-Type` matcher of an answer that is not JSON: `media` followed by anything (a
+ * `; charset=…`), with the recorded header as the example where there is one. Throws when the
+ * recording names another media type: the consumer would expect what the provider does not send.
+ */
+function nonJsonContentType(
+  media: string,
+  op: GoldenOperation,
+): ReturnType<typeof MatchersV3.regex> {
+  const name = Object.keys(op.responseHeaders).find((h) => h.toLowerCase() === 'content-type');
+  const recorded = name === undefined ? undefined : op.responseHeaders[name];
+  if (
+    recorded !== undefined &&
+    recorded.split(';')[0].trim().toLowerCase() !== media.toLowerCase()
+  ) {
+    throw new Error(
+      `golden master ${op.state}/${op.operationId}: the consumer expects ${media}, the provider recorded ${recorded}`,
+    );
+  }
+  return MatchersV3.regex(`${media.replace(/[^A-Za-z0-9/-]/g, '\\$&')}.*`, recorded ?? media);
 }
 
 /** The paths of `consumes` as a tree: which keys to keep, and what to keep in array elements. */
@@ -424,6 +539,11 @@ function shape(value: Json): string {
  * `metadata` (it names library versions) and interaction order. Throws on a difference, so a
  * changed pact is committed in the same change. With `<updateSwitch>=true` in the environment it
  * copies `generated` over `committed` instead.
+ *
+ * A difference confined to `comments.references.qits-via.version` (see {@link Via}) does not fail:
+ * the version is masked on both sides, and when nothing else differs `generated` is copied over
+ * `committed` and `qits-via version refreshed <old> → <new>` logged. A library bump is no contract
+ * change; only the committed label lagged.
  */
 export function assertPactFile(generated: string, committed: string, updateSwitch: string): void {
   if (!existsSync(generated)) throw new Error(`the run wrote no pact at ${generated}`);
@@ -432,18 +552,23 @@ export function assertPactFile(generated: string, committed: string, updateSwitc
     writeFileSync(committed, readFileSync(generated));
     return;
   }
-  const normal = (file: string) => {
-    const { interactions, ...rest } = JSON.parse(readFileSync(file, 'utf8'));
-    delete rest.metadata;
-    const key = (i: { description: string; providerStates?: { name: string }[] }) =>
-      `${i.description}\u0000${(i.providerStates ?? []).map((s) => s.name).join('\u0000')}`;
-    const sorted = [...interactions].sort((a, b) => (key(a) < key(b) ? -1 : 1));
+  const read = (file: string): { interactions: PactInteraction[]; [key: string]: unknown } =>
+    JSON.parse(readFileSync(file, 'utf8'));
+  const normal = ({ interactions, ...rest }: ReturnType<typeof read>, mask: boolean): string => {
+    delete rest['metadata'];
+    const sorted = sortedInteractions(mask ? maskViaVersions(interactions) : interactions);
     return JSON.stringify({ ...rest, interactions: sorted });
   };
-  if (!existsSync(committed) || normal(generated) !== normal(committed)) {
-    throw new Error(
-      `${committed} ${existsSync(committed) ? 'differs from what the pact specs generate' : 'does not exist'}. ` +
-        `If the change is intended, regenerate it in this change: ${updateSwitch}=true npm test`,
-    );
+  const fresh = read(generated);
+  const current = existsSync(committed) ? read(committed) : undefined;
+  if (current && normal(fresh, false) === normal(current, false)) return;
+  if (current && normal(fresh, true) === normal(current, true)) {
+    writeFileSync(committed, readFileSync(generated));
+    reportViaRefresh(committed, current.interactions, fresh.interactions);
+    return;
   }
+  throw new Error(
+    `${committed} ${current ? 'differs from what the pact specs generate' : 'does not exist'}. ` +
+      `If the change is intended, regenerate it in this change: ${updateSwitch}=true npm test`,
+  );
 }
