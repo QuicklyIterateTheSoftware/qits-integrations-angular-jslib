@@ -19,8 +19,11 @@ Published to qits' own registry under the `@qits` scope, so point the scope at i
 pnpm add @qits/angular
 ```
 
-**Peers:** `@angular/core`, `@angular/router` and `@ngrx/signals` (^22). The ngrx peer is required
-even if you never call `withQitsSnapshot` — the single bundle imports it statically.
+**Peers:** `@angular/common`, `@angular/core` and `@angular/router` (`^21.2.0 || ^22.1.0`), and
+`@ngrx/signals` (`^21.0.0 || ^22.0.1`). The ngrx peer is required even if you never call
+`withQitsSnapshot` — the single bundle imports it statically. On Angular 21, install
+`@ngrx/signals@^21` alongside unless you already depend on it: npm auto-installs a missing peer at
+its newest version, ngrx 22, which then fails ERESOLVE against Angular 21.
 
 ```ts
 // main.ts — initQitsIntegration MUST complete before bootstrapApplication

@@ -70,9 +70,16 @@ the hosted equivalent) — see the qits-artifacts-service README for the posture
 The tarball ships **prebuilt** (the ng-packagr output), so an install runs no build: no `prepare`
 hook, no `pnpm.onlyBuiltDependencies` allowlist, no Angular toolchain in the consumer.
 
-**Peers:** `@angular/core`, `@angular/router`, and `@ngrx/signals` (^22). The ngrx peer is
-required even if you never call `withQitsSnapshot` — the library's single bundle imports it
-statically, so it must be resolvable in every consumer.
+**Peers:** `@angular/common`, `@angular/core` and `@angular/router` (`^21.2.0 || ^22.1.0`), and
+`@ngrx/signals` (`^21.0.0 || ^22.0.1`). The ngrx peer is required even if you never call
+`withQitsSnapshot` — the library's single bundle imports it statically, so it must be resolvable in
+every consumer. The bundle is partial-compiled (`ɵɵngDeclare*` with a `minVersion` of at most
+17.0.0), so an Angular 21.2 application's linker links it like any other library.
+
+An Angular 21 consumer that does not already depend on `@ngrx/signals` has to name it itself
+(`npm install -D @qits/angular @ngrx/signals@^21`): npm auto-installs a missing peer at the newest
+version the range allows, ngrx 22, whose own `@angular/core ^22` peer then fails ERESOLVE against
+the application's Angular 21 — npm does not backtrack to the ngrx 21 the range also admits.
 
 > **Historical note.** Before the registry existed, distribution was git-only: consumers ran
 > `pnpm add "git+https://…#<sha>"`, which installed the **repo root** and built it on their

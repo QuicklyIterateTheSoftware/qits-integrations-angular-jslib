@@ -16,10 +16,10 @@
     "feature-capture"
   ],
   "peerDependencies": {
-    "@angular/common": "^22.1.0",
-    "@angular/core": "^22.1.0",
-    "@angular/router": "^22.1.0",
-    "@ngrx/signals": "^22.0.1",
+    "@angular/common": "^21.2.0 || ^22.1.0",
+    "@angular/core": "^21.2.0 || ^22.1.0",
+    "@angular/router": "^21.2.0 || ^22.1.0",
+    "@ngrx/signals": "^21.0.0 || ^22.0.1",
     "@pact-foundation/pact": "^17.1.4",
     "eslint": "^9.0.0 || ^10.0.0"
   },
