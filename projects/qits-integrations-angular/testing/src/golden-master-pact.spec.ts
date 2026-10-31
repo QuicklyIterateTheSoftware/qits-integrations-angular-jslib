@@ -7,6 +7,7 @@ import {
   addGoldenInteraction,
   assertPactFile,
   examplePath,
+  exampleQuery,
   goldenMasters,
 } from './golden-master-pact';
 
@@ -17,6 +18,7 @@ const PNG = Buffer.from(
   'base64',
 );
 const ID = '00000000-0000-4000-8000-000000000001';
+const PROJECT_ID = '00000000-0000-4000-8000-000000000002';
 
 /** A throwaway project holding a golden-master package in its node_modules. */
 function project(): string {
@@ -103,6 +105,30 @@ function project(): string {
             status: 200,
             file: 'list-sizes.json',
             frozen: { ids: ['$.entries[*].id'] },
+          },
+        ],
+      },
+      {
+        name: 'a project exists',
+        params: { projectId: PROJECT_ID },
+        operations: [
+          {
+            operationId: 'listProjectThings',
+            method: 'GET',
+            path: '/things',
+            query: { project: '{projectId}', limit: '20' },
+            status: 200,
+            file: 'list-things.json',
+            frozen: { ids: ['$.entries[*].id'], listFilteredTo: '$.entries' },
+          },
+          {
+            operationId: 'listUnknownProjectThings',
+            method: 'GET',
+            path: '/things',
+            query: { project: '{missingId}' },
+            status: 200,
+            file: 'list-things.json',
+            frozen: { ids: ['$.entries[*].id'], listFilteredTo: '$.entries' },
           },
         ],
       },
@@ -457,6 +483,61 @@ describe('golden-master-pact', () => {
       const file = join(dir, 'qits-demo-app-qits-demo-service.json');
       const request = JSON.parse(readFileSync(file, 'utf8')).interactions[0].request;
       expect(request.query).toEqual({ limit: ['20'] });
+    });
+
+    it('sends the example value for a query placeholder, with a generator to re-derive it', async () => {
+      const masters = goldenMasters(PACKAGE, 'qits-demo', root);
+      expect(masters.operation('a project exists', 'listProjectThings').query).toEqual({
+        project: '{projectId}',
+        limit: '20',
+      });
+      const dir = join(root, 'pacts-project');
+      const pact = new PactV4({ consumer: 'qits-demo-app', provider: 'qits-demo-service', dir });
+      await addGoldenInteraction(pact, masters, {
+        provider: 'qits-demo-service',
+        state: 'a project exists',
+        operationId: 'listProjectThings',
+        trigger: { kind: 'ui', app: 'qits-demo-app', interaction: 'open-things' },
+        consumes: ['entries[].id'],
+      }).executeTest(async (server) => {
+        await fetch(`${server.url}/things?project=${PROJECT_ID}&limit=20`);
+      });
+      const file = join(dir, 'qits-demo-app-qits-demo-service.json');
+      const request = JSON.parse(readFileSync(file, 'utf8')).interactions[0].request;
+      // The placeholder becomes its example value, with a generator to re-derive it at verify time;
+      // the plain value stays a plain string and gets no generator.
+      expect(request.query).toEqual({ project: [PROJECT_ID], limit: ['20'] });
+      expect(request.generators.query.project).toEqual({
+        type: 'ProviderState',
+        expression: '${projectId}',
+      });
+      expect(request.generators.query.limit).toBeUndefined();
+    });
+
+    it('refuses a query placeholder naming a param the state lacks', () => {
+      const masters = goldenMasters(PACKAGE, 'qits-demo', root);
+      const pact = new PactV4({ consumer: 'c-app', provider: 'p-service', dir: root });
+      expect(() =>
+        addGoldenInteraction(pact, masters, {
+          provider: 'p-service',
+          state: 'a project exists',
+          operationId: 'listUnknownProjectThings',
+          trigger: { kind: 'ui', app: 'c-app', interaction: 'open-things' },
+          consumes: ['entries[].id'],
+        }),
+      ).toThrow("state 'a project exists' has no param 'missingId'");
+    });
+
+    it('exampleQuery substitutes every placeholder, and throws naming a missing param', () => {
+      const masters = goldenMasters(PACKAGE, 'qits-demo', root);
+      expect(exampleQuery(masters.operation('a project exists', 'listProjectThings'))).toEqual({
+        project: PROJECT_ID,
+        limit: '20',
+      });
+      expect(exampleQuery(masters.operation('a thing exists', 'listThings'))).toEqual({});
+      expect(() =>
+        exampleQuery(masters.operation('a project exists', 'listUnknownProjectThings')),
+      ).toThrow("state 'a project exists' has no param 'missingId'");
     });
 
     it('sends a write’s recorded JSON body', async () => {

@@ -54,7 +54,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { MatchersV3, type PactV4 } from '@pact-foundation/pact';
+import { MatchersV3, type PactV4, type TemplateQuery } from '@pact-foundation/pact';
 import {
   maskViaVersions,
   reportViaRefresh,
@@ -202,13 +202,25 @@ export function goldenMasters(
   };
 }
 
-/** The path with every `{param}` replaced by the state's example value. */
-export function examplePath(op: GoldenOperation): string {
-  return op.path.replace(/\{(\w+)}/g, (_, name: string) => {
+/** `template`'s `{param}` placeholders replaced by the state's example values. */
+function withExampleParams(template: string, op: GoldenOperation): string {
+  return template.replace(/\{(\w+)}/g, (_, name: string) => {
     const value = op.params[name];
     if (value === undefined) throw new Error(`state '${op.state}' has no param '${name}'`);
     return value;
   });
+}
+
+/** The path with every `{param}` replaced by the state's example value. */
+export function examplePath(op: GoldenOperation): string {
+  return withExampleParams(op.path, op);
+}
+
+/** The query with every `{param}` in each value replaced by the state's example value. */
+export function exampleQuery(op: GoldenOperation): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(op.query).map(([key, value]) => [key, withExampleParams(value, op)]),
+  );
 }
 
 /** What caused a call, as `comments.references.qits-trigger` names it. */
@@ -300,8 +312,9 @@ export interface GoldenInteraction {
  * carries:
  *
  * - the provider state with its params;
- * - the path, as a provider-state expression only when it has a `{param}` (pact-jvm resolves a
- *   parameterless expression to a path that misses the route);
+ * - the path, and each query value, as a provider-state expression only when it holds a `{param}`
+ *   (pact-jvm resolves a parameterless expression to a path that misses the route); a query value
+ *   without a placeholder is sent as the plain string it was recorded with;
  * - the recorded status, and the parts of the recorded body named in `consumes`, under matchers
  *   (see the file comment);
  * - `comments.references`: `qits-call` (provider and operation) and `qits-trigger`, which the
@@ -349,11 +362,12 @@ export function addGoldenInteraction(
   }
   const query = op.query;
   const sent = op.body;
-  // The request as recorded: its query, and a write's JSON body, matched exactly.
+  // The request as recorded: its query (a provider-state expression for any value with a
+  // `{param}`), and a write's JSON body, matched exactly.
   const request =
     Object.keys(query).length || sent !== undefined
       ? interaction.withRequest(op.method, path, (builder) => {
-          if (Object.keys(query).length) builder.query({ ...query });
+          if (Object.keys(query).length) builder.query(providerStateQuery(op));
           if (sent !== undefined) builder.jsonBody(sent);
         })
       : interaction.withRequest(op.method, path);
@@ -368,6 +382,22 @@ export function addGoldenInteraction(
       .headers({ 'Content-Type': MatchersV3.regex('application/json.*', 'application/json') })
       .jsonBody(matched(body, '$', op));
   });
+}
+
+/**
+ * `op.query`, with each value that holds a `{param}` turned into a provider-state expression (the
+ * example from {@link exampleQuery}); a value without one is sent as the plain string recorded.
+ */
+function providerStateQuery(op: GoldenOperation): TemplateQuery {
+  const example = exampleQuery(op);
+  return Object.fromEntries(
+    Object.entries(op.query).map(([key, value]) => [
+      key,
+      /\{\w+}/.test(value)
+        ? MatchersV3.fromProviderState(value.replace(/\{(\w+)}/g, '$${$1}'), example[key])
+        : value,
+    ]),
+  );
 }
 
 /**
