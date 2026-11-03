@@ -142,4 +142,29 @@ describe('provideQitsBearerSignIn', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("retries QITS_EVENT_SOURCE's 401 with QitsTokens.retryToken", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('', { status: 401 }))
+      .mockResolvedValueOnce(new Response(new ReadableStream(), { status: 200 }));
+    vi.stubGlobal('fetch', fetchFn);
+    try {
+      const retryToken = vi.fn(async () => 'A2');
+      TestBed.configureTestingModule({
+        providers: [
+          provideQitsBearerSignIn({ clientId: 'qits-spa', callbackRoute: false }),
+          { provide: QitsTokens, useValue: { accessToken: async () => 'A1', retryToken } },
+        ],
+      });
+      const source = TestBed.inject(QITS_EVENT_SOURCE)('https://events.qits.example/s');
+      const opened = new Promise((resolve) => (source.onopen = resolve));
+      await opened;
+      expect(retryToken).toHaveBeenCalledWith('A1');
+      expect(fetchFn.mock.calls[1][1].headers.authorization).toBe('Bearer A2');
+      source.close();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

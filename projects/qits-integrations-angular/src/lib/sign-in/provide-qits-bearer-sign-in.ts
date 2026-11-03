@@ -28,8 +28,8 @@ import {
  * - {@link QitsSession} (and `qitsSignedInGuard`): signed in means holding a usable token.
  * - `auth/callback` ({@link QitsAuthCallbackPage}) in front of the app's routes, unless
  *   `callbackRoute: false`. The redirect URI is `<page origin>/auth/callback`.
- * - {@link QITS_EVENT_SOURCE} opens a {@link FetchEventSource}; {@link QITS_WEB_SOCKET} a
- *   {@link BearerWebSocket}.
+ * - {@link QITS_EVENT_SOURCE} opens a {@link FetchEventSource} (onopen, reconnect after a drop,
+ *   one refresh on a 401); {@link QITS_WEB_SOCKET} a {@link BearerWebSocket}.
  * - {@link QitsBearerFetch}: `fetch()` with the bearer, and object URLs for `<img>`s and downloads.
  *
  * Not wired here, because `HttpClient` takes it only there: add `qitsBearerInterceptor` to
@@ -45,7 +45,10 @@ export function provideQitsBearerSignIn(options: QitsBearerSignInOptions): Envir
       provide: QITS_EVENT_SOURCE,
       useFactory: () => {
         const tokens = inject(QitsTokens);
-        return (url: string) => new FetchEventSource(url, () => tokens.accessToken());
+        return (url: string) =>
+          new FetchEventSource(url, () => tokens.accessToken(), undefined, {
+            retryToken: (used) => tokens.retryToken(used),
+          });
       },
     },
     {

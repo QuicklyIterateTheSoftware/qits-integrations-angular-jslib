@@ -273,7 +273,10 @@ providers: [
   refresh and one retry, then the sign-in, back to the current page.
 - **`qitsSignedInGuard`** / **`QitsSession.ensure(url)`**: start the sign-in before a page renders.
 - **`QITS_EVENT_SOURCE`** opens a `FetchEventSource` (an `EventSource` stand-in over `fetch`, with the
-  bearer); **`QITS_WEB_SOCKET`** a `BearerWebSocket`, which offers `['qits.bearer', <token>, ...]` as
+  bearer). It behaves like `EventSource`: `onopen` on a 2xx; a dropped stream is `CONNECTING` and
+  reconnects after 3 s (or the stream's `retry:`), sending `Last-Event-ID` once ids were seen; a
+  non-2xx answer is final (`CLOSED`, `onerror`, no reconnect), except that a 401 first gets one
+  token refresh and one retry; `close()` stops it all. **`QITS_WEB_SOCKET`** a `BearerWebSocket`, which offers `['qits.bearer', <token>, ...]` as
   subprotocols. Without the provider both are the browser's own.
 - **`QitsBearerFetch`**: `fetch(url, init)` with the bearer; `fetchObjectUrl(url)` for an `<img>` of a
   role-guarded route (revoke the URL when done); `download(url, fileName)` for a download link.

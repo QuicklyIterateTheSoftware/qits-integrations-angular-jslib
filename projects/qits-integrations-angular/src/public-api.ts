@@ -43,10 +43,16 @@ export {
   WEB_SOCKET_OPEN,
 } from './lib/sign-in/bearer-web-socket';
 export type { WebSocketFactory, WebSocketLike } from './lib/sign-in/bearer-web-socket';
-export { FetchEventSource, QITS_EVENT_SOURCE, SseParser } from './lib/sign-in/fetch-event-source';
+export {
+  FetchEventSource,
+  QITS_EVENT_SOURCE,
+  RECONNECT_MS,
+  SseParser,
+} from './lib/sign-in/fetch-event-source';
 export type {
   EventSourceFactory,
   EventSourceLike,
+  FetchEventSourceOptions,
   SseMessage,
 } from './lib/sign-in/fetch-event-source';
 export { base64Url, randomToken, s256Challenge } from './lib/sign-in/pkce';
