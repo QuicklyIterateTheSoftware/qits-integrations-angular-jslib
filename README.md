@@ -70,7 +70,8 @@ the hosted equivalent) — see the qits-artifacts-service README for the posture
 The tarball ships **prebuilt** (the ng-packagr output), so an install runs no build: no `prepare`
 hook, no `pnpm.onlyBuiltDependencies` allowlist, no Angular toolchain in the consumer.
 
-**Peers:** `@angular/common`, `@angular/core` and `@angular/router` (`^21.2.0 || ^22.1.0`), and
+**Peers:** `@angular/common`, `@angular/core` and `@angular/router` (`^21.2.0 || ^22.1.0`), `rxjs`
+(`^7.4.0`), and
 `@ngrx/signals` (`^21.0.0 || ^22.0.1`). The ngrx peer is required even if you never call
 `withQitsSnapshot` — the library's single bundle imports it statically, so it must be resolvable in
 every consumer. The bundle is partial-compiled (`ɵɵngDeclare*` with a `minVersion` of at most
@@ -237,6 +238,46 @@ before any module code, so it stays an inline `index.html` script — the canoni
   })();
 </script>
 ```
+
+## Signing in with a bearer: `provideQitsBearerSignIn`
+
+A platform page signs in with OIDC authorization code + PKCE against one of the idp's public
+clients, keeps the tokens in `sessionStorage` (this tab), refreshes them ahead of expiry (one
+refresh in flight: the idp revokes the family when a refresh token is used twice), and sends the
+bearer on every platform call (epic qits-543).
+
+```ts
+// app.config.ts
+import { provideHttpClient, withFetch, withInterceptors } from '@angular/common/http';
+import { provideQitsBearerSignIn, qitsBearerInterceptor } from '@qits/angular';
+
+providers: [
+  provideRouter(routes),
+  provideHttpClient(withFetch(), withInterceptors([qitsBearerInterceptor])),
+  provideQitsBearerSignIn({ clientId: 'qits-spa' }),
+];
+```
+
+- **`clientId`**: `qits-spa` deployed (any `https://<name under the platform domain>/auth/callback`),
+  `qits-landing-dev` under `ng serve` (only `http://{localhost|127.0.0.1|[::1]}:<port>/auth/callback`).
+- **`platformDomain`**: leave it out deployed; it is read from the page's host (`qits.<domain>` is the
+  apex, `<label>.qits.<domain>` loses its first label). Set it under `ng serve`, e.g.
+  `platformDomain: 'qits.wohlben.eu'`. **`idpOrigin`** defaults to `https://idp.<platform domain>`.
+- **The callback route** `auth/callback` (`QitsAuthCallbackPage`) is put in front of the app's routes
+  by the provider, ahead of any guard or `**`. The redirect URI is `<page origin>/auth/callback`, so
+  the app must be served at its host's root. `callbackRoute: false` opts out; then place
+  `qitsAuthCallbackRoute` first in your routes yourself.
+- **`qitsBearerInterceptor`** is the one piece the provider cannot wire (`HttpClient` takes functional
+  interceptors only in `provideHttpClient`). It sends the bearer to this page's own origin (relative
+  URLs included) and to `https` hosts at or under the platform domain, nowhere else. A 401 gets one
+  refresh and one retry, then the sign-in, back to the current page.
+- **`qitsSignedInGuard`** / **`QitsSession.ensure(url)`**: start the sign-in before a page renders.
+- **`QITS_EVENT_SOURCE`** opens a `FetchEventSource` (an `EventSource` stand-in over `fetch`, with the
+  bearer); **`QITS_WEB_SOCKET`** a `BearerWebSocket`, which offers `['qits.bearer', <token>, ...]` as
+  subprotocols. Without the provider both are the browser's own.
+- **`QitsBearerFetch`**: `fetch(url, init)` with the bearer; `fetchObjectUrl(url)` for an `<img>` of a
+  role-guarded route (revoke the URL when done); `download(url, fileName)` for a download link.
+- **`QitsTokens`**: `accessToken()`, `login(returnPath)`, `logout()`, `refresh()`.
 
 ## What a store reads: `consume` and `Consumed`
 

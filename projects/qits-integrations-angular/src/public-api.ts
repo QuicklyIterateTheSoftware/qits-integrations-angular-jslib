@@ -16,3 +16,37 @@ export { registerCaptureState } from './lib/capture-state';
 export type { CaptureStateSupplier } from './lib/capture-state';
 export { consume, NOTHING } from './lib/consume';
 export type { Consumed, ConsumedPaths } from './lib/consume';
+export { provideQitsBearerSignIn } from './lib/sign-in/provide-qits-bearer-sign-in';
+export {
+  CALLBACK_PATH,
+  isPlatformUrl,
+  platformDomainOf,
+  QITS_SIGN_IN,
+} from './lib/sign-in/sign-in-settings';
+export type { QitsBearerSignInOptions, QitsSignInSettings } from './lib/sign-in/sign-in-settings';
+export {
+  EXPIRY_SKEW_MS,
+  QITS_SIGN_IN_FETCH,
+  QitsTokens,
+  REFRESH_AHEAD_MS,
+} from './lib/sign-in/qits-tokens';
+export { QitsSession, qitsSignedInGuard } from './lib/sign-in/qits-session';
+export { qitsBearerInterceptor } from './lib/sign-in/bearer-interceptor';
+export { QitsBearerFetch } from './lib/sign-in/bearer-fetch';
+export { QitsAuthCallbackPage, qitsAuthCallbackRoute } from './lib/sign-in/auth-callback.page';
+export {
+  BEARER_PROTOCOL,
+  BearerWebSocket,
+  QITS_WEB_SOCKET,
+  WEB_SOCKET_CLOSED,
+  WEB_SOCKET_CONNECTING,
+  WEB_SOCKET_OPEN,
+} from './lib/sign-in/bearer-web-socket';
+export type { WebSocketFactory, WebSocketLike } from './lib/sign-in/bearer-web-socket';
+export { FetchEventSource, QITS_EVENT_SOURCE, SseParser } from './lib/sign-in/fetch-event-source';
+export type {
+  EventSourceFactory,
+  EventSourceLike,
+  SseMessage,
+} from './lib/sign-in/fetch-event-source';
+export { base64Url, randomToken, s256Challenge } from './lib/sign-in/pkce';

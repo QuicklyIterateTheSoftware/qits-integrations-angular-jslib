@@ -18,7 +18,8 @@ seam for features), `withFeatureCapture(options?)`, `captureNow()`, `freezeDocum
 freeze core, exported so the qits webui's element picker can eventually consume it instead of its
 own copy), and `consume(call, paths)` / `Consumed<T, Paths>` (`consume.ts`: a store states the body
 paths it reads; the compiler then refuses any other field, and the pact spec binds the same list;
-type-level only, the run-time function returns the answer unchanged). The two-phase shape is not incidental: Angular's `FetchBackend` captures `window.fetch`
+type-level only, the run-time function returns the answer unchanged), and the bearer sign-in
+(`provideQitsBearerSignIn`, below). The two-phase shape is not incidental: Angular's `FetchBackend` captures `window.fetch`
 on first use, so `initQitsIntegration()` must complete **before** `bootstrapApplication`.
 
 Ported verbatim from the qits fixture (`testing-repo-quarkus-angular`), each encoding a trap
@@ -105,6 +106,23 @@ State snapshots (qits' `docs/features/2026-07-14_capture-state-snapshot.md`):
   mid-store-construction); `onDestroy` unregisters. The supplier is injection-context-free
   (`getState` is a pure signal read). `@ngrx/signals` is a required peer — the FESM imports it
   statically, so every consumer must resolve it even without using the feature.
+
+Bearer sign-in (`src/lib/sign-in/`, epic qits-543; moved from qits-landing-app's `ng serve`
+sign-in, `core/auth/dev-*.ts`, with the `dev` naming dropped):
+
+- `provide-qits-bearer-sign-in.ts` — `provideQitsBearerSignIn(options)` (`clientId`,
+  `platformDomain?`, `idpOrigin?`, `callbackRoute?`) wires `QITS_SIGN_IN` (resolved settings),
+  `QitsTokens`, `QitsSession`, `QitsBearerFetch`, `QITS_EVENT_SOURCE`, `QITS_WEB_SOCKET`, and an environment
+  initializer that `resetConfig`s `auth/callback` to the **front** of the router config (an
+  appended route would sit behind an app's `**`). `qitsBearerInterceptor` is not wired: functional
+  interceptors only enter through `provideHttpClient(withInterceptors([...]))`.
+- `qits-tokens.ts` — PKCE flow, `sessionStorage` store keyed by client id, refresh ahead of
+  expiry, **one refresh in flight** (the idp rotates refresh tokens and revokes the family on
+  reuse), one sign-in redirect per page.
+- `sign-in-settings.ts` — `platformDomainOf()` (first label `qits` = apex) and `isPlatformUrl()`
+  (same origin, or `https` at/under the platform domain): the only hosts that see the bearer.
+- `bearer-web-socket.ts` / `fetch-event-source.ts` — the `qits.bearer` subprotocol offer and the
+  `fetch`-based SSE reader; neither reconnects by itself.
 
 The library is **zoneless-first**: no `zone.js`, no `@opentelemetry/context-zone` — the default
 stack context manager is correct. The `instrumentation-user-interaction` `zone.js` peer is

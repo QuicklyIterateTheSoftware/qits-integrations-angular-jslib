@@ -1,0 +1,219 @@
+import { DOCUMENT, PLATFORM_ID } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
+import { s256Challenge } from './pkce';
+import {
+  pendingKey,
+  QITS_SIGN_IN_FETCH,
+  QitsTokens,
+  REFRESH_AHEAD_MS,
+  tokensKey,
+} from './qits-tokens';
+import { QITS_SIGN_IN } from './sign-in-settings';
+
+const CLIENT_ID = 'qits-landing-dev';
+const TOKENS_KEY = tokensKey(CLIENT_ID);
+const PENDING_PREFIX = pendingKey(CLIENT_ID, '');
+
+/** The idp's token answer, as the idp sends it (fields per the idp's `/idp/token`). */
+function answer(access: string, refresh: string, expiresIn = 900): Response {
+  return new Response(
+    JSON.stringify({
+      access_token: access,
+      token_type: 'Bearer',
+      expires_in: expiresIn,
+      refresh_token: refresh,
+      refresh_expires_in: 720 * 3600,
+    }),
+    { status: 200, headers: { 'content-type': 'application/json' } },
+  );
+}
+
+describe('QitsTokens', () => {
+  const assign = vi.fn();
+  let posts: { url: string; form: URLSearchParams; init: RequestInit }[];
+  let replies: (() => Promise<Response>)[];
+
+  function tokens(): QitsTokens {
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: PLATFORM_ID, useValue: 'browser' },
+        {
+          provide: DOCUMENT,
+          useValue: { location: { assign, origin: 'http://localhost:4200' } },
+        },
+        {
+          provide: QITS_SIGN_IN,
+          useValue: {
+            clientId: CLIENT_ID,
+            platformDomain: 'qits.example',
+            idpOrigin: 'https://idp.qits.example',
+          },
+        },
+        {
+          provide: QITS_SIGN_IN_FETCH,
+          useValue: (url: string, init: RequestInit) => {
+            posts.push({ url, form: new URLSearchParams(String(init.body)), init });
+            const reply = replies.shift();
+            if (!reply) throw new Error('no reply queued');
+            return reply();
+          },
+        },
+        QitsTokens,
+      ],
+    });
+    return TestBed.inject(QitsTokens);
+  }
+
+  /** Starts a sign-in and answers the `state` it sent to the idp. */
+  async function login(service: QitsTokens, path = '/projects'): Promise<URL> {
+    await service.login(path);
+    return new URL(assign.mock.calls.at(-1)?.[0] as string);
+  }
+
+  /** Signs in completely: login, callback, code swap. */
+  async function signIn(service: QitsTokens, access = 'A1', refresh = 'R1'): Promise<void> {
+    const authorize = await login(service);
+    replies.push(async () => answer(access, refresh));
+    await service.complete(
+      new URLSearchParams({ code: 'C', state: authorize.searchParams.get('state') ?? '' }),
+    );
+  }
+
+  beforeEach(() => {
+    sessionStorage.clear();
+    assign.mockReset();
+    posts = [];
+    replies = [];
+  });
+
+  it('sends the visitor to the authorize page with an S256 challenge of the kept verifier', async () => {
+    const authorize = await login(tokens(), '/projects/qits/work');
+    expect(`${authorize.origin}${authorize.pathname}`).toBe(
+      'https://idp.qits.example/idp/authorize',
+    );
+    const query = authorize.searchParams;
+    expect(query.get('response_type')).toBe('code');
+    expect(query.get('client_id')).toBe(CLIENT_ID);
+    expect(query.get('redirect_uri')).toBe('http://localhost:4200/auth/callback');
+    expect(query.get('code_challenge_method')).toBe('S256');
+    const pending = JSON.parse(sessionStorage.getItem(PENDING_PREFIX + query.get('state')) ?? '{}');
+    expect(pending.returnPath).toBe('/projects/qits/work');
+    expect(query.get('code_challenge')).toBe(await s256Challenge(pending.verifier));
+  });
+
+  it('starts one sign-in per page', async () => {
+    const service = tokens();
+    await service.login('/a');
+    await service.login('/b');
+    expect(assign).toHaveBeenCalledTimes(1);
+  });
+
+  it('swaps the code with the verifier, keeps the tokens and answers the path to go back to', async () => {
+    const service = tokens();
+    const authorize = await login(service, '/projects/qits');
+    const state = authorize.searchParams.get('state') ?? '';
+    const { verifier } = JSON.parse(sessionStorage.getItem(PENDING_PREFIX + state) ?? '{}');
+    replies.push(async () => answer('A1', 'R1'));
+    expect(await service.complete(new URLSearchParams({ code: 'C', state }))).toBe(
+      '/projects/qits',
+    );
+    const [post] = posts;
+    expect(post.url).toBe('https://idp.qits.example/idp/token');
+    expect(post.init.credentials).toBeUndefined();
+    expect(Object.fromEntries(post.form)).toEqual({
+      grant_type: 'authorization_code',
+      client_id: CLIENT_ID,
+      code: 'C',
+      redirect_uri: 'http://localhost:4200/auth/callback',
+      code_verifier: verifier,
+    });
+    expect(await service.accessToken()).toBe('A1');
+    expect(sessionStorage.getItem(PENDING_PREFIX + state)).toBeNull();
+    expect(JSON.parse(sessionStorage.getItem(TOKENS_KEY) ?? '{}').refreshToken).toBe('R1');
+  });
+
+  it('refuses a state this tab did not start, and a state used twice', async () => {
+    const service = tokens();
+    await expect(
+      service.complete(new URLSearchParams({ code: 'C', state: 'forged' })),
+    ).rejects.toThrow(/state/);
+    const state = (await login(service)).searchParams.get('state') ?? '';
+    replies.push(async () => answer('A1', 'R1'));
+    await service.complete(new URLSearchParams({ code: 'C', state }));
+    await expect(service.complete(new URLSearchParams({ code: 'C', state }))).rejects.toThrow(
+      /state/,
+    );
+    expect(posts).toHaveLength(1);
+  });
+
+  it("reports the idp's refusal", async () => {
+    const service = tokens();
+    const state = (await login(service)).searchParams.get('state') ?? '';
+    await expect(
+      service.complete(new URLSearchParams({ error: 'access_denied', state })),
+    ).rejects.toThrow(/access_denied/);
+    expect(posts).toHaveLength(0);
+  });
+
+  it('keeps the tokens across a reload', async () => {
+    await signIn(tokens());
+    TestBed.resetTestingModule();
+    expect(await tokens().accessToken()).toBe('A1');
+  });
+
+  it('refreshes once for callers at the same time, and keeps the rotated refresh token', async () => {
+    const service = tokens();
+    await signIn(service);
+    let release!: () => void;
+    replies.push(() => new Promise((resolve) => (release = () => resolve(answer('A2', 'R2')))));
+    const both = Promise.all([service.refresh(), service.refresh()]);
+    release();
+    expect(await both).toEqual(['A2', 'A2']);
+    expect(posts.slice(1).map((post) => Object.fromEntries(post.form))).toEqual([
+      { grant_type: 'refresh_token', client_id: CLIENT_ID, refresh_token: 'R1' },
+    ]);
+    replies.push(async () => answer('A3', 'R3'));
+    expect(await service.refresh()).toBe('A3');
+    expect(posts.at(-1)?.form.get('refresh_token')).toBe('R2');
+  });
+
+  it('retries with a token a refresh already brought, instead of refreshing again', async () => {
+    const service = tokens();
+    await signIn(service);
+    replies.push(async () => answer('A2', 'R2'));
+    await service.refresh();
+    expect(await service.retryToken('A1')).toBe('A2');
+    expect(posts).toHaveLength(2);
+  });
+
+  it('forgets the tokens when the idp refuses the refresh', async () => {
+    const service = tokens();
+    await signIn(service);
+    replies.push(async () => new Response('{"error":"invalid_grant"}', { status: 400 }));
+    expect(await service.refresh()).toBeNull();
+    expect(await service.accessToken()).toBeNull();
+    expect(sessionStorage.getItem(TOKENS_KEY)).toBeNull();
+  });
+
+  it('refreshes on its own before the access token expires', async () => {
+    vi.useFakeTimers();
+    try {
+      const service = tokens();
+      await signIn(service, 'A1', 'R1');
+      replies.push(async () => answer('A2', 'R2'));
+      await vi.advanceTimersByTimeAsync(900_000 - REFRESH_AHEAD_MS);
+      expect(posts.at(-1)?.form.get('refresh_token')).toBe('R1');
+      expect(await service.accessToken()).toBe('A2');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('forgets everything on logout', async () => {
+    const service = tokens();
+    await signIn(service);
+    service.logout();
+    expect(await service.accessToken()).toBeNull();
+    expect(sessionStorage.getItem(TOKENS_KEY)).toBeNull();
+  });
+});
