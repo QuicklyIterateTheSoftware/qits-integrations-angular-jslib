@@ -229,7 +229,12 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   not the Node reader. The lint rule `browser-spec-data-from-golden-masters` is only a heuristic;
   the guard is the guarantee. `pactedGoldenMasters()` (in `@qits/angular/testing`, Node-side) refuses
   a body no interaction in the committed pact uses. Every error ends in the same fix: a new provider
-  state plus a pact interaction for it.
+  state plus a pact interaction for it. The guard also notes the route each recording is shown on
+  (ticket qits-1946; `takeRouteRecords()`), and `route-ledger.ts` in `@qits/angular/testing` keeps
+  those in a committed ledger (`goldenMasterRoutes`, a browser command) that `addGoldenInteraction`
+  reads through `useRouteLookup(routeLedger(...))` into `qits-trigger.route`. The route pattern is
+  `matchedRoutePath` from the main entry, imported by package name (`tsconfig.spec.json` maps
+  `@qits/angular` to `src/public-api.ts` for the specs; ng-packagr resolves it to the built entry).
 - **`@qits/angular/eslint`** (`projects/qits-integrations-angular/eslint/`): plain ESM, no build.
   ng-packagr copies the `.mjs` files as assets (minus `test/`), and the source `package.json`'s
   `exports["./eslint"]` points at them; ng-packagr merges that with the exports it generates.

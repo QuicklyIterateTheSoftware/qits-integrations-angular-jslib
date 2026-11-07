@@ -365,6 +365,13 @@ assertPactFile(
   recording names another media type), and a body of that media type by Pact's content-type matcher,
   never the bytes. The mock server answers with the example bytes; without `body` only the header
   is bound.
+- **An interaction names the routes it happens on**, when known: `routes: ['projects/:slug']`
+  adds `comments.references.qits-trigger.route`, the route patterns sorted, without duplicates and
+  joined with `, ` (`projects/:slug, projects/:slug/repositories`). Without `routes`, the lookup
+  set once with `useRouteLookup(lookup)` answers, called with the interaction's provider, state and
+  operationId; usually `routeLedger('pacts/routes.json')`, the ledger the browser specs write (see
+  [Which routes a pact interaction happens on](#which-routes-a-pact-interaction-happens-on)). With
+  neither, or `routes: []`, the interaction has no `route` and is written exactly as before.
 - The path is a provider-state expression only when it has a `{param}`.
 - **The library's version is no contract.** `assertPactFile` and `assertPactPart` mask
   `qits-via.version` on both sides: a difference in it alone rewrites the committed file and logs
@@ -461,6 +468,51 @@ guardGoldenMasters();
 // a page spec
 const list = await goldenMaster('a project exists', 'listProjects');
 http.expectOne('/projects/api/projects').flush(list);
+```
+
+### Which routes a pact interaction happens on
+
+A pact interaction names the routes its call happens on (ticket qits-1946), and the browser specs
+are where that is known: they navigate to a route and answer its requests with golden masters.
+The guard notes it, and a committed ledger carries it to the pact specs.
+
+- **The guard notes it.** Whenever it is installed, and whether or not it checks the running test,
+  `guardGoldenMasters()` notes every 2xx `flush` (or `HttpResponse` event) whose body is a
+  recording with a full source (`provider`, `state`, `operationId`, so give `fromGoldenMasters`
+  its `source`), while the TestBed has a router (`provideRouter(...)`) that has matched a route:
+  `{ provider, state, operationId, route }` (type `RouteRecord`), the route as the matched pattern
+  (`projects/:slug/repositories`, from `matchedRoutePath` in `@qits/angular`, which also names
+  `app.route.path` in telemetry). Nothing is noted without a router or a matched route, for a body
+  that is not a recording, or for an answer without a body: **a status-only answer
+  (`flush(null, { status: 204 })`) is not recorded**, so a 204 operation's interaction gets its
+  routes only from `routes`. `takeRouteRecords()` returns what was noted, sorted and without
+  duplicates, and forgets it; `clearRouteRecords()` only forgets.
+- **The ledger keeps it.** `goldenMasterRoutes(ledgerPath, root?)` (from `@qits/angular/testing`)
+  is the Vitest browser command the setup file sends the records to after each spec file. It
+  rewrites the running spec's section of the JSON ledger and nothing else: `{ "<spec path relative
+to root>": [records] }`, records sorted and without duplicates, keys sorted, two-space JSON with a
+  trailing newline, written only when the text changed. An empty list removes the spec's section;
+  the sections of spec files that no longer exist are dropped. `root` defaults to the cwd. Commit
+  the ledger next to the pacts. A run filtered to some tests (`-t`, `.only`) replaces the section
+  with what those tests showed, so run whole spec files before committing.
+- **The pact specs read it.** `routeLedger(ledgerPath)` gives `(provider, state, operationId) =>
+routes`, the routes of every section, sorted and without duplicates (`[]` without a ledger);
+  `useRouteLookup(...)` makes `addGoldenInteraction` ask it. A changed ledger changes the pacts, so
+  regenerate them (`QITS_GOLDEN_UPDATE=true`) after the browser run that changed it.
+
+```ts
+// vitest-browser.config.ts (Node side)
+import { goldenMasterRoutes } from '@qits/angular/testing';
+// … commands: { goldenMaster, goldenMasterRoutes: goldenMasterRoutes('pacts/routes.json') }
+
+// src/testing/browser/setup.ts
+import { guardGoldenMasters, takeRouteRecords } from '@qits/angular/testing/browser';
+guardGoldenMasters();
+afterAll(() => commands.goldenMasterRoutes(takeRouteRecords()));
+
+// src/testing/golden-masters.ts (a module every pact spec imports)
+import { routeLedger, useRouteLookup } from '@qits/angular/testing';
+useRouteLookup(routeLedger('pacts/routes.json'));
 ```
 
 The lint rule `qits/browser-spec-data-from-golden-masters` reports the common mistakes where they
