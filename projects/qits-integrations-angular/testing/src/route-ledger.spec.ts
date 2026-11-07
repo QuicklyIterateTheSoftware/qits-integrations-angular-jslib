@@ -33,12 +33,12 @@ describe('the route ledger', () => {
     root = mkdtempSync(join(tmpdir(), 'qits-routes-'));
     mkdirSync(join(root, 'src/app/routes'), { recursive: true });
     for (const file of [LIST, BOARD]) writeFileSync(join(root, file), '');
-    ledger = join(root, 'pacts/routes.json');
+    ledger = join(root, 'src/testing/browser/routes.json');
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
   it('writes a spec’s records sorted, without duplicates, as stable JSON', () => {
-    const write = goldenMasterRoutes('pacts/routes.json', root);
+    const write = goldenMasterRoutes('src/testing/browser/routes.json', root);
     write(spec(LIST), [
       record('b', 'things'),
       record('a', 'things/:id'),
@@ -53,7 +53,7 @@ describe('the route ledger', () => {
   });
 
   it('replaces only the calling spec’s section, keys sorted', () => {
-    const write = goldenMasterRoutes('pacts/routes.json', root);
+    const write = goldenMasterRoutes('src/testing/browser/routes.json', root);
     write(spec(LIST), [record('a', 'things')]);
     write(spec(BOARD), [record('a', 'boards/:id')]);
     write(spec(LIST), [record('c', 'things')]);
@@ -64,7 +64,7 @@ describe('the route ledger', () => {
   });
 
   it('removes the section of a spec that recorded nothing', () => {
-    const write = goldenMasterRoutes('pacts/routes.json', root);
+    const write = goldenMasterRoutes('src/testing/browser/routes.json', root);
     write(spec(LIST), [record('a', 'things')]);
     write(spec(BOARD), [record('a', 'boards/:id')]);
     write(spec(LIST), []);
@@ -72,12 +72,12 @@ describe('the route ledger', () => {
   });
 
   it('writes no file for a first spec that recorded nothing', () => {
-    goldenMasterRoutes('pacts/routes.json', root)(spec(LIST), []);
+    goldenMasterRoutes('src/testing/browser/routes.json', root)(spec(LIST), []);
     expect(existsSync(ledger)).toBe(false);
   });
 
   it('drops the sections of spec files that no longer exist', () => {
-    const write = goldenMasterRoutes('pacts/routes.json', root);
+    const write = goldenMasterRoutes('src/testing/browser/routes.json', root);
     write(spec(BOARD), [record('a', 'boards/:id')]);
     rmSync(join(root, BOARD));
     write(spec(LIST), [record('a', 'things')]);
@@ -85,7 +85,7 @@ describe('the route ledger', () => {
   });
 
   it('leaves the file untouched when nothing changed', () => {
-    const write = goldenMasterRoutes('pacts/routes.json', root);
+    const write = goldenMasterRoutes('src/testing/browser/routes.json', root);
     write(spec(LIST), [record('a', 'things')]);
     const old = new Date('2026-01-01T00:00:00Z');
     utimesSync(ledger, old, old);
@@ -94,18 +94,20 @@ describe('the route ledger', () => {
   });
 
   it('keys a section by the spec’s path relative to the root, with / separators', () => {
-    goldenMasterRoutes('pacts/routes.json', root)({ testPath: LIST }, [record('a', 'things')]);
+    goldenMasterRoutes('src/testing/browser/routes.json', root)({ testPath: LIST }, [
+      record('a', 'things'),
+    ]);
     expect(Object.keys(JSON.parse(written()))).toEqual([LIST]);
   });
 
   it('refuses a call outside a test file', () => {
     expect(() =>
-      goldenMasterRoutes('pacts/routes.json', root)({ testPath: undefined }, []),
+      goldenMasterRoutes('src/testing/browser/routes.json', root)({ testPath: undefined }, []),
     ).toThrow(/outside a test file/);
   });
 
   it('reads the routes of an interaction across every section', () => {
-    const write = goldenMasterRoutes('pacts/routes.json', root);
+    const write = goldenMasterRoutes('src/testing/browser/routes.json', root);
     write(spec(LIST), [record('a', 'things'), record('a', 'things/:id', 'getThing')]);
     write(spec(BOARD), [record('a', 'boards/:id'), record('a', 'things')]);
     const routes = routeLedger(ledger);

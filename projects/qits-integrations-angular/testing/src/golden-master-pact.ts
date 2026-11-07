@@ -323,7 +323,7 @@ let routeLookup: RouteLookup | undefined;
 /**
  * Sets where {@link addGoldenInteraction} finds an interaction's routes when it names none: called
  * with the interaction's provider, state and operationId. Usually the ledger the browser specs
- * write, set once in a module every pact spec imports: `useRouteLookup(routeLedger('pacts/routes.json'))`.
+ * write, set once in a module every pact spec imports: `useRouteLookup(routeLedger('src/testing/browser/routes.json'))`.
  * Returns a function that puts the previous lookup back; `undefined` removes it.
  */
 export function useRouteLookup(lookup: RouteLookup | undefined): () => void {

@@ -369,7 +369,8 @@ assertPactFile(
   adds `comments.references.qits-trigger.route`, the route patterns sorted, without duplicates and
   joined with `, ` (`projects/:slug, projects/:slug/repositories`). Without `routes`, the lookup
   set once with `useRouteLookup(lookup)` answers, called with the interaction's provider, state and
-  operationId; usually `routeLedger('pacts/routes.json')`, the ledger the browser specs write (see
+  operationId; usually `routeLedger('src/testing/browser/routes.json')`, the ledger the browser
+  specs write (see
   [Which routes a pact interaction happens on](#which-routes-a-pact-interaction-happens-on)). With
   neither, or `routes: []`, the interaction has no `route` and is written exactly as before.
 - The path is a provider-state expression only when it has a `{param}`.
@@ -492,8 +493,9 @@ The guard notes it, and a committed ledger carries it to the pact specs.
   rewrites the running spec's section of the JSON ledger and nothing else: `{ "<spec path relative
 to root>": [records] }`, records sorted and without duplicates, keys sorted, two-space JSON with a
   trailing newline, written only when the text changed. An empty list removes the spec's section;
-  the sections of spec files that no longer exist are dropped. `root` defaults to the cwd. Commit
-  the ledger next to the pacts. A run filtered to some tests (`-t`, `.only`) replaces the section
+  the sections of spec files that no longer exist are dropped. `root` defaults to the cwd. Keep it
+  at `src/testing/browser/routes.json` and commit it: that is the path the `screenshot-baselines`
+  automation commits and QA checks for staleness, beside the references. A run filtered to some tests (`-t`, `.only`) replaces the section
   with what those tests showed, so run whole spec files before committing.
 - **The pact specs read it.** `routeLedger(ledgerPath)` gives `(provider, state, operationId) =>
 routes`, the routes of every section, sorted and without duplicates (`[]` without a ledger);
@@ -503,7 +505,7 @@ routes`, the routes of every section, sorted and without duplicates (`[]` withou
 ```ts
 // vitest-browser.config.ts (Node side)
 import { goldenMasterRoutes } from '@qits/angular/testing';
-// … commands: { goldenMaster, goldenMasterRoutes: goldenMasterRoutes('pacts/routes.json') }
+// … commands: { goldenMaster, goldenMasterRoutes: goldenMasterRoutes('src/testing/browser/routes.json') }
 
 // src/testing/browser/setup.ts
 import { guardGoldenMasters, takeRouteRecords } from '@qits/angular/testing/browser';
@@ -512,7 +514,7 @@ afterAll(() => commands.goldenMasterRoutes(takeRouteRecords()));
 
 // src/testing/golden-masters.ts (a module every pact spec imports)
 import { routeLedger, useRouteLookup } from '@qits/angular/testing';
-useRouteLookup(routeLedger('pacts/routes.json'));
+useRouteLookup(routeLedger('src/testing/browser/routes.json'));
 ```
 
 The lint rule `qits/browser-spec-data-from-golden-masters` reports the common mistakes where they
