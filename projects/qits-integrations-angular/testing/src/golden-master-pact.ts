@@ -20,6 +20,10 @@
  * interaction names the media type it expects (`response`), and the pact binds that `Content-Type`
  * and, given example bytes, a body of that media type.
  *
+ * An interaction names the ROUTES it happens on, when known (`routes`, or the lookup set with
+ * {@link useRouteLookup}; ticket qits-1946), as `comments.references.qits-trigger.route`: the
+ * matched route patterns, sorted and joined with `, `. Without any, the interaction has no `route`.
+ *
  * A call a LIBRARY makes on the consumer's behalf names the library too (`via`, written as
  * `comments.references.qits-via`); the comparison with the committed pact ignores the library's
  * version label, and refreshes it in place.
@@ -55,6 +59,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { MatchersV3, type PactV4, type TemplateQuery } from '@pact-foundation/pact';
+import type { RouteLookup } from './route-ledger';
 import {
   maskViaVersions,
   reportViaRefresh,
@@ -305,6 +310,28 @@ export interface GoldenInteraction {
   readonly via?: Via;
   /** Set for an answer that is not JSON; see {@link NonJsonResponse}. */
   readonly response?: NonJsonResponse;
+  /**
+   * The route patterns the call happens on (`projects/:slug/repositories`), written sorted, without
+   * duplicates and joined with `, ` as `qits-trigger.route`. Omitted: the lookup set with
+   * {@link useRouteLookup} answers, if any. Empty: no `route`, as without either.
+   */
+  readonly routes?: readonly string[];
+}
+
+let routeLookup: RouteLookup | undefined;
+
+/**
+ * Sets where {@link addGoldenInteraction} finds an interaction's routes when it names none: called
+ * with the interaction's provider, state and operationId. Usually the ledger the browser specs
+ * write, set once in a module every pact spec imports: `useRouteLookup(routeLedger('pacts/routes.json'))`.
+ * Returns a function that puts the previous lookup back; `undefined` removes it.
+ */
+export function useRouteLookup(lookup: RouteLookup | undefined): () => void {
+  const previous = routeLookup;
+  routeLookup = lookup;
+  return () => {
+    routeLookup = previous;
+  };
 }
 
 /**
@@ -318,7 +345,8 @@ export interface GoldenInteraction {
  * - the recorded status, and the parts of the recorded body named in `consumes`, under matchers
  *   (see the file comment);
  * - `comments.references`: `qits-call` (provider and operation) and `qits-trigger`, which the
- *   provider's verification requires, and `qits-via` (repository, artifact, version) when `via`
+ *   provider's verification requires, with `route` when the interaction has routes (`routes`, or
+ *   the {@link useRouteLookup} lookup), and `qits-via` (repository, artifact, version) when `via`
  *   is set;
  * - for a `response` that is not JSON: its `Content-Type` and, given example bytes, a body of that
  *   media type, in place of a JSON body.
@@ -329,7 +357,16 @@ export interface GoldenInteraction {
 export function addGoldenInteraction(
   pact: PactV4,
   masters: GoldenMasters,
-  { provider, state, operationId, trigger, consumes, via, response: nonJson }: GoldenInteraction,
+  {
+    provider,
+    state,
+    operationId,
+    trigger,
+    consumes,
+    via,
+    response: nonJson,
+    routes,
+  }: GoldenInteraction,
 ): V4InteractionWithResponse {
   const op = masters.operation(state, operationId);
   if (nonJson && consumes.length) {
@@ -354,6 +391,8 @@ export function addGoldenInteraction(
   for (const [key, value] of Object.entries(trigger)) {
     interaction = interaction.reference('qits-trigger', key, value);
   }
+  const on = [...new Set(routes ?? routeLookup?.(provider, state, operationId) ?? [])].sort();
+  if (on.length) interaction = interaction.reference('qits-trigger', 'route', on.join(', '));
   if (via) {
     interaction = interaction
       .reference('qits-via', 'repository', via.repository)

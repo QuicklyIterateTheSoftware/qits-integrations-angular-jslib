@@ -16,9 +16,18 @@
  *
  * Identity is set up here, in the browser: a Vitest browser command runs on the Node side and sends
  * JSON, so every call gives a new object. Wrap the command, never the Node-side reader.
+ *
+ * The guard also notes which route each recorded answer was shown on (ticket qits-1946): a flush of
+ * a recording whose source names provider, state and operation, while the TestBed's router has
+ * matched a route, is a {@link RouteRecord}. {@link takeRouteRecords} hands them to the Node side
+ * (`goldenMasterRoutes` in `@qits/angular/testing`), which keeps them in a ledger the pact specs
+ * read, so each interaction names the routes it happens on.
  */
 import { HttpEventType, type HttpEvent } from '@angular/common/http';
 import { TestRequest } from '@angular/common/http/testing';
+import { TestBed } from '@angular/core/testing';
+import { ROUTES, Router } from '@angular/router';
+import { matchedRoutePath } from '@qits/angular';
 
 /** Where a recording came from, as far as the reader knows; it makes error messages exact. */
 export interface RecordingSource {
@@ -229,10 +238,12 @@ export function guardGoldenMasters(options: GoldenMasterGuardOptions = {}): () =
 
   proto.flush = function (this: TestRequest, body, opts = {}) {
     if (when()) checkAnswer(this, body, opts.status);
+    noteRoute(body, opts.status);
     return flush.call(this, body, opts);
   };
   proto.event = function (this: TestRequest, sent: HttpEvent<unknown>) {
     if (when()) checkEvent(this, sent);
+    if (sent.type === HttpEventType.Response) noteRoute(sent.body, sent.status);
     return event.call(this, sent);
   };
 
@@ -242,6 +253,77 @@ export function guardGoldenMasters(options: GoldenMasterGuardOptions = {}): () =
     if (uninstall === remove) uninstall = undefined;
   };
   return (uninstall = remove);
+}
+
+/**
+ * One recorded answer shown on one route: the route pattern the router matched (`matchedRoutePath`
+ * from `@qits/angular`, as `app.route.path` names it), such as `projects/:slug/repositories`.
+ */
+export interface RouteRecord {
+  /** The provider's repository name, as the recording's source names it. */
+  readonly provider: string;
+  readonly state: string;
+  readonly operationId: string;
+  readonly route: string;
+}
+
+const routeRecords = new Map<string, RouteRecord>();
+
+const recordKey = (r: RouteRecord) => [r.provider, r.state, r.operationId, r.route].join('\u0000');
+
+/**
+ * Notes the route a 2xx answer carrying a recording is shown on. Whether the guard checks the test
+ * makes no difference; nothing is noted for an answer without a body (a 204), a body that is not a
+ * recording, a source that does not name provider, state and operation, or a TestBed without a
+ * router that has matched a route.
+ */
+function noteRoute(body: unknown, status: number | undefined): void {
+  if (status !== undefined && (status < 200 || status >= 300)) return;
+  if (body === null || typeof body !== 'object') return;
+  const source = recordings.get(body);
+  if (!source?.provider || !source.state || !source.operationId) return;
+  const route = currentRoute();
+  if (!route) return;
+  const record: RouteRecord = {
+    provider: source.provider,
+    state: source.state,
+    operationId: source.operationId,
+    route,
+  };
+  routeRecords.set(recordKey(record), record);
+}
+
+/**
+ * The route pattern the TestBed's router has matched; undefined without one. `ROUTES` is asked
+ * first because `Router` is `providedIn: 'root'`: injecting it would make a router for a spec that
+ * has none.
+ */
+function currentRoute(): string | undefined {
+  try {
+    if (!TestBed.inject(ROUTES, null)) return undefined;
+    const router = TestBed.inject(Router, null);
+    return router ? matchedRoutePath(router.routerState.snapshot) || undefined : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The routes noted since the last call (or {@link clearRouteRecords}), sorted and without
+ * duplicates, and forgets them. Call it in the browser specs' setup file, after each spec file,
+ * and send the list to the Node side: `afterAll(() => commands.goldenMasterRoutes(takeRouteRecords()))`.
+ */
+export function takeRouteRecords(): RouteRecord[] {
+  const out = [...routeRecords.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([, record]) => record);
+  routeRecords.clear();
+  return out;
+}
+
+/** Forgets the routes noted so far. */
+export function clearRouteRecords(): void {
+  routeRecords.clear();
 }
 
 function checkAnswer(request: TestRequest, body: unknown, status: number | undefined): void {

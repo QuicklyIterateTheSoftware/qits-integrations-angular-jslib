@@ -1,14 +1,19 @@
 import { HttpClient, HttpEventType, HttpResponse, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { Component } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
+import { RouterTestingHarness } from '@angular/router/testing';
 import {
   assertRecorded,
+  clearRouteRecords,
   fromGoldenMasters,
   goldenMasterAdvice,
   goldenMastersRequired,
   guardGoldenMasters,
   isRecorded,
   recorded,
+  takeRouteRecords,
 } from './golden-master-guard';
 
 /** A golden master body as the Node side sends it: fresh JSON on every read. */
@@ -283,5 +288,112 @@ describe('guardGoldenMasters by default', () => {
     } finally {
       unguard();
     }
+  });
+});
+
+describe('route records', () => {
+  @Component({ template: '' })
+  class Page {}
+
+  const projects = fromGoldenMasters(read, (state?: string, operationId?: string) => ({
+    provider: 'qits-projects-service',
+    state,
+    operationId,
+  }));
+  let unguard: () => void;
+
+  const routed = async (url: string) => {
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([
+          {
+            path: 'projects/:slug',
+            children: [{ path: 'repositories', component: Page }],
+          },
+          { path: '', component: Page },
+        ]),
+      ],
+    });
+    await (await RouterTestingHarness.create()).navigateByUrl(url);
+  };
+  const answer = (body: object | null, opts?: { status?: number; statusText?: string }) => {
+    TestBed.inject(HttpClient)
+      .get('/api/x')
+      .subscribe({ error: () => undefined });
+    TestBed.inject(HttpTestingController).expectOne('/api/x').flush(body, opts);
+  };
+
+  beforeEach(() => {
+    clearRouteRecords();
+    unguard = guardGoldenMasters({ when: () => true });
+  });
+  afterEach(() => unguard());
+
+  it('notes the matched route of a recording with a full source', async () => {
+    await routed('/projects/demo/repositories');
+    const list = await projects<List>('a project exists', 'listProjects');
+    answer(list);
+    answer(list.entries);
+    expect(takeRouteRecords()).toEqual([
+      {
+        provider: 'qits-projects-service',
+        state: 'a project exists',
+        operationId: 'listProjects',
+        route: 'projects/:slug/repositories',
+      },
+    ]);
+    expect(takeRouteRecords()).toEqual([]);
+  });
+
+  it('notes them sorted, and also while the guard checks nothing', async () => {
+    unguard();
+    unguard = guardGoldenMasters({ when: () => false });
+    await routed('/projects/demo/repositories');
+    answer(await projects<List>('b state', 'listProjects'));
+    answer(await projects<List>('a state', 'listProjects'));
+    answer({ hand: 'written' });
+    expect(takeRouteRecords().map((r) => r.state)).toEqual(['a state', 'b state']);
+  });
+
+  it('notes nothing without a router, a matched path, a body or a full source', async () => {
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+    answer(await projects<List>('a project exists', 'listProjects'));
+    expect(takeRouteRecords()).toEqual([]);
+    TestBed.resetTestingModule();
+
+    await routed('/');
+    answer(await projects<List>('a project exists', 'listProjects'));
+    expect(takeRouteRecords()).toEqual([]);
+    TestBed.resetTestingModule();
+
+    await routed('/projects/demo/repositories');
+    answer(null, { status: 204, statusText: 'No Content' });
+    answer(await fromGoldenMasters(read)<List>());
+    answer(await projects<List>('a project exists', 'listProjects'), {
+      status: 500,
+      statusText: 'Server Error',
+    });
+    expect(takeRouteRecords()).toEqual([]);
+  });
+
+  it('notes a response sent as an event', async () => {
+    await routed('/projects/demo/repositories');
+    const list = await projects<List>('a project exists', 'listProjects');
+    TestBed.inject(HttpClient).get('/api/x').subscribe();
+    TestBed.inject(HttpTestingController)
+      .expectOne('/api/x')
+      .event(new HttpResponse({ body: list, status: 200 }));
+    expect(takeRouteRecords().map((r) => r.route)).toEqual(['projects/:slug/repositories']);
+  });
+
+  it('forgets them on clear', async () => {
+    await routed('/projects/demo/repositories');
+    answer(await projects<List>('a project exists', 'listProjects'));
+    clearRouteRecords();
+    expect(takeRouteRecords()).toEqual([]);
   });
 });

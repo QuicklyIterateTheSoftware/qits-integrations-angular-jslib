@@ -17,16 +17,9 @@
  * two specs updating at once do not lose each other's part. A difference confined to
  * `qits-via.version` replaces them the same way without the switch, as `assertPactFile` does.
  */
-import {
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { withLock } from './file-lock';
 import {
   interactionKey,
   maskViaVersions,
@@ -124,26 +117,4 @@ export function assertPactPart(
     `${committed} ${committedPact ? `differs from what this spec generates for ${operations.map(named)}` : 'does not exist'}. ` +
       `If the change is intended, regenerate it in this change: ${updateSwitch}=true npm test`,
   );
-}
-
-/** Runs `body` while holding an exclusive lock file; waits up to ten seconds for it. */
-function withLock(lock: string, body: () => void): void {
-  const deadline = Date.now() + 10_000;
-  for (;;) {
-    try {
-      closeSync(openSync(lock, 'wx'));
-      break;
-    } catch {
-      if (Date.now() > deadline) throw new Error(`could not take ${lock}`);
-      const until = Date.now() + 25;
-      while (Date.now() < until) {
-        // busy-wait: the test runner gives no sync sleep
-      }
-    }
-  }
-  try {
-    body();
-  } finally {
-    rmSync(lock, { force: true });
-  }
 }

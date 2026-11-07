@@ -9,6 +9,7 @@ import {
   examplePath,
   exampleQuery,
   goldenMasters,
+  useRouteLookup,
 } from './golden-master-pact';
 
 const PACKAGE = '@qits/demo-golden-masters';
@@ -293,6 +294,59 @@ describe('golden-master-pact', () => {
         'qits-call',
         'qits-trigger',
       ]);
+    });
+  });
+
+  describe('routes', () => {
+    const trigger = { kind: 'ui', app: 'qits-demo-app', interaction: 'open-thing' } as const;
+    let restore: () => void = () => undefined;
+    afterEach(() => restore());
+
+    /** Adds getThing with `routes` (when given) and returns its qits-trigger as written. */
+    async function triggerOf(routes?: readonly string[], dirName = 'pacts-routes') {
+      const masters = goldenMasters(PACKAGE, 'qits-demo', root);
+      const dir = join(root, dirName);
+      const pact = new PactV4({ consumer: 'qits-demo-app', provider: 'qits-demo-service', dir });
+      await addGoldenInteraction(pact, masters, {
+        provider: 'qits-demo-service',
+        state: 'a thing exists',
+        operationId: 'getThing',
+        trigger,
+        consumes: ['name'],
+        ...(routes ? { routes } : {}),
+      }).executeTest(async (server) => {
+        await fetch(`${server.url}/things/${ID}`);
+      });
+      const file = join(dir, 'qits-demo-app-qits-demo-service.json');
+      return JSON.parse(readFileSync(file, 'utf8')).interactions[0].comments.references[
+        'qits-trigger'
+      ];
+    }
+
+    it('names the routes, sorted and without duplicates, as qits-trigger.route', async () => {
+      expect(await triggerOf(['things/:id', 'boards/:id/things', 'things/:id'])).toEqual({
+        ...trigger,
+        route: 'boards/:id/things, things/:id',
+      });
+    });
+
+    it('writes no route without routes, or with none', async () => {
+      expect(await triggerOf()).toEqual(trigger);
+      expect(await triggerOf([], 'pacts-routes-empty')).toEqual(trigger);
+    });
+
+    it('asks the lookup when the interaction names no routes', async () => {
+      const asked: string[][] = [];
+      restore = useRouteLookup((provider, state, operationId) => {
+        asked.push([provider, state, operationId]);
+        return ['things/:id'];
+      });
+      expect((await triggerOf()).route).toBe('things/:id');
+      expect(asked).toEqual([['qits-demo-service', 'a thing exists', 'getThing']]);
+      expect((await triggerOf(['boards'], 'pacts-routes-own'))['route']).toBe('boards');
+      expect(await triggerOf([], 'pacts-routes-none')).toEqual(trigger);
+      restore();
+      expect(await triggerOf(undefined, 'pacts-routes-restored')).toEqual(trigger);
     });
   });
 

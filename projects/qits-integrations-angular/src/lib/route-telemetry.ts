@@ -69,8 +69,12 @@ export function installRouteTelemetry(router: Router): void {
   });
 }
 
-/** The matched config path ("greeting/:name"), not the concrete URL — groups without cardinality. */
-function matchedRoutePath(state: RouterStateSnapshot): string {
+/**
+ * The matched config path ("greeting/:name"), not the concrete URL — groups without cardinality.
+ * Exported: the golden-master guard (`@qits/angular/testing/browser`) records the same pattern as
+ * the route a pact interaction happens on, so the pact and `app.route.path` name a route alike.
+ */
+export function matchedRoutePath(state: RouterStateSnapshot): string {
   const segments: string[] = [];
   for (let node: ActivatedRouteSnapshot | null = state.root; node; node = node.firstChild) {
     if (node.routeConfig?.path) {
