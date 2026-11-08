@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { dirname, join } from 'node:path';
 import { strict as assert } from 'node:assert';
 import { screenshots } from '../cli.mjs';
-import { findOrphans, pruneOrphans, screenshotReferences } from '../index.mjs';
+import { findOrphans, freezeSlug, pruneOrphans, screenshotReferences } from '../index.mjs';
 import { DEFAULT_RECORD, fileHash } from '../record.mjs';
 
 mkdirSync('tmp', { recursive: true });
@@ -337,5 +337,170 @@ describe('screenshotReferences', () => {
     screenshotReferences().configureVitest({ vitest, project });
     assert.equal(vitest.config.reporters.length, 0);
     assert.equal(project.config.browser.expect, undefined);
+  });
+});
+
+describe('screenshot freezes', () => {
+  const PAGE = 'src/app/routes/projects/projects.page.browser.spec.ts';
+  const CARD = 'src/app/ui/card/card.browser.spec.ts';
+  const DIR = 'src/testing/browser/freezes';
+  const module = (root, spec, state = 'passed') => ({
+    moduleId: join(root, spec),
+    state: () => state,
+    errors: () => [],
+    children: { allTests: () => [{ result: () => ({ state }) }] },
+  });
+  /** A run: `shots` maps a spec to the freezes it sends (name → html), `modules` its outcomes. */
+  function run(root, { shots = {}, modules, routes, options = { freezes: true } }) {
+    const vitest = { config: { reporters: [] } };
+    const project = { config: { root, browser: { enabled: true } } };
+    screenshotReferences(options).configureVitest({ vitest, project });
+    const [reporter] = vitest.config.reporters;
+    const { qitsFreeze, qitsFreezeRoutes } = project.config.browser.commands;
+    reporter.onTestRunStart();
+    if (routes) qitsFreezeRoutes({}, routes);
+    for (const [spec, freezes] of Object.entries(shots)) {
+      for (const [name, html] of Object.entries(freezes)) {
+        const records = [{ provider: 'qits-projects-service', state: 's', operationId: 'op' }];
+        qitsFreeze(
+          { testPath: join(root, spec) },
+          {
+            name,
+            test: `t ${name}`,
+            html,
+            route: 'projects',
+            records,
+            assets: [],
+          },
+        );
+      }
+    }
+    reporter.onTestRunEnd(modules ?? Object.keys(shots).map((spec) => module(root, spec)));
+    return project;
+  }
+  const manifest = (root, dir = DIR) =>
+    JSON.parse(readFileSync(join(root, dir, 'manifest.json'), 'utf8'));
+  const read = (root, path) => readFileSync(join(root, DIR, path), 'utf8');
+
+  it('slugs a name as Vitest slugs a screenshot name', () => {
+    assert.equal(freezeSlug('loading'), 'loading');
+    assert.equal(freezeSlug('menu/open'), 'menu/open');
+    assert.equal(freezeSlug('detail: an epic (2)'), 'detail-an-epic-2');
+    assert.equal(freezeSlug('page > lists them 1'), 'page-lists-them-1');
+    assert.equal(freezeSlug('../up/x.png'), 'x');
+    assert.equal(freezeSlug('/abs/x.jpg'), 'abs/xjpg');
+  });
+
+  it('registers the commands only with the freezes option', () => {
+    const root = app({});
+    const vitest = { config: { reporters: [] } };
+    const project = { config: { root, browser: { enabled: true } } };
+    screenshotReferences().configureVitest({ vitest, project });
+    assert.equal(project.config.browser.commands, undefined);
+  });
+
+  it('writes each freeze, copies its assets and writes the manifest', () => {
+    const root = app({ [PAGE]: 'spec', [CARD]: 'spec', 'src/fonts/inter.woff2': 'font' });
+    const font =
+      '<style>@font-face { src: url("qits-freeze-asset:/src/fonts/inter.woff2"); }</style>';
+    const routes = [{ path: 'projects', fullPath: 'projects' }];
+    run(root, {
+      routes,
+      shots: {
+        [PAGE]: { list: `${font}<p>list</p>`, 'menu/open': '<p>menu</p>' },
+        [CARD]: { card: '<img src="qits-freeze-asset:/missing.png">' },
+      },
+    });
+    assert.equal(
+      read(root, `${PAGE}/list.html`),
+      '<style>@font-face { src: url("../../../../../assets/inter.woff2"); }</style><p>list</p>',
+    );
+    assert.equal(read(root, 'assets/inter.woff2'), 'font');
+    // A same-origin URL that is no file under the root keeps its URL.
+    assert.equal(read(root, `${CARD}/card.html`), '<img src="/missing.png">');
+    const records = [{ provider: 'qits-projects-service', state: 's', operationId: 'op' }];
+    const text = read(root, 'manifest.json');
+    assert.ok(text.endsWith('}\n'));
+    assert.equal(text, `${JSON.stringify(JSON.parse(text), null, 2)}\n`);
+    assert.deepEqual(JSON.parse(text), {
+      routes,
+      freezes: [
+        {
+          file: `${PAGE}/list.html`,
+          spec: PAGE,
+          test: 't list',
+          name: 'list',
+          route: 'projects',
+          records,
+        },
+        {
+          file: `${PAGE}/menu/open.html`,
+          spec: PAGE,
+          test: 't menu/open',
+          name: 'menu/open',
+          route: 'projects',
+          records,
+        },
+        // Not a page spec: no route.
+        {
+          file: `${CARD}/card.html`,
+          spec: CARD,
+          test: 't card',
+          name: 'card',
+          route: null,
+          records,
+        },
+      ],
+      byRoute: { projects: [`${PAGE}/list.html`, `${PAGE}/menu/open.html`] },
+    });
+    assert.deepEqual(Object.keys(JSON.parse(text).freezes[0]), [
+      'file',
+      'spec',
+      'test',
+      'name',
+      'route',
+      'records',
+    ]);
+  });
+
+  it('replaces only what a run saw completely', () => {
+    const gone = 'src/app/gone/gone.browser.spec.ts';
+    const root = app({ [PAGE]: 'spec', [CARD]: 'spec', [gone]: 'spec', 'src/a.png': 'png' });
+    run(root, {
+      routes: [{ path: 'projects', fullPath: 'projects' }],
+      shots: {
+        [PAGE]: { list: '<p>1</p>', old: '<img src="qits-freeze-asset:/src/a.png">' },
+        [CARD]: { card: '<p>1</p>' },
+        [gone]: { g: '<p>1</p>' },
+      },
+    });
+    rmSync(join(root, gone));
+    // PAGE ran completely without "old"; CARD failed after a changed shot; no routes were sent.
+    run(root, {
+      shots: { [PAGE]: { list: '<p>2</p>' }, [CARD]: { card: '<p>2</p>' } },
+      modules: [module(root, PAGE), module(root, CARD, 'failed')],
+    });
+    assert.equal(read(root, `${PAGE}/list.html`), '<p>2</p>');
+    assert.ok(!existsSync(join(root, DIR, PAGE, 'old.html')));
+    assert.equal(read(root, `${CARD}/card.html`), '<p>1</p>');
+    assert.ok(!existsSync(join(root, DIR, 'src/app/gone')));
+    assert.ok(!existsSync(join(root, DIR, 'assets')), 'an asset no freeze uses is deleted');
+    assert.deepEqual(
+      manifest(root).freezes.map((f) => f.file),
+      [`${PAGE}/list.html`, `${CARD}/card.html`],
+    );
+    assert.deepEqual(manifest(root).routes, [{ path: 'projects', fullPath: 'projects' }]);
+  });
+
+  it('takes another directory and other route specs', () => {
+    const root = app({ [CARD]: 'spec' });
+    run(root, {
+      options: { freezes: { dir: 'out/freezes', routeSpecs: /card\.browser\.spec\.ts$/ } },
+      shots: { [CARD]: { card: '<p>1</p>' } },
+    });
+    assert.deepEqual(manifest(root, 'out/freezes').byRoute, {
+      projects: [`${CARD}/card.html`],
+    });
+    assert.deepEqual(manifest(root, 'out/freezes').routes, []);
   });
 });

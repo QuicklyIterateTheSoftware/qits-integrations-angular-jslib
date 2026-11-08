@@ -6,6 +6,56 @@ export interface ScreenshotReferencesOptions {
    * `node_modules/.cache/@qits/angular/screenshot-references.json`.
    */
   record?: string;
+  /**
+   * Also write the screenshot freezes (ticket qits-1947): every passing `toMatchScreenshot` as
+   * HTML, sent by `freezeScreenshots()` from `@qits/angular/testing/browser` (call it in the setup
+   * file). `true` takes the defaults.
+   */
+  freezes?: boolean | ScreenshotFreezesOptions;
+}
+
+export interface ScreenshotFreezesOptions {
+  /** Where the freezes and `manifest.json` go, relative to the root. Default {@link DEFAULT_FREEZE_DIRECTORY}. */
+  dir?: string;
+  /**
+   * The specs whose freezes name the route the router matched. Default
+   * {@link DEFAULT_ROUTE_SPECS}, the page specs; any other spec's freezes have `route: null`.
+   */
+  routeSpecs?: RegExp;
+}
+
+/** `src/testing/browser/freezes`. */
+export declare const DEFAULT_FREEZE_DIRECTORY: string;
+
+/** `/\.page\.browser\.spec\.[cm]?[jt]sx?$/`. */
+export declare const DEFAULT_ROUTE_SPECS: RegExp;
+
+/** A screenshot's name as its freeze's file name (without `.html`), as Vitest slugs it. */
+export declare function freezeSlug(name: string): string;
+
+/** `<dir>/manifest.json`. */
+export interface FreezeManifest {
+  /** The app's route tree, as `describeRoutes()` gives it. */
+  routes: FreezeRoute[];
+  freezes: {
+    /** Relative to the freeze directory: `<spec>/<name>.html`. */
+    file: string;
+    /** Relative to the root. */
+    spec: string;
+    test: string;
+    name: string;
+    route: string | null;
+    records: { provider: string; state: string; operationId: string }[];
+  }[];
+  /** Route pattern → the freezes (`file`) of page specs on that route. */
+  byRoute: Record<string, string[]>;
+}
+
+export interface FreezeRoute {
+  path: string;
+  fullPath: string;
+  redirectTo?: string;
+  children?: FreezeRoute[];
 }
 
 /**

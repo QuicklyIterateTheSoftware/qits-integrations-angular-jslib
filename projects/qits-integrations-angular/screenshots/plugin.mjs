@@ -6,6 +6,10 @@
  * It wraps `browser.expect.toMatchScreenshot.resolveScreenshotPath` (Vitest's default, or the
  * app's own), which Vitest calls on the Node side for every comparison, and adds a reporter that
  * writes the record when the run ends.
+ *
+ * With the `freezes` option it also writes the screenshot freezes (ticket qits-1947,
+ * `freezes.mjs`): it registers the browser commands `freezeScreenshots()` sends them to, and the
+ * same reporter writes them at the end of the run.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { platform } from 'node:os';
@@ -17,6 +21,7 @@ import {
   fileHash,
   toPosix,
 } from './record.mjs';
+import { FREEZE_COMMAND, FREEZE_ROUTES_COMMAND, freezeWriter } from './freezes.mjs';
 
 /** Vitest's own default (`@vitest/browser`, `defaultOptions.resolveScreenshotPath`). */
 const vitestDefault = ({
@@ -49,11 +54,17 @@ function complete(testModule) {
 }
 
 /**
- * @param {{ record?: string }} [options] `record`: the file to write, relative to the project root
- *   (default `node_modules/.cache/@qits/angular/screenshot-references.json`).
+ * @param {{ record?: string, freezes?: boolean | { dir?: string, routeSpecs?: RegExp } }} [options]
+ *   `record`: the file to write, relative to the project root (default
+ *   `node_modules/.cache/@qits/angular/screenshot-references.json`). `freezes`: write the screenshot
+ *   freezes too, to `dir` (default `src/testing/browser/freezes`), naming the route for the specs
+ *   `routeSpecs` matches (default the page specs, `*.page.browser.spec.ts`).
  */
 export function screenshotReferences(options = {}) {
   const recordOption = options.record ?? DEFAULT_RECORD;
+  const freezeOptions =
+    options.freezes === true ? {} : options.freezes ? options.freezes : undefined;
+  let freezes;
   /** spec path (relative, posix) → Set of reference paths (relative, posix) */
   const seen = new Map();
   let root;
@@ -63,6 +74,7 @@ export function screenshotReferences(options = {}) {
   const reporter = {
     onTestRunStart() {
       seen.clear();
+      freezes?.start();
     },
     onTestRunEnd(testModules) {
       if (root === undefined) return;
@@ -81,6 +93,7 @@ export function screenshotReferences(options = {}) {
         file,
         `${JSON.stringify({ version: RECORD_VERSION, screenshotDirectory, specs }, null, 2)}\n`,
       );
+      freezes?.end(testModules, complete);
     },
   };
 
@@ -106,6 +119,20 @@ export function screenshotReferences(options = {}) {
         };
         wrapped[WRAPPED] = true;
         matcher.resolveScreenshotPath = wrapped;
+      }
+
+      if (freezeOptions) {
+        freezes ??= freezeWriter({ root, ...freezeOptions });
+        const writer = freezes;
+        browser.commands ??= {};
+        browser.commands[FREEZE_COMMAND] = (context, payload) => {
+          writer.add(context.testPath, payload);
+          return null;
+        };
+        browser.commands[FREEZE_ROUTES_COMMAND] = (_context, routes) => {
+          writer.setRoutes(routes);
+          return null;
+        };
       }
 
       // Vitest builds its reporters from the resolved config after every configureVitest hook.
