@@ -257,6 +257,18 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   (`pnpm test:screenshots`) drive the plugin with stand-ins; `vitest-run.test.mjs` (in
   `pnpm test:browser`, needs Chromium) proves it in a real Vitest run. If a Vitest upgrade moves
   either hook, that test fails; the command then finds no record and judges by place only.
+  With `screenshotReferences({ freezes })` it also registers the browser commands `qitsFreeze` /
+  `qitsFreezeRoutes` (`browser.commands`, in the same hook) and writes the screenshot freezes
+  (`freezes.mjs`, ticket qits-1947) from the same reporter: `<dir>/<spec>/<name>.html`, `assets/`,
+  `manifest.json`, replacing only specs that ran completely (`complete()`, shared with the record).
+  The browser half is `freezeScreenshots()` in `@qits/angular/testing/browser`: it overwrites
+  `toMatchScreenshot` on `chai.Assertion.prototype` (chai's `overwriteMethod`; Vitest's
+  `expect.extend` put it there) and freezes the `object` flag after the matcher passed;
+  `freeze-shot.ts` is the serializer (filtered CSS **rules**, never computed styles, so it is
+  renderer-independent — unlike `document-freeze.ts`). `vitest/browser` is imported dynamically
+  there, so importing the entry (the guard) never needs a browser run. The command names are
+  spelled in both halves; keep them in step. `freeze-shot.browser.spec.ts` runs under
+  `test-browser` (the `../testing/**/*.browser.spec.ts` include; `ng test` excludes it).
 
 ## Conventions (inherited from the qits webui)
 

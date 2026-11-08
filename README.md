@@ -615,6 +615,81 @@ false orphan. With `UPDATE_SNAPSHOT` set (an update run, as Vitest reads it), `-
 orphans and exits 0: the job that runs it prunes them next. The command understands Vitest's
 default reference layout only.
 
+## Screenshots frozen as HTML: `freezeScreenshots()` and the `freezes` option
+
+A PNG cannot be searched, followed or inspected. With freezes on, every **passing**
+`toMatchScreenshot` also writes the element it compared as a standalone HTML document, with the CSS
+rules that style it, the route it was on and the golden-master recordings the test showed (ticket
+qits-1947). The two halves:
+
+```ts
+// src/testing/browser/setup.ts (browser side, beside guardGoldenMasters())
+import { freezeScreenshots } from '@qits/angular/testing/browser';
+import { routes } from '../../app/app.routes';
+freezeScreenshots({ routes }); // routes: optional; sent once per spec file, no lazy route is loaded
+
+// vitest-browser.config.ts (Node side)
+plugins: [screenshotReferences({ freezes: true })];
+// or { freezes: { dir: 'src/testing/browser/freezes', routeSpecs: /\.page\.browser\.spec\.ts$/ } }
+```
+
+`freezeScreenshots()` overwrites the matcher once (`chai.util.overwriteMethod` on
+`chai.Assertion.prototype`, `chai` from `vitest`): Vitest's matcher runs first, and when it passed,
+the element `expect.element` resolved is serialized (`freezeShot()`) and sent through the browser
+command `qitsFreeze`; the route tree goes through `qitsFreezeRoutes`. Both are registered by the
+`freezes` option. A failing shot fails the test and freezes nothing. It also clears the guard's
+per-test records before every test (`currentTestRecords()`, the recorded answers flushed since the
+test started, router or not).
+
+What the run writes, under `dir` (default `src/testing/browser/freezes`, the tree the
+`screenshot-baselines` automation commits):
+
+- `<spec path relative to the root>/<name>.html`: one file per screenshot. `<name>` is the
+  screenshot's name slugged as Vitest slugs the PNG's (`menu/open` → `menu/open.html`,
+  `detail: an epic` → `detail-an-epic.html`); an unnamed shot is Vitest's default `<test name> <n>`.
+- `assets/<file name>`: the same-origin files a freeze uses (the test fonts), copied once from the
+  path the URL names under the root (`/src/testing/browser/fonts/x.woff2` →
+  `<root>/src/testing/browser/fonts/x.woff2`), referred to relatively (`../../…/assets/x.woff2`).
+  Two different files with the same name fail the run. A copy no freeze uses any more is deleted.
+- `manifest.json`: `routes` (the tree as `describeRoutes()` gives it: `{path, fullPath, redirectTo?,
+children?}`), `freezes` (`{file, spec, test, name, route, records}`, sorted by `file`, which is
+  relative to `dir`) and `byRoute` (route pattern → files). `route` is the pattern the TestBed's
+  router had matched, and only for specs `routeSpecs` matches (default the page specs,
+  `*.page.browser.spec.ts`): layout and pattern specs mount stand-in routes, so theirs is `null`.
+  Two-space JSON, stable key order, trailing newline.
+
+Every run writes, update run or not, and replaces only what it saw completely: a spec whose tests
+all ran and passed gets exactly the freezes it sent (a shot no test takes any more loses its file),
+a spec file that no longer exists loses its freezes, and a spec that failed, was filtered (`-t`,
+`.only`) or did not run keeps the freezes it had. Never edit a freeze by hand.
+
+The same bytes on every machine and in every test order, so a freeze is a DOM, never pixels:
+
+- `<!doctype html><html><head><meta charset="utf-8"><style>…</style></head><body>…</body></html>`;
+  the ancestors between `<body>` and the element stay as empty shells (tag and attributes), so
+  descendant selectors and `body` styles still apply. A shot of the page freezes `<body>`.
+- Nothing runs: no `<script>`, `<noscript>`, `<template>`, preload links, `on*` attributes,
+  `srcdoc` or `javascript:` URLs.
+- Live state is written into attributes: input `value`/`checked`, option `selected`, textarea
+  text, `open` on `<details>`/`<dialog>`; a `<canvas>` becomes an `<img>` of its pixels.
+- Comments, `ng-reflect-*` and `ng-version` go. `_ngcontent-*`/`_nghost-*` are renamed `c0`, `c1`,
+  … and ids `f0`, `f1`, … in order of appearance, with every reference (`for`, `aria-*`, `list`,
+  `href="#…"`, `url(#…)`, `#id` in the CSS).
+- The CSS is the page's own rules, filtered: a style rule stays when its selector, without
+  pseudo-classes and pseudo-elements, matches the element, something in it or a shell; `@media`,
+  `@supports`, `@container`, `@layer` and `@scope` blocks are filtered the same way; `@layer`
+  statements and `@property` stay; `@font-face` only for the families in use; `@keyframes` and
+  `@starting-style` go, and so do Vitest's own sheets and sheets the page may not read.
+
+Gaps, on purpose:
+
+- **Cross-origin and stubbed images keep their URL** (`https://projects.test/…`, a stubbed
+  figure), so a freeze shows them only where that URL answers. `data:` URLs stay inline.
+- **Status-only answers are not recorded**: as for the route ledger, `flush(null, { status: 204 })`
+  is in no freeze's `records`.
+- **`assets/` is relative to the file.** A consumer that shows a freeze through `srcdoc` (no base
+  URL) must resolve or rewrite the `assets/` URLs itself.
+
 ## Releasing
 
 There is no release command, and there is no longer a push that publishes anything.
