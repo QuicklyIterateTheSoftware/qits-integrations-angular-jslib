@@ -13,7 +13,12 @@
 import type { Routes } from '@angular/router';
 import { beforeAll, beforeEach, chai, expect } from 'vitest';
 import { describeRoutes, type RouteDescription } from './describe-routes';
-import { DEFAULT_RENAMED_CLASSES, freezeShot } from './freeze-shot';
+import {
+  DEFAULT_DROPPED_INLINE_STYLES,
+  DEFAULT_RENAMED_CLASSES,
+  type DroppedInlineStyle,
+  freezeShot,
+} from './freeze-shot';
 import {
   clearTestRecords,
   currentRoutePattern,
@@ -55,6 +60,12 @@ export interface FreezeScreenshotsOptions {
    * giving it replaces the default, so spread the default in to keep it.
    */
   readonly renameClasses?: readonly RegExp[];
+  /**
+   * Inline style properties measured at run time, dropped from the elements a selector matches.
+   * Default {@link DEFAULT_DROPPED_INLINE_STYLES} (the `transform` on xterm's accessibility rows);
+   * giving it replaces the default.
+   */
+  readonly dropInlineStyles?: readonly DroppedInlineStyle[];
 }
 
 const INSTALLED = Symbol.for('qits.freezeScreenshots');
@@ -91,6 +102,7 @@ const counters = new WeakMap<Task, { repeat: number; current: number }>();
  */
 export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void {
   const renameClasses = options.renameClasses ?? DEFAULT_RENAMED_CLASSES;
+  const dropInlineStyles = options.dropInlineStyles ?? DEFAULT_DROPPED_INLINE_STYLES;
   beforeEach(() => clearTestRecords());
   if (options.routes) {
     const routes: RouteDescription[] = describeRoutes(options.routes);
@@ -122,6 +134,7 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
         await original.apply(this, args);
         const freeze = freezeShot(shotTarget(chai.util.flag(this, 'object')), document, {
           renameClasses,
+          dropInlineStyles,
         });
         const payload: ScreenshotFreezePayload = {
           name,

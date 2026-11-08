@@ -289,6 +289,28 @@ describe('freezeShot in a shared page', () => {
     );
   });
 
+  it("drops xterm's measured row transform, and only the properties and elements named", () => {
+    mount(
+      '<div id="shot"><div class="xterm-accessibility" style="width: 835px;">' +
+        '<div role="list" class="xterm-accessibility-tree">' +
+        '<div role="listitem" style="height: 15px; transform: scaleX(0.996885);">a</div>' +
+        '<div role="listitem" style="transform: scaleX(0.99);">b</div></div></div>' +
+        '<p style="transform: scaleX(0.5);">kept</p></div>',
+    );
+    const body = bodyOf(freezeShot(byId('shot')).html);
+    expect(body).not.toContain('scaleX(0.99');
+    expect(body).toContain('<div role="listitem" style="height: 15px;">a</div>');
+    expect(body).toContain('<div role="listitem">b</div>');
+    expect(body).toContain('<div class="xterm-accessibility" style="width: 835px;">');
+    expect(body).toContain('<p style="transform: scaleX(0.5);">kept</p>');
+    // Other rules replace the default.
+    const own = freezeShot(byId('shot'), document, {
+      dropInlineStyles: [{ selector: 'p', properties: ['transform'] }],
+    }).html;
+    expect(bodyOf(own)).toContain('<p>kept</p>');
+    expect(bodyOf(own)).toContain('transform: scaleX(0.996885)');
+  });
+
   it('inlines a loaded blob image as PNG data and turns any other blob URL into a placeholder', async () => {
     const canvas = document.createElement('canvas');
     canvas.width = 3;

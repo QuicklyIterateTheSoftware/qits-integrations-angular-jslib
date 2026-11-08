@@ -679,6 +679,10 @@ The same bytes on every machine and in every test order, so a freeze is a DOM, n
   the CSS: `freezeScreenshots({ renameClasses })`, whole-name patterns, default
   `DEFAULT_RENAMED_CLASSES` (xterm's `xterm-dom-renderer-owner-<n>`); giving it replaces the
   default. Never a broad `-\d+` pattern: Tailwind's `p-4` would be renumbered too.
+- Inline style properties a library measures at run time are dropped from the elements a selector
+  matches: `freezeScreenshots({ dropInlineStyles })`, `{ selector, properties }[]`, default
+  `DEFAULT_DROPPED_INLINE_STYLES` (`transform` on `.xterm-accessibility-tree > div`, the invisible
+  rows xterm scales by the text width it measured); giving it replaces the default.
 - A rule already kept in the same at-rule context is kept once, so a sheet the setup injects again
   for every spec file in the shared page does not repeat in later freezes.
 - `blob:` URLs (random per run, dead afterwards): a loaded `<img>` from one is inlined as a PNG

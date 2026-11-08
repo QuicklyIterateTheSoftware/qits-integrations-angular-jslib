@@ -7,9 +7,11 @@ export * from './golden-master-guard';
 export * from './describe-routes';
 export {
   BLOB_PLACEHOLDER,
+  DEFAULT_DROPPED_INLINE_STYLES,
   DEFAULT_RENAMED_CLASSES,
   FREEZE_ASSET_PREFIX,
   freezeShot,
+  type DroppedInlineStyle,
   type FreezeShotOptions,
   type ShotFreeze,
 } from './freeze-shot';

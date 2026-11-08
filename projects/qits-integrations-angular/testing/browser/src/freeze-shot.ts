@@ -30,6 +30,8 @@
  *   Vitest's own sheets (`/__vitest…`) and sheets the page may not read (cross-origin) are skipped.
  * - Class names numbered by a page-wide counter (`renameClasses`, by default xterm's
  *   `xterm-dom-renderer-owner-<n>`) are renumbered in order of appearance, in the HTML and the CSS.
+ * - Inline style properties a library measures at run time (`dropInlineStyles`, by default the
+ *   `transform` xterm puts on its invisible accessibility rows) are dropped from matching elements.
  * - A rule whose text (in its at-rule context) was already kept is dropped: a sheet injected again
  *   for every spec file in the shared page would otherwise repeat once per file that ran before.
  * - A `blob:` URL is random per run and dies with the page: a loaded `<img>` from one is inlined as
@@ -45,6 +47,21 @@ export const FREEZE_ASSET_PREFIX = 'qits-freeze-asset:';
 /** Class names numbered by a page-wide counter: renumbered in order of appearance by default. */
 export const DEFAULT_RENAMED_CLASSES: readonly RegExp[] = [/^xterm-dom-renderer-owner-\d+$/];
 
+/** Inline style properties to drop from the elements a selector matches. */
+export interface DroppedInlineStyle {
+  readonly selector: string;
+  readonly properties: readonly string[];
+}
+
+/**
+ * Inline styles measured at run time, dropped by default: xterm scales each row of its accessibility
+ * tree (invisible, for screen readers) by the text width it measured, which varies with what ran
+ * before.
+ */
+export const DEFAULT_DROPPED_INLINE_STYLES: readonly DroppedInlineStyle[] = [
+  { selector: '.xterm-accessibility-tree > div', properties: ['transform'] },
+];
+
 /** Options for {@link freezeShot}. */
 export interface FreezeShotOptions {
   /**
@@ -53,6 +70,12 @@ export interface FreezeShotOptions {
    * default. Match whole names only: a pattern like `/-\d+$/` would renumber Tailwind's `p-4`.
    */
   readonly renameClasses?: readonly RegExp[];
+  /**
+   * Inline style properties to drop from the elements each selector matches (and the `style`
+   * attribute when that empties it). Default {@link DEFAULT_DROPPED_INLINE_STYLES}; giving it
+   * replaces the default.
+   */
+  readonly dropInlineStyles?: readonly DroppedInlineStyle[];
 }
 
 /** What a `blob:` URL becomes when it cannot be inlined. */
@@ -121,6 +144,7 @@ export function freezeShot(
     renameClasses: options.renameClasses ?? DEFAULT_RENAMED_CLASSES,
     classes: new Map(),
     classShapes: new Map(),
+    dropInlineStyles: options.dropInlineStyles ?? DEFAULT_DROPPED_INLINE_STYLES,
   };
 
   const html = shell(doc.documentElement, ctx);
@@ -164,6 +188,7 @@ interface Context {
   readonly classes: Map<string, string>;
   /** a class name's shape (its last number as `#`) → how many of that shape are named. */
   readonly classShapes: Map<string, number>;
+  readonly dropInlineStyles: readonly DroppedInlineStyle[];
 }
 
 /** The element alone: its tag and its (cleaned) attributes. */
@@ -193,6 +218,7 @@ function appendCopy(node: Node, parent: Element, ctx: Context): void {
     if (inlined) copy.setAttribute('src', inlined);
   }
   reflectState(element, copy);
+  dropInlineStyles(element, copy, ctx);
   parent.append(copy);
   if (element instanceof HTMLTextAreaElement) {
     copy.textContent = element.value;
@@ -214,6 +240,22 @@ function canvasImage(canvas: HTMLCanvasElement, ctx: Context): Element {
   cleanAttributes(img, ctx);
   img.setAttribute('src', src);
   return img;
+}
+
+/** Drops the `dropInlineStyles` properties `element` (the live one) matches from `copy`. */
+function dropInlineStyles(element: Element, copy: Element, ctx: Context): void {
+  if (!copy.hasAttribute('style') || !('style' in copy)) return;
+  const style = (copy as HTMLElement).style;
+  for (const { selector, properties } of ctx.dropInlineStyles) {
+    let hit: boolean;
+    try {
+      hit = element.matches(selector);
+    } catch {
+      continue; // a selector this engine cannot read drops nothing
+    }
+    if (hit) for (const property of properties) style.removeProperty(property);
+  }
+  if ((copy.getAttribute('style') ?? '').trim() === '') copy.removeAttribute('style');
 }
 
 /** A loaded image from a `blob:` URL as a PNG data URL; undefined when it has not loaded. */
