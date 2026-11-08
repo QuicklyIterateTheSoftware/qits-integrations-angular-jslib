@@ -5,5 +5,12 @@
  */
 export * from './golden-master-guard';
 export * from './describe-routes';
-export { FREEZE_ASSET_PREFIX, freezeShot, type ShotFreeze } from './freeze-shot';
+export {
+  BLOB_PLACEHOLDER,
+  DEFAULT_RENAMED_CLASSES,
+  FREEZE_ASSET_PREFIX,
+  freezeShot,
+  type FreezeShotOptions,
+  type ShotFreeze,
+} from './freeze-shot';
 export * from './freeze-screenshots';

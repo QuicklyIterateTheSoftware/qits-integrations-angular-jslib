@@ -28,6 +28,12 @@
  *   `@layer` statements and `@property` stay; `@font-face` stays for the families the kept
  *   elements use; `@keyframes` and `@starting-style` go (screenshot tests turn animations off).
  *   Vitest's own sheets (`/__vitest…`) and sheets the page may not read (cross-origin) are skipped.
+ * - Class names numbered by a page-wide counter (`renameClasses`, by default xterm's
+ *   `xterm-dom-renderer-owner-<n>`) are renumbered in order of appearance, in the HTML and the CSS.
+ * - A rule whose text (in its at-rule context) was already kept is dropped: a sheet injected again
+ *   for every spec file in the shared page would otherwise repeat once per file that ran before.
+ * - A `blob:` URL is random per run and dies with the page: a loaded `<img>` from one is inlined as
+ *   a PNG data URL, any other becomes `about:blank`, in the HTML and in the CSS.
  * - A same-origin URL in CSS or in `src`/`srcset`/`poster`/an SVG `href` becomes
  *   `qits-freeze-asset:<path>` and is listed in `assets`; the Node side copies the file and points
  *   the URL at the copy. Other URLs (cross-origin, `data:`) stay as they are.
@@ -35,6 +41,22 @@
 
 /** What a same-origin URL becomes until the Node side points it at the copied file. */
 export const FREEZE_ASSET_PREFIX = 'qits-freeze-asset:';
+
+/** Class names numbered by a page-wide counter: renumbered in order of appearance by default. */
+export const DEFAULT_RENAMED_CLASSES: readonly RegExp[] = [/^xterm-dom-renderer-owner-\d+$/];
+
+/** Options for {@link freezeShot}. */
+export interface FreezeShotOptions {
+  /**
+   * Whole class names to renumber (their last number becomes the order in which the freeze first
+   * meets one of the same shape). Default {@link DEFAULT_RENAMED_CLASSES}; giving it replaces the
+   * default. Match whole names only: a pattern like `/-\d+$/` would renumber Tailwind's `p-4`.
+   */
+  readonly renameClasses?: readonly RegExp[];
+}
+
+/** What a `blob:` URL becomes when it cannot be inlined. */
+export const BLOB_PLACEHOLDER = 'about:blank';
 
 /** A frozen screenshot: the HTML, and the same-origin paths it refers to (sorted, unique). */
 export interface ShotFreeze {
@@ -78,6 +100,7 @@ const CSS_URL = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)'"\s]+))\s*\)/g;
 export function freezeShot(
   target: Element | null | undefined,
   doc: Document = document,
+  options: FreezeShotOptions = {},
 ): ShotFreeze {
   const body = doc.body;
   const element = target && target !== doc.documentElement && body.contains(target) ? target : body;
@@ -89,7 +112,16 @@ export function freezeShot(
   }
 
   const out = doc.implementation.createHTMLDocument('');
-  const ctx: Context = { doc, out, assets: new Set(), ng: new Map(), ids: new Map() };
+  const ctx: Context = {
+    doc,
+    out,
+    assets: new Set(),
+    ng: new Map(),
+    ids: new Map(),
+    renameClasses: options.renameClasses ?? DEFAULT_RENAMED_CLASSES,
+    classes: new Map(),
+    classShapes: new Map(),
+  };
 
   const html = shell(doc.documentElement, ctx);
   const head = out.createElement('head');
@@ -127,6 +159,11 @@ interface Context {
   readonly ng: Map<string, string>;
   /** id → `f<n>`. */
   readonly ids: Map<string, string>;
+  readonly renameClasses: readonly RegExp[];
+  /** class name → its renumbered name. */
+  readonly classes: Map<string, string>;
+  /** a class name's shape (its last number as `#`) → how many of that shape are named. */
+  readonly classShapes: Map<string, number>;
 }
 
 /** The element alone: its tag and its (cleaned) attributes. */
@@ -151,6 +188,10 @@ function appendCopy(node: Node, parent: Element, ctx: Context): void {
     return;
   }
   const copy = shell(element, ctx);
+  if (element instanceof HTMLImageElement && /^blob:/i.test(element.currentSrc || element.src)) {
+    const inlined = blobImage(element);
+    if (inlined) copy.setAttribute('src', inlined);
+  }
   reflectState(element, copy);
   parent.append(copy);
   if (element instanceof HTMLTextAreaElement) {
@@ -173,6 +214,20 @@ function canvasImage(canvas: HTMLCanvasElement, ctx: Context): Element {
   cleanAttributes(img, ctx);
   img.setAttribute('src', src);
   return img;
+}
+
+/** A loaded image from a `blob:` URL as a PNG data URL; undefined when it has not loaded. */
+function blobImage(img: HTMLImageElement): string | undefined {
+  if (!img.complete || img.naturalWidth === 0 || img.naturalHeight === 0) return undefined;
+  const canvas = img.ownerDocument.createElement('canvas');
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  try {
+    canvas.getContext('2d')?.drawImage(img, 0, 0);
+    return canvas.toDataURL('image/png');
+  } catch {
+    return undefined;
+  }
 }
 
 function reflectState(element: Element, copy: Element): void {
@@ -238,7 +293,8 @@ function rewriteAssets(copy: Element, name: string, value: string, ctx: Context)
 /** `raw` as `qits-freeze-asset:<path>` when it is a same-origin file; otherwise unchanged. */
 function asset(raw: string, base: string, ctx: Context): string {
   const value = raw.trim();
-  if (value === '' || value.startsWith('#') || /^(data|blob|about):/i.test(value)) return raw;
+  if (/^blob:/i.test(value)) return BLOB_PLACEHOLDER; // random per run, dead after it
+  if (value === '' || value.startsWith('#') || /^(data|about):/i.test(value)) return raw;
   let url: URL;
   try {
     url = new URL(value, base);
@@ -270,6 +326,11 @@ function renameGenerated(root: Element, ctx: Context): void {
     }
     const id = element.getAttribute('id');
     if (id !== null && id !== '') element.setAttribute('id', idName(id, ctx));
+    const classes = element.getAttribute('class');
+    if (classes) {
+      const renamed = classes.replace(/[^\s]+/g, (token) => className(token, ctx));
+      if (renamed !== classes) element.setAttribute('class', renamed);
+    }
   }
   for (const element of elements) {
     for (const { name, value } of [...element.attributes]) {
@@ -299,6 +360,25 @@ function ngName(suffix: string, ctx: Context): string {
   return name;
 }
 
+/** `token`, renumbered when a `renameClasses` pattern matches it whole; otherwise unchanged. */
+function className(token: string, ctx: Context): string {
+  if (!ctx.renameClasses.some((pattern) => wholeMatch(pattern, token))) return token;
+  let name = ctx.classes.get(token);
+  if (name === undefined) {
+    const shape = token.replace(/\d+(?=\D*$)/, '#');
+    const n = ctx.classShapes.get(shape) ?? 0;
+    ctx.classShapes.set(shape, n + 1);
+    name = shape.includes('#') ? shape.replace('#', String(n)) : token;
+    ctx.classes.set(token, name);
+  }
+  return name;
+}
+
+function wholeMatch(pattern: RegExp, token: string): boolean {
+  const match = new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, '')).exec(token);
+  return match !== null && match[0] === token;
+}
+
 function idName(id: string, ctx: Context): string {
   let name = ctx.ids.get(id);
   if (name === undefined) ctx.ids.set(id, (name = `f${ctx.ids.size}`));
@@ -312,6 +392,7 @@ function keptCss(kept: Element[], element: Element, ctx: Context): string {
     ancestors: kept.slice(0, kept.indexOf(element)),
     element,
     matched: new Map(),
+    emitted: new Set(),
     ctx,
   };
   const sheets = [...ctx.doc.styleSheets, ...(ctx.doc.adoptedStyleSheets ?? [])];
@@ -319,7 +400,8 @@ function keptCss(kept: Element[], element: Element, ctx: Context): string {
   for (const sheet of sheets) {
     if (sheet.href && new URL(sheet.href).pathname.startsWith('/__vitest')) continue;
     const media = sheet.media?.mediaText ?? '';
-    const rules = filterRules(readRules(sheet), sheet.href ?? ctx.doc.baseURI, filter);
+    const scope = media && media !== 'all' ? `@media ${media}` : '';
+    const rules = filterRules(readRules(sheet), sheet.href ?? ctx.doc.baseURI, filter, scope);
     if (rules.length === 0) continue;
     out.push(
       media && media !== 'all' ? `@media ${media} {\n${rules.join('\n')}\n}` : rules.join('\n'),
@@ -327,7 +409,11 @@ function keptCss(kept: Element[], element: Element, ctx: Context): string {
   }
   return out
     .join('\n')
-    .replace(NG_IN_CSS, (_, kind: string, suffix: string) => `_ng${kind}-${ngName(suffix, ctx)}`);
+    .replace(NG_IN_CSS, (_, kind: string, suffix: string) => `_ng${kind}-${ngName(suffix, ctx)}`)
+    .replace(/\.((?:\\.|[\w-])+)/g, (whole, raw: string) => {
+      const renamed = className(raw, ctx);
+      return renamed === raw ? whole : `.${renamed}`;
+    });
 }
 
 interface Filter {
@@ -338,6 +424,8 @@ interface Filter {
   readonly element: Element;
   /** stripped selector → whether it matches. */
   readonly matched: Map<string, boolean>;
+  /** The kept rules so far, each with its at-rule context: a repeat is dropped. */
+  readonly emitted: Set<string>;
   readonly ctx: Context;
 }
 
@@ -349,16 +437,31 @@ function readRules(sheet: CSSStyleSheet | null | undefined): CSSRule[] {
   }
 }
 
-function filterRules(rules: CSSRule[], base: string, filter: Filter): string[] {
+/** The kept rules of `rules`; `scope` names the at-rules around them, for spotting repeats. */
+function filterRules(rules: CSSRule[], base: string, filter: Filter, scope: string): string[] {
   const out: string[] = [];
   for (const rule of rules) {
-    const text = filterRule(rule, base, filter);
+    const text = filterRule(rule, base, filter, scope);
     if (text) out.push(text);
   }
   return out;
 }
 
-function filterRule(rule: CSSRule, base: string, filter: Filter): string | undefined {
+/** `text`, unless the same rule was kept already in the same at-rule context. */
+function once(text: string | undefined, filter: Filter, scope: string): string | undefined {
+  if (text === undefined) return undefined;
+  const key = `${scope}\u0000${text}`;
+  if (filter.emitted.has(key)) return undefined;
+  filter.emitted.add(key);
+  return text;
+}
+
+function filterRule(
+  rule: CSSRule,
+  base: string,
+  filter: Filter,
+  scope: string,
+): string | undefined {
   if (rule instanceof CSSStyleRule) {
     if (!splitSelectors(rule.selectorText).some((s) => matches(s, filter))) return undefined;
     let text = rule.cssText;
@@ -366,16 +469,23 @@ function filterRule(rule: CSSRule, base: string, filter: Filter): string | undef
       text =
         renameSelectorIds(rule.selectorText, filter.ctx) + text.slice(rule.selectorText.length);
     }
-    return rewriteCssUrls(text, base, filter.ctx);
+    return once(rewriteCssUrls(text, base, filter.ctx), filter, scope);
   }
   if (rule instanceof CSSImportRule) {
-    const inner = filterRules(readRules(rule.styleSheet), rule.styleSheet?.href ?? base, filter);
+    const layer =
+      rule.layerName !== null ? `@layer${rule.layerName ? ` ${rule.layerName}` : ''}` : '';
+    const importMedia = rule.media.mediaText;
+    const wrap = [importMedia && importMedia !== 'all' ? `@media ${importMedia}` : '', layer];
+    const inner = filterRules(
+      readRules(rule.styleSheet),
+      rule.styleSheet?.href ?? base,
+      filter,
+      [scope, ...wrap].filter(Boolean).join(' / '),
+    );
     if (inner.length === 0) return undefined;
     let text = inner.join('\n');
-    if (rule.layerName !== null)
-      text = `@layer${rule.layerName ? ` ${rule.layerName}` : ''} {\n${text}\n}`;
-    const media = rule.media.mediaText;
-    return media && media !== 'all' ? `@media ${media} {\n${text}\n}` : text;
+    if (layer) text = `${layer} {\n${text}\n}`;
+    return wrap[0] ? `${wrap[0]} {\n${text}\n}` : text;
   }
   if (
     rule instanceof CSSMediaRule ||
@@ -384,15 +494,18 @@ function filterRule(rule: CSSRule, base: string, filter: Filter): string | undef
     rule instanceof CSSLayerBlockRule ||
     (typeof CSSScopeRule !== 'undefined' && rule instanceof CSSScopeRule)
   ) {
-    const inner = filterRules([...rule.cssRules], base, filter);
-    if (inner.length === 0) return undefined;
     const header = rule.cssText.slice(0, rule.cssText.indexOf('{')).trim();
+    const inner = filterRules([...rule.cssRules], base, filter, `${scope} / ${header}`);
+    if (inner.length === 0) return undefined;
     return `${header} {\n${inner.join('\n')}\n}`;
   }
-  if (rule instanceof CSSLayerStatementRule || rule instanceof CSSPropertyRule) return rule.cssText;
+  if (rule instanceof CSSLayerStatementRule || rule instanceof CSSPropertyRule) {
+    return once(rule.cssText, filter, scope);
+  }
   if (rule instanceof CSSFontFaceRule) {
     const family = unquote(rule.style.getPropertyValue('font-family'));
-    return filter.families.has(family) ? rewriteCssUrls(rule.cssText, base, filter.ctx) : undefined;
+    if (!filter.families.has(family)) return undefined;
+    return once(rewriteCssUrls(rule.cssText, base, filter.ctx), filter, scope);
   }
   return undefined; // @keyframes, @starting-style, @page, @namespace, …
 }

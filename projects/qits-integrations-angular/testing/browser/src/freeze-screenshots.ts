@@ -13,7 +13,7 @@
 import type { Routes } from '@angular/router';
 import { beforeAll, beforeEach, chai, expect } from 'vitest';
 import { describeRoutes, type RouteDescription } from './describe-routes';
-import { freezeShot } from './freeze-shot';
+import { DEFAULT_RENAMED_CLASSES, freezeShot } from './freeze-shot';
 import {
   clearTestRecords,
   currentRoutePattern,
@@ -49,6 +49,12 @@ export interface FreezeScreenshotsOptions {
    * {@link describeRoutes} gives it; the manifest names it `routes`. No lazy route is loaded.
    */
   readonly routes?: Routes;
+  /**
+   * Whole class names a page-wide counter numbers, renumbered in each freeze in order of
+   * appearance. Default {@link DEFAULT_RENAMED_CLASSES} (xterm's `xterm-dom-renderer-owner-<n>`);
+   * giving it replaces the default, so spread the default in to keep it.
+   */
+  readonly renameClasses?: readonly RegExp[];
 }
 
 const INSTALLED = Symbol.for('qits.freezeScreenshots');
@@ -84,6 +90,7 @@ const counters = new WeakMap<Task, { repeat: number; current: number }>();
  * test, and sends `options.routes` once per spec file. Call it once, in the setup file.
  */
 export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void {
+  const renameClasses = options.renameClasses ?? DEFAULT_RENAMED_CLASSES;
   beforeEach(() => clearTestRecords());
   if (options.routes) {
     const routes: RouteDescription[] = describeRoutes(options.routes);
@@ -113,7 +120,9 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
         const test = expect.getState().currentTestName ?? '';
         const name = typeof args[0] === 'string' ? args[0] : `${test} ${count(this)}`;
         await original.apply(this, args);
-        const freeze = freezeShot(shotTarget(chai.util.flag(this, 'object')));
+        const freeze = freezeShot(shotTarget(chai.util.flag(this, 'object')), document, {
+          renameClasses,
+        });
         const payload: ScreenshotFreezePayload = {
           name,
           test,

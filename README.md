@@ -675,6 +675,14 @@ The same bytes on every machine and in every test order, so a freeze is a DOM, n
 - Comments, `ng-reflect-*` and `ng-version` go. `_ngcontent-*`/`_nghost-*` are renamed `c0`, `c1`,
   … and ids `f0`, `f1`, … in order of appearance, with every reference (`for`, `aria-*`, `list`,
   `href="#…"`, `url(#…)`, `#id` in the CSS).
+- Class names a page-wide counter numbers are renumbered in order of appearance, in the HTML and
+  the CSS: `freezeScreenshots({ renameClasses })`, whole-name patterns, default
+  `DEFAULT_RENAMED_CLASSES` (xterm's `xterm-dom-renderer-owner-<n>`); giving it replaces the
+  default. Never a broad `-\d+` pattern: Tailwind's `p-4` would be renumbered too.
+- A rule already kept in the same at-rule context is kept once, so a sheet the setup injects again
+  for every spec file in the shared page does not repeat in later freezes.
+- `blob:` URLs (random per run, dead afterwards): a loaded `<img>` from one is inlined as a PNG
+  `data:` URL, any other `blob:` URL (in the HTML or a CSS `url()`) becomes `about:blank`.
 - The CSS is the page's own rules, filtered: a style rule stays when its selector, without
   pseudo-classes and pseudo-elements, matches the element, something in it or a shell; `@media`,
   `@supports`, `@container`, `@layer` and `@scope` blocks are filtered the same way; `@layer`

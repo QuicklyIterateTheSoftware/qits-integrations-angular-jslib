@@ -1,4 +1,10 @@
-import { FREEZE_ASSET_PREFIX, freezeShot, splitSelectors, stripPseudo } from './freeze-shot';
+import {
+  BLOB_PLACEHOLDER,
+  FREEZE_ASSET_PREFIX,
+  freezeShot,
+  splitSelectors,
+  stripPseudo,
+} from './freeze-shot';
 
 /** Mounts `html` in a fresh body, with `css` as the only stylesheet of the test. */
 function mount(html: string, css = ''): void {
@@ -220,6 +226,90 @@ describe('freezeShot', () => {
       return freezeShot(byId('shot')).html;
     };
     expect(shot(1)).toBe(shot(2));
+  });
+});
+
+describe('freezeShot in a shared page', () => {
+  const extra: HTMLStyleElement[] = [];
+  const inject = (css: string) => {
+    const style = document.createElement('style');
+    style.textContent = css;
+    document.head.append(style);
+    extra.push(style);
+  };
+  afterEach(() => extra.splice(0).forEach((style) => style.remove()));
+
+  it('keeps a rule once however often its sheet was injected', () => {
+    const SETUP = `@font-face { font-family: "Inter Test"; src: url("/fonts/inter.woff2"); }
+      html, body { margin: 0px; font-family: "Inter Test", sans-serif; }
+      * { caret-color: transparent; }
+      @media (min-width: 1px) { .card { padding: 1px; } }`;
+    mount('<section id="shot" class="card">x</section>');
+    inject(SETUP);
+    const once = freezeShot(byId('shot')).html;
+    inject(SETUP);
+    inject(SETUP);
+    const thrice = freezeShot(byId('shot')).html;
+    expect(thrice).toBe(once);
+    const css = styleOf(once);
+    expect(css.match(/@font-face/g)).toHaveLength(1);
+    expect(css.match(/\* \{ caret-color/g)).toHaveLength(1);
+    expect(css.match(/\.card \{ padding: 1px; \}/g)).toHaveLength(1);
+    // The same rule in another context is another rule.
+    inject('@media print { .card { padding: 1px; } }');
+    expect(styleOf(freezeShot(byId('shot')).html)).toContain(
+      '@media print {\n.card { padding: 1px; }\n}',
+    );
+  });
+
+  it('renumbers counter-numbered class names in order of appearance, in the HTML and the CSS', () => {
+    const shot = (n: number) => {
+      mount(
+        `<div id="shot"><div class="xterm xterm-dom-renderer-owner-${n} p-4"><span class="row">a</span></div>` +
+          `<div class="xterm-dom-renderer-owner-${n + 3}">b</div></div>`,
+        `.xterm-dom-renderer-owner-${n} .row { color: red; }` +
+          ` .xterm-dom-renderer-owner-${n + 3} { color: blue; } .p-4 { padding: 1rem; }`,
+      );
+      return freezeShot(byId('shot')).html;
+    };
+    const html = shot(7);
+    expect(html).toBe(shot(12));
+    expect(bodyOf(html)).toBe(
+      '<div id="f0"><div class="xterm xterm-dom-renderer-owner-0 p-4"><span class="row">a</span></div>' +
+        '<div class="xterm-dom-renderer-owner-1">b</div></div>',
+    );
+    const css = styleOf(html);
+    expect(css).toContain('.xterm-dom-renderer-owner-0 .row { color: red; }');
+    expect(css).toContain('.xterm-dom-renderer-owner-1 { color: blue; }');
+    expect(css).toContain('.p-4 { padding: 1rem; }');
+    // Other patterns replace the default; a class that is not matched whole stays.
+    mount('<div id="shot" class="tile-3 xterm-dom-renderer-owner-9 tile-3-x"></div>');
+    expect(bodyOf(freezeShot(byId('shot'), document, { renameClasses: [/tile-\d+/] }).html)).toBe(
+      '<div id="f0" class="tile-0 xterm-dom-renderer-owner-9 tile-3-x"></div>',
+    );
+  });
+
+  it('inlines a loaded blob image as PNG data and turns any other blob URL into a placeholder', async () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 3;
+    canvas.height = 2;
+    canvas.getContext('2d')!.fillRect(0, 0, 3, 2);
+    const blob = await new Promise<Blob>((done) => canvas.toBlob((b) => done(b!), 'image/png'));
+    const url = URL.createObjectURL(blob);
+    mount(
+      `<div id="shot" style="background: url(${url})"><img id="loaded" src="${url}">` +
+        '<img id="dead" src="blob:http://localhost/0000-gone"></div>',
+      `#shot { background-image: url("${url}"); }`,
+    );
+    const loaded = byId('loaded') as HTMLImageElement;
+    await loaded.decode();
+    const html = freezeShot(byId('shot')).html;
+    URL.revokeObjectURL(url);
+    expect(html).not.toContain('blob:');
+    expect(bodyOf(html)).toMatch(/<img id="f1" src="data:image\/png;base64,[^"]+">/);
+    expect(bodyOf(html)).toContain(`<img id="f2" src="${BLOB_PLACEHOLDER}">`);
+    expect(bodyOf(html)).toContain(`style="background: url(&quot;${BLOB_PLACEHOLDER}&quot;)"`);
+    expect(styleOf(html)).toContain(`#f0 { background-image: url("${BLOB_PLACEHOLDER}"); }`);
   });
 });
 
