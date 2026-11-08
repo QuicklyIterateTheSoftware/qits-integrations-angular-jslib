@@ -391,6 +391,27 @@ describe('screenshot freezes', () => {
     assert.equal(freezeSlug('/abs/x.jpg'), 'abs/xjpg');
   });
 
+  it("registers the commands in the config hook, beside the app's own", () => {
+    const plugin = screenshotReferences({ freezes: true });
+    const contributed = plugin.config({ test: { browser: { commands: { own: () => 1 } } } });
+    assert.deepEqual(Object.keys(contributed.test.browser.commands), [
+      'qitsFreeze',
+      'qitsFreezeRoutes',
+    ]);
+    assert.equal(screenshotReferences().config({}), undefined);
+    // configureVitest keeps what the config hook registered.
+    const root = app({});
+    const vitest = { config: { reporters: [] } };
+    const commands = { ...contributed.test.browser.commands, own: () => 1 };
+    const project = { config: { root, browser: { enabled: true, commands } } };
+    plugin.configureVitest({ vitest, project });
+    assert.equal(
+      project.config.browser.commands.qitsFreeze,
+      contributed.test.browser.commands.qitsFreeze,
+    );
+    assert.equal(typeof project.config.browser.commands.own, 'function');
+  });
+
   it('registers the commands only with the freezes option', () => {
     const root = app({});
     const vitest = { config: { reporters: [] } };

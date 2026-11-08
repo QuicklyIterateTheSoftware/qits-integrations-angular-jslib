@@ -8,7 +8,8 @@
  * writes the record when the run ends.
  *
  * With the `freezes` option it also writes the screenshot freezes (ticket qits-1947,
- * `freezes.mjs`): it registers the browser commands `freezeScreenshots()` sends them to, and the
+ * `freezes.mjs`): it registers the browser commands `freezeScreenshots()` sends them to (in its
+ * Vite `config` hook, see there), and the
  * same reporter writes them at the end of the run.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -71,6 +72,20 @@ export function screenshotReferences(options = {}) {
   let screenshotDirectory = DEFAULT_SCREENSHOT_DIRECTORY;
   let reporterAdded = false;
 
+  /** The writer, made with the root configureVitest saw (or, failing that, the command's project's). */
+  const writerFor = (context) =>
+    (freezes ??= freezeWriter({ root: root ?? context.project.config.root, ...freezeOptions }));
+  const freezeCommands = freezeOptions && {
+    [FREEZE_COMMAND]: (context, payload) => {
+      writerFor(context).add(context.testPath, payload);
+      return null;
+    },
+    [FREEZE_ROUTES_COMMAND]: (context, routes) => {
+      writerFor(context).setRoutes(routes);
+      return null;
+    },
+  };
+
   const reporter = {
     onTestRunStart() {
       seen.clear();
@@ -99,6 +114,15 @@ export function screenshotReferences(options = {}) {
 
   return {
     name: 'qits:screenshot-references',
+    // The freeze commands are registered in the config, before any server starts: Vitest 5 copies
+    // `browser.commands` once, when it makes the browser server, and that happens before the
+    // configureVitest hooks run (Vitest 4 read them later). Vite merges this into the user's
+    // `test.browser.commands`, so the app's own commands stay. With the Angular builder, the
+    // runnerConfig's plugins become the test project's plugins, so this runs for that project.
+    config() {
+      if (!freezeCommands) return undefined;
+      return { test: { browser: { commands: { ...freezeCommands } } } };
+    },
     configureVitest({ vitest, project }) {
       const browser = project.config.browser;
       if (!browser?.enabled) return;
@@ -121,18 +145,13 @@ export function screenshotReferences(options = {}) {
         matcher.resolveScreenshotPath = wrapped;
       }
 
-      if (freezeOptions) {
+      if (freezeCommands) {
         freezes ??= freezeWriter({ root, ...freezeOptions });
-        const writer = freezes;
+        // Already there from config(), unless the plugin was added past the config hooks.
         browser.commands ??= {};
-        browser.commands[FREEZE_COMMAND] = (context, payload) => {
-          writer.add(context.testPath, payload);
-          return null;
-        };
-        browser.commands[FREEZE_ROUTES_COMMAND] = (_context, routes) => {
-          writer.setRoutes(routes);
-          return null;
-        };
+        for (const [name, command] of Object.entries(freezeCommands)) {
+          browser.commands[name] ??= command;
+        }
       }
 
       // Vitest builds its reporters from the resolved config after every configureVitest hook.
