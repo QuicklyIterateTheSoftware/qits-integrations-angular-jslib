@@ -23,13 +23,17 @@
     "@ngrx/signals": "^21.0.0 || ^22.0.1",
     "@pact-foundation/pact": "^17.1.4",
     "eslint": "^9.0.0 || ^10.0.0",
-    "rxjs": "^7.4.0"
+    "rxjs": "^7.4.0",
+    "vitest": "^4.1.0 || ^5.0.0"
   },
   "peerDependenciesMeta": {
     "@pact-foundation/pact": {
       "optional": true
     },
     "eslint": {
+      "optional": true
+    },
+    "vitest": {
       "optional": true
     }
   },

@@ -7,6 +7,9 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import {
   assertRecorded,
   clearRouteRecords,
+  clearTestRecords,
+  currentRoutePattern,
+  currentTestRecords,
   fromGoldenMasters,
   goldenMasterAdvice,
   goldenMastersRequired,
@@ -395,5 +398,50 @@ describe('route records', () => {
     answer(await projects<List>('a project exists', 'listProjects'));
     clearRouteRecords();
     expect(takeRouteRecords()).toEqual([]);
+  });
+});
+
+describe('test records', () => {
+  const projects = fromGoldenMasters(read, (state?: string, operationId?: string) => ({
+    provider: 'qits-projects-service',
+    state,
+    operationId,
+  }));
+  let unguard: () => void;
+  const answer = (body: object | null, opts?: { status?: number; statusText?: string }) => {
+    TestBed.inject(HttpClient)
+      .get('/api/x')
+      .subscribe({ error: () => undefined });
+    TestBed.inject(HttpTestingController).expectOne('/api/x').flush(body, opts);
+  };
+
+  beforeEach(() => {
+    clearTestRecords();
+    clearRouteRecords();
+    unguard = guardGoldenMasters({ when: () => true });
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+  });
+  afterEach(() => unguard());
+
+  it('keeps the recorded answers of the test without a router, sorted and unique', async () => {
+    answer(await projects<List>('b state', 'listProjects'));
+    answer(await projects<List>('a state', 'listProjects'));
+    answer(await projects<List>('a state', 'listProjects'));
+    answer(await fromGoldenMasters(read)<List>());
+    answer(null, { status: 204, statusText: 'No Content' });
+    const failed = await projects<List>('c state', 'listProjects');
+    answer(failed, { status: 500, statusText: 'Server Error' });
+    const records = [
+      { provider: 'qits-projects-service', state: 'a state', operationId: 'listProjects' },
+      { provider: 'qits-projects-service', state: 'b state', operationId: 'listProjects' },
+    ];
+    expect(currentTestRecords()).toEqual(records);
+    expect(currentTestRecords()).toEqual(records); // reading does not forget them
+    expect(takeRouteRecords()).toEqual([]); // no router: the route ledger is untouched
+    expect(currentRoutePattern()).toBeNull();
+    clearTestRecords();
+    expect(currentTestRecords()).toEqual([]);
   });
 });

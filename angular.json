@@ -30,7 +30,10 @@
           "options": {
             "tsConfig": "projects/qits-integrations-angular/tsconfig.spec.json",
             "include": ["**/*.spec.ts", "../testing/**/*.spec.ts"],
-            "exclude": ["projects/qits-integrations-angular/src/**/*.browser.spec.ts"]
+            "exclude": [
+              "projects/qits-integrations-angular/src/**/*.browser.spec.ts",
+              "../testing/**/*.browser.spec.ts"
+            ]
           }
         },
         "test-browser": {
@@ -39,7 +42,10 @@
             "tsConfig": "projects/qits-integrations-angular/tsconfig.spec.json",
             "browsers": ["chromium"],
             "headless": true,
-            "include": ["projects/qits-integrations-angular/src/**/*.browser.spec.ts"]
+            "include": [
+              "projects/qits-integrations-angular/src/**/*.browser.spec.ts",
+              "../testing/**/*.browser.spec.ts"
+            ]
           }
         },
         "lint": {

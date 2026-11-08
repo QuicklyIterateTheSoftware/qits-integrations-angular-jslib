@@ -22,6 +22,9 @@
  * matched a route, is a {@link RouteRecord}. {@link takeRouteRecords} hands them to the Node side
  * (`goldenMasterRoutes` in `@qits/angular/testing`), which keeps them in a ledger the pact specs
  * read, so each interaction names the routes it happens on.
+ *
+ * Beside those, it keeps the recorded answers of the current test, router or not (ticket
+ * qits-1947): {@link currentTestRecords}, which a screenshot freeze names as what the shot shows.
  */
 import { HttpEventType, type HttpEvent } from '@angular/common/http';
 import { TestRequest } from '@angular/common/http/testing';
@@ -282,6 +285,12 @@ function noteRoute(body: unknown, status: number | undefined): void {
   if (body === null || typeof body !== 'object') return;
   const source = recordings.get(body);
   if (!source?.provider || !source.state || !source.operationId) return;
+  const shown: TestRecord = {
+    provider: source.provider,
+    state: source.state,
+    operationId: source.operationId,
+  };
+  testRecords.set(testRecordKey(shown), shown);
   const route = currentRoute();
   if (!route) return;
   const record: RouteRecord = {
@@ -291,6 +300,46 @@ function noteRoute(body: unknown, status: number | undefined): void {
     route,
   };
   routeRecords.set(recordKey(record), record);
+}
+
+/**
+ * One recorded answer the current test showed, with or without a router (ticket qits-1947): what a
+ * screenshot taken now shows, as {@link currentTestRecords} lists it.
+ */
+export interface TestRecord {
+  /** The provider's repository name, as the recording's source names it. */
+  readonly provider: string;
+  readonly state: string;
+  readonly operationId: string;
+}
+
+const testRecords = new Map<string, TestRecord>();
+
+const testRecordKey = (r: TestRecord) => [r.provider, r.state, r.operationId].join('\u0000');
+
+/**
+ * The recorded answers flushed since the current test started (or since {@link clearTestRecords}),
+ * sorted and without duplicates: the same answers {@link takeRouteRecords} notes, but per test and
+ * whether or not a router matched a route. It does not forget them; `freezeScreenshots()` clears
+ * them before every test.
+ */
+export function currentTestRecords(): TestRecord[] {
+  return [...testRecords.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([, record]) => record);
+}
+
+/** Forgets the current test's recorded answers. `freezeScreenshots()` calls it before every test. */
+export function clearTestRecords(): void {
+  testRecords.clear();
+}
+
+/**
+ * The route pattern the TestBed's router has matched (`matchedRoutePath`, as a {@link RouteRecord}
+ * names it), or `null` without a router or a matched route.
+ */
+export function currentRoutePattern(): string | null {
+  return currentRoute() ?? null;
 }
 
 /**

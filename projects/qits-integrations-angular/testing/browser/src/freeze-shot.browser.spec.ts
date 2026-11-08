@@ -1,0 +1,246 @@
+import { FREEZE_ASSET_PREFIX, freezeShot, splitSelectors, stripPseudo } from './freeze-shot';
+
+/** Mounts `html` in a fresh body, with `css` as the only stylesheet of the test. */
+function mount(html: string, css = ''): void {
+  document.head.querySelectorAll('style[data-freeze-spec]').forEach((s) => s.remove());
+  const style = document.createElement('style');
+  style.dataset['freezeSpec'] = '';
+  style.textContent = css;
+  document.head.append(style);
+  document.body.innerHTML = html;
+}
+
+const byId = (id: string) => document.getElementById(id) as HTMLElement;
+const styleOf = (html: string) => /<style>([\s\S]*)<\/style>/.exec(html)?.[1] ?? '';
+const bodyOf = (html: string) => /<body[^>]*>([\s\S]*)<\/body>/.exec(html)?.[1] ?? '';
+
+afterEach(() => {
+  document.body.innerHTML = '';
+  document.head.querySelectorAll('style[data-freeze-spec]').forEach((s) => s.remove());
+});
+
+describe('freezeShot', () => {
+  it('keeps the ancestors as empty shells and the element whole', () => {
+    mount(
+      '<main class="app"><nav>menu</nav><section class="page"><p>before</p>' +
+        '<article id="shot"><h1>Title</h1><p>text</p></article></section></main>',
+    );
+    const { html } = freezeShot(byId('shot'));
+    expect(html.startsWith('<!doctype html>\n<html')).toBe(true);
+    expect(html.endsWith('</body></html>\n')).toBe(true);
+    expect(html).toContain('<head><meta charset="utf-8"><style>');
+    expect(bodyOf(html)).toBe(
+      '<main class="app"><section class="page"><article id="f0"><h1>Title</h1><p>text</p>' +
+        '</article></section></main>',
+    );
+  });
+
+  it('freezes the body with everything in it for the page or the body', () => {
+    mount('<p>one</p><p>two</p>');
+    expect(bodyOf(freezeShot(null).html)).toBe('<p>one</p><p>two</p>');
+    expect(bodyOf(freezeShot(document.body).html)).toBe('<p>one</p><p>two</p>');
+    expect(bodyOf(freezeShot(document.documentElement).html)).toBe('<p>one</p><p>two</p>');
+  });
+
+  it('drops scripts, handlers, javascript: URLs, preload links, comments and Angular noise', () => {
+    mount(
+      '<div id="shot" ng-version="22.0.0" ng-reflect-value="x"><!--container-->' +
+        '<script>window.ran = 1</script><noscript>no</noscript><template><b>t</b></template>' +
+        '<link rel="modulepreload" href="/x.js"><link rel="stylesheet" href="/y.css">' +
+        '<a href="javascript:alert(1)" onclick="alert(1)">a</a>' +
+        '<a href=" JavaScript:alert(1)">b</a><a href="/next">c</a>' +
+        '<iframe srcdoc="<script>1</script>"></iframe>' +
+        '<svg><script>1</script><circle onload="x()" r="1"></circle></svg></div>',
+    );
+    const body = bodyOf(freezeShot(byId('shot')).html);
+    expect(body).toBe(
+      '<div id="f0"><a>a</a><a>b</a><a href="/next">c</a><iframe></iframe>' +
+        '<svg><circle r="1"></circle></svg></div>',
+    );
+  });
+
+  it('writes live form state, open state and canvas pixels into the markup', () => {
+    mount(
+      '<form id="shot"><input id="name" value="old"><input type="checkbox" id="c1" checked>' +
+        '<input type="radio" name="r" id="r1"><textarea id="t">old</textarea>' +
+        '<select id="s"><option value="a" selected>A</option><option value="b">B</option></select>' +
+        '<details id="d"><summary>more</summary>x</details><dialog id="g">hi</dialog>' +
+        '<canvas id="cv" width="2" height="2" class="chart"></canvas></form>',
+    );
+    (byId('name') as HTMLInputElement).value = 'typed';
+    (byId('c1') as HTMLInputElement).checked = false;
+    (byId('r1') as HTMLInputElement).checked = true;
+    (byId('t') as HTMLTextAreaElement).value = 'new text';
+    (byId('s') as HTMLSelectElement).value = 'b';
+    (byId('d') as HTMLDetailsElement).open = true;
+    (byId('g') as HTMLDialogElement).show();
+    const context = (byId('cv') as HTMLCanvasElement).getContext('2d')!;
+    context.fillStyle = 'red';
+    context.fillRect(0, 0, 2, 2);
+
+    const body = bodyOf(freezeShot(byId('shot')).html);
+    expect(body).toContain('<input id="f1" value="typed">');
+    expect(body).toContain('<input type="checkbox" id="f2">');
+    expect(body).toContain('<input type="radio" name="r" id="f3" checked="">');
+    expect(body).toContain('<textarea id="f4">new text</textarea>');
+    expect(body).toContain('<option value="a">A</option><option value="b" selected="">B</option>');
+    expect(body).toContain('<details id="f6" open="">');
+    expect(body).toContain('<dialog id="f7" open="">');
+    expect(body).toMatch(
+      /<img id="f8" width="2" height="2" class="chart" src="data:image\/png;base64,[^"]+">/,
+    );
+    expect(body).not.toContain('<canvas');
+  });
+
+  it('renames _ngcontent/_nghost ids and element ids in order, with what refers to them', () => {
+    mount(
+      '<app-card id="shot" _nghost-ng-c991="">' +
+        '<label for="email-7" _ngcontent-ng-c991="">Mail</label>' +
+        '<input id="email-7" aria-describedby="hint-3 err-3" list="opts" _ngcontent-ng-c991="">' +
+        '<p id="hint-3">hint</p><datalist id="opts"></datalist>' +
+        '<ui-badge _nghost-ng-c12="" _ngcontent-ng-c991=""><a href="#hint-3">h</a></ui-badge>' +
+        '<svg><defs><linearGradient id="grad-42"></linearGradient></defs>' +
+        '<rect fill="url(#grad-42)"></rect></svg></app-card>',
+      '[_nghost-ng-c991] { display: block; } label[_ngcontent-ng-c991] { color: red; }' +
+        ' [_nghost-ng-c12] { color: blue; } #hint-3 { color: green; }',
+    );
+    const { html } = freezeShot(byId('shot'));
+    expect(bodyOf(html)).toBe(
+      '<app-card id="f0" _nghost-c0="">' +
+        '<label for="f1" _ngcontent-c0="">Mail</label>' +
+        '<input id="f1" aria-describedby="f2 f5" list="f3" _ngcontent-c0="">' +
+        '<p id="f2">hint</p><datalist id="f3"></datalist>' +
+        '<ui-badge _nghost-c1="" _ngcontent-c0=""><a href="#f2">h</a></ui-badge>' +
+        '<svg><defs><linearGradient id="f4"></linearGradient></defs>' +
+        '<rect fill="url(#f4)"></rect></svg></app-card>',
+    );
+    const css = styleOf(html);
+    expect(css).toContain('[_nghost-c0] { display: block; }');
+    expect(css).toContain('label[_ngcontent-c0] { color: red; }');
+    expect(css).toContain('[_nghost-c1] { color: blue; }');
+    expect(css).toContain('#f2 { color: green; }');
+    expect(html).not.toMatch(/ng-c\d|email-7|hint-3|grad-42/);
+  });
+
+  it('keeps only the rules that can apply, with pseudo-classes and pseudo-elements stripped', () => {
+    mount(
+      '<div class="shell dark"><div class="frame"><section id="shot" class="card">' +
+        '<button class="btn md:wide">go</button></section></div><aside class="other"></aside></div>',
+      [
+        ':root { --gap: 4px; }',
+        '* { box-sizing: border-box; }',
+        'html { color: black; }',
+        'body { margin: 0px; }',
+        '.dark .card { background: black; }',
+        '.card > .btn:hover { color: red; }',
+        '.btn::before { content: "x"; }',
+        '.md\\:wide { width: 100%; }',
+        '.frame:has(.card) { padding: 1px; }',
+        ':is(.nothing) .btn { color: pink; }',
+        '.other { color: blue; }',
+        '.missing, .btn:focus-visible { color: red; }',
+        '@media (min-width: 1px) { .card { margin: 1px; } .other { margin: 2px; } }',
+        '@media print { .other { margin: 3px; } }',
+        '@supports (display: grid) { .btn { display: grid; } }',
+        '@layer base, components;',
+        '@layer components { .btn { font-weight: 600; } .other { font-weight: 100; } }',
+        '@property --spin { syntax: "<angle>"; inherits: false; initial-value: 0deg; }',
+        '@keyframes spin { to { rotate: 1turn; } }',
+      ].join('\n'),
+    );
+    const css = styleOf(freezeShot(byId('shot')).html);
+    for (const kept of [
+      ':root { --gap: 4px; }',
+      '* { box-sizing: border-box; }',
+      'html { color: black; }',
+      'body { margin: 0px; }',
+      '.dark .card { background: black; }',
+      '.card > .btn:hover { color: red; }',
+      '.btn::before { content: "x"; }',
+      '.md\\:wide { width: 100%; }',
+      '.frame:has(.card) { padding: 1px; }',
+      ':is(.nothing) .btn { color: pink; }',
+      '.missing, .btn:focus-visible { color: red; }',
+      '@media (min-width: 1px) {\n.card { margin: 1px; }\n}',
+      '@supports (display: grid) {\n.btn { display: grid; }\n}',
+      '@layer base, components;',
+      '@layer components {\n.btn { font-weight: 600; }\n}',
+      '@property --spin {',
+    ]) {
+      expect(css).toContain(kept);
+    }
+    expect(css).not.toContain('.other');
+    expect(css).not.toContain('@media print');
+    expect(css).not.toContain('@keyframes');
+  });
+
+  it('keeps @font-face for the families in use, and marks same-origin assets', () => {
+    mount(
+      '<div id="shot" style="background: url(/img/bg.png)">' +
+        '<img src="/img/logo.svg?v=2" srcset="/img/a.png 1x, https://cdn.test/b.png 2x">' +
+        '<img src="https://projects.test/avatar.png"><img src="data:image/png;base64,AAAA">' +
+        '<svg><use href="/img/icons.svg#star"></use></svg></div>',
+      `@font-face { font-family: "Used Face"; src: url("/fonts/used.woff2") format("woff2"); }
+       @font-face { font-family: "Other Face"; src: url("/fonts/other.woff2") format("woff2"); }
+       body { font-family: "Used Face", sans-serif; }
+       #shot { background-image: url(https://cdn.test/x.png); }`,
+    );
+    const { html, assets } = freezeShot(byId('shot'));
+    const css = styleOf(html);
+    expect(css).toContain(`url("${FREEZE_ASSET_PREFIX}/fonts/used.woff2")`);
+    expect(css).not.toContain('Other Face');
+    expect(css).toContain('url("https://cdn.test/x.png")');
+    const body = bodyOf(html);
+    expect(body).toContain(
+      `style="background: url(&quot;${FREEZE_ASSET_PREFIX}/img/bg.png&quot;)"`,
+    );
+    expect(body).toContain(`src="${FREEZE_ASSET_PREFIX}/img/logo.svg"`);
+    expect(body).toContain(
+      `srcset="${FREEZE_ASSET_PREFIX}/img/a.png 1x, https://cdn.test/b.png 2x"`,
+    );
+    expect(body).toContain('src="https://projects.test/avatar.png"');
+    expect(body).toContain('src="data:image/png;base64,AAAA"');
+    expect(body).toContain(`href="${FREEZE_ASSET_PREFIX}/img/icons.svg#star"`);
+    expect(assets).toEqual([
+      '/fonts/used.woff2',
+      '/img/a.png',
+      '/img/bg.png',
+      '/img/icons.svg',
+      '/img/logo.svg',
+    ]);
+  });
+
+  it('gives the same bytes for the same DOM however the ids were generated', () => {
+    const shot = (n: number) => {
+      mount(
+        `<div id="shot" _nghost-ng-c${n}=""><label for="i${n}" _ngcontent-ng-c${n}="">L</label>` +
+          `<input id="i${n}" _ngcontent-ng-c${n}=""></div>`,
+        `[_nghost-ng-c${n}] { color: red; }`,
+      );
+      return freezeShot(byId('shot')).html;
+    };
+    expect(shot(1)).toBe(shot(2));
+  });
+});
+
+describe('splitSelectors / stripPseudo', () => {
+  it('splits a list outside parentheses, brackets and escapes', () => {
+    expect(splitSelectors('.a, :is(.b, .c) .d, [data-x="1,2"], .e\\,f')).toEqual([
+      '.a',
+      ':is(.b, .c) .d',
+      '[data-x="1,2"]',
+      '.e\\,f',
+    ]);
+  });
+
+  it('strips pseudo-classes and pseudo-elements, and fills an emptied compound with *', () => {
+    expect(stripPseudo('.a:hover')).toBe('.a');
+    expect(stripPseudo('.a::before')).toBe('.a');
+    expect(stripPseudo('.a > :first-child')).toBe('.a > *');
+    expect(stripPseudo(':root')).toBe('*');
+    expect(stripPseudo(':not(.x):hover ~ .y')).toBe('* ~ .y');
+    expect(stripPseudo('.hover\\:bg:hover')).toBe('.hover\\:bg');
+    expect(stripPseudo('[data-a=":b"]:focus')).toBe('[data-a=":b"]');
+    expect(stripPseudo('.a:is(.b, .c)  .d')).toBe('.a .d');
+  });
+});
