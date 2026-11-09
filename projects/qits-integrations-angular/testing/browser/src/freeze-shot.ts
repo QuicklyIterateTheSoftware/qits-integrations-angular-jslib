@@ -588,12 +588,19 @@ export function splitSelectors(list: string): string[] {
   return out.filter((s) => s !== '');
 }
 
+/** Pseudo-classes that match what their selector list matches: kept, with their list stripped. */
+const LIST_PSEUDO_CLASSES = new Set(['is', 'where', 'matches', '-webkit-any', 'has']);
+
 /**
- * `selector` without its pseudo-classes and pseudo-elements (`:hover`, `::before`, `:not(…)`, …),
- * with `*` where that leaves a compound empty: `.a > :first-child:hover` is `.a > *`. Escapes
- * (`.md\:flex`) and attribute selectors are kept as they are.
+ * `selector` without the pseudo-classes and pseudo-elements that depend on state (`:hover`,
+ * `::before`, `:first-child`, …), with `*` where that leaves a compound empty: `.a > :first-child:hover`
+ * is `.a > *`. `:is()`, `:where()`, `:matches()`, `:-webkit-any()` and `:has()` stay, each
+ * argument stripped the same way (`:is(.a:hover, .b)` is `:is(.a, .b)`), because Tailwind wraps
+ * its variants in them and stripping them whole would match everything. `:not(…)` goes: dropping
+ * it only widens the match. Escapes (`.md\:flex`) and attribute selectors are kept as they are.
+ * The result matches a superset of what `selector` matches.
  */
-export function stripPseudo(selector: string): string {
+export function stripPseudo(selector: string, relative = false): string {
   let out = '';
   let compound = false;
   let i = 0;
@@ -610,14 +617,31 @@ export function stripPseudo(selector: string): string {
       i = end + 1;
       compound = true;
     } else if (c === ':') {
-      i += s[i + 1] === ':' ? 2 : 1;
+      const element = s[i + 1] === ':';
+      i += element ? 2 : 1;
+      const start = i;
       while (i < s.length && /[\w-]/.test(s[i])) i++;
-      if (s[i] === '(') i = closing(s, i, '(', ')') + 1;
+      const name = s.slice(start, i).toLowerCase();
+      if (s[i] !== '(') continue;
+      const end = closing(s, i, '(', ')');
+      if (!element && LIST_PSEUDO_CLASSES.has(name)) {
+        const args = splitSelectors(s.slice(i + 1, end)).map((arg) =>
+          stripPseudo(arg, name === 'has'),
+        );
+        out += `:${name}(${args.length ? args.join(', ') : '*'})`;
+        compound = true;
+      }
+      i = end + 1;
     } else if (/[\s>+~]/.test(c)) {
       let combinator = '';
       while (i < s.length && /[\s>+~]/.test(s[i])) {
-        if (s[i] !== ' ' && !/\s/.test(s[i])) combinator += s[i];
+        if (!/\s/.test(s[i])) combinator += s[i];
         i++;
+      }
+      if (relative && out === '') {
+        // a relative selector (`:has(> .a)`) starts with its combinator
+        out += combinator ? `${combinator} ` : '';
+        continue;
       }
       if (!compound) out += '*';
       out += combinator ? ` ${combinator} ` : ' ';

@@ -142,8 +142,11 @@ describe('freezeShot', () => {
         '.btn::before { content: "x"; }',
         '.md\\:wide { width: 100%; }',
         '.frame:has(.card) { padding: 1px; }',
-        ':is(.nothing) .btn { color: pink; }',
         '.other { color: blue; }',
+        ':is(.absent > *) { margin-top: 1px; }',
+        ':is(.card > *) { margin-top: 2px; }',
+        ':where(.absent > :not(:last-child)) { margin-left: 1px; }',
+        ':where(.card > :not(:last-child)) { margin-left: 3px; }',
         '.missing, .btn:focus-visible { color: red; }',
         '@media (min-width: 1px) { .card { margin: 1px; } .other { margin: 2px; } }',
         '@media print { .other { margin: 3px; } }',
@@ -165,7 +168,6 @@ describe('freezeShot', () => {
       '.btn::before { content: "x"; }',
       '.md\\:wide { width: 100%; }',
       '.frame:has(.card) { padding: 1px; }',
-      ':is(.nothing) .btn { color: pink; }',
       '.missing, .btn:focus-visible { color: red; }',
       '@media (min-width: 1px) {\n.card { margin: 1px; }\n}',
       '@supports (display: grid) {\n.btn { display: grid; }\n}',
@@ -176,6 +178,9 @@ describe('freezeShot', () => {
       expect(css).toContain(kept);
     }
     expect(css).not.toContain('.other');
+    expect(css).not.toContain('.absent');
+    expect(css).toContain(':is(.card > *) { margin-top: 2px; }');
+    expect(css).toContain(':where(.card > :not(:last-child)) { margin-left: 3px; }');
     expect(css).not.toContain('@media print');
     expect(css).not.toContain('@keyframes');
   });
@@ -353,6 +358,21 @@ describe('splitSelectors / stripPseudo', () => {
     expect(stripPseudo(':not(.x):hover ~ .y')).toBe('* ~ .y');
     expect(stripPseudo('.hover\\:bg:hover')).toBe('.hover\\:bg');
     expect(stripPseudo('[data-a=":b"]:focus')).toBe('[data-a=":b"]');
-    expect(stripPseudo('.a:is(.b, .c)  .d')).toBe('.a .d');
+    expect(stripPseudo('.a:is(.b, .c)  .d')).toBe('.a:is(.b, .c) .d');
+  });
+
+  it('keeps :is/:where/:matches/:-webkit-any/:has with stripped arguments, and drops :not', () => {
+    expect(stripPseudo(':is(.a:hover, .b)')).toBe(':is(.a, .b)');
+    expect(stripPseudo(':is(.\\*\\:col-span-full > *)')).toBe(':is(.\\*\\:col-span-full > *)');
+    expect(stripPseudo(':where(.space-x-4 > :not(:last-child))')).toBe(':where(.space-x-4 > *)');
+    expect(stripPseudo(':where(:hover)')).toBe(':where(*)');
+    expect(stripPseudo(':matches(.a::before)')).toBe(':matches(.a)');
+    expect(stripPseudo(':-webkit-any(.a:focus)')).toBe(':-webkit-any(.a)');
+    expect(stripPseudo('.card:has(> .icon:hover)')).toBe('.card:has(> .icon)');
+    expect(stripPseudo('.card:has(.x, + .y)')).toBe('.card:has(.x, + .y)');
+    expect(stripPseudo('.a:not(:hover)')).toBe('.a');
+    expect(stripPseudo(':not(.x)')).toBe('*');
+    expect(stripPseudo(':is(:not(.x))')).toBe(':is(*)');
+    expect(stripPseudo('.a:nth-child(2n + 1)::after')).toBe('.a');
   });
 });

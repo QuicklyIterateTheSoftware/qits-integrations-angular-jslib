@@ -658,10 +658,13 @@ children?}`), `freezes` (`{file, spec, test, name, route, records}`, sorted by `
   `*.page.browser.spec.ts`): layout and pattern specs mount stand-in routes, so theirs is `null`.
   Two-space JSON, stable key order, trailing newline.
 
-Every run writes, update run or not, and replaces only what it saw completely: a spec whose tests
-all ran and passed gets exactly the freezes it sent (a shot no test takes any more loses its file),
-a spec file that no longer exists loses its freezes, and a spec that failed, was filtered (`-t`,
-`.only`) or did not run keeps the freezes it had. Never edit a freeze by hand.
+Every run writes, update run or not, and replaces only what it saw completely
+(`completeForFreezes`): a spec in which nothing failed and every test that did not pass skipped
+itself (`it.skip`, `it.todo`, a false `skipIf`/`runIf`) gets exactly the freezes it sent (a shot
+no test takes any more loses its file); a spec file that no longer exists loses its freezes; a spec
+that failed, did not run, or that the run narrowed (`-t`, tags, line or id filters, `.only` in the
+file) keeps the freezes it had. The orphan record keeps its stricter rule (every test ran and
+passed). Never edit a freeze by hand.
 
 The same bytes on every machine and in every test order, so a freeze is a DOM, never pixels:
 
@@ -687,8 +690,11 @@ The same bytes on every machine and in every test order, so a freeze is a DOM, n
   for every spec file in the shared page does not repeat in later freezes.
 - `blob:` URLs (random per run, dead afterwards): a loaded `<img>` from one is inlined as a PNG
   `data:` URL, any other `blob:` URL (in the HTML or a CSS `url()`) becomes `about:blank`.
-- The CSS is the page's own rules, filtered: a style rule stays when its selector, without
-  pseudo-classes and pseudo-elements, matches the element, something in it or a shell; `@media`,
+- The CSS is the page's own rules, filtered: a style rule stays when its selector, without its
+  state pseudo-classes and pseudo-elements (`:hover`, `:focus-visible`, `::before`, `:not(…)`, …),
+  matches the element, something in it or a shell. `:is()`, `:where()`, `:matches()`,
+  `:-webkit-any()` and `:has()` are kept with their arguments stripped the same way, so Tailwind's
+  `:is(.\*\:col-span-full > *)` stays only where that class is; `@media`,
   `@supports`, `@container`, `@layer` and `@scope` blocks are filtered the same way; `@layer`
   statements and `@property` stay; `@font-face` only for the families in use; `@keyframes` and
   `@starting-style` go, and so do Vitest's own sheets and sheets the page may not read.
