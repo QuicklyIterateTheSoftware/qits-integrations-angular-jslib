@@ -361,6 +361,9 @@ function currentRoute(): string | undefined {
  * The routes noted since the last call (or {@link clearRouteRecords}), sorted and without
  * duplicates, and forgets them. Call it in the browser specs' setup file, after each spec file,
  * and send the list to the Node side: `afterAll(() => commands.goldenMasterRoutes(takeRouteRecords()))`.
+ * The command only stages the list; the ledger is written at the end of the run, and only for the
+ * spec files that ran completely, by the reporter `goldenMasterRoutes(...).plugin` adds, so put
+ * that plugin in the Vitest config's `plugins`.
  */
 export function takeRouteRecords(): RouteRecord[] {
   const out = [...routeRecords.entries()]

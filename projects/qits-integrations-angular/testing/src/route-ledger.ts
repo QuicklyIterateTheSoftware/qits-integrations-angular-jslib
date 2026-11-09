@@ -16,8 +16,11 @@
  *   }
  *
  * One section per browser spec file, keyed by its path relative to the project root.
- * {@link goldenMasterRoutes} is the Vitest browser command that rewrites one spec's section after
- * that spec ran; {@link routeLedger} reads the file for the pact specs. Node-side only.
+ * {@link goldenMasterRoutes} is the Vitest browser command a spec file sends its records to; it
+ * only stages them, and its reporter (added by its `plugin`) writes the ledger when the run ends,
+ * replacing only the sections of spec files that ran completely (ticket qits-1966), the way the
+ * screenshot freezes are written. A file that failed, was skipped or ran in part keeps its
+ * section. {@link routeLedger} reads the file for the pact specs. Node-side only.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
@@ -85,56 +88,139 @@ function read(ledgerPath: string): RouteLedgerFile {
 }
 
 /**
- * The browser command that keeps the ledger at `ledgerPath` (relative to `root`, default the cwd):
- * called with the records of the spec that just ran (`takeRouteRecords()` from
- * `@qits/angular/testing/browser`), it rewrites that spec's section and nothing else.
+ * A test module as the ledger's reporter needs it: the shape of Vitest's `TestModule` (Vitest 4
+ * and 5) it reads, without needing Vitest's types.
+ */
+export interface RouteLedgerTestModule {
+  /** The spec file's absolute path. */
+  readonly moduleId: string;
+  state(): string;
+  errors?(): readonly unknown[];
+  readonly children: { allTests(): Iterable<{ result(): { readonly state: string } }> };
+}
+
+/** The Vitest reporter that writes the ledger at the end of a run. */
+export interface RouteLedgerReporter {
+  onTestRunStart(): void;
+  onTestRunEnd(testModules: readonly RouteLedgerTestModule[]): void;
+}
+
+/** What the ledger's plugin reads from the context of Vite's `configureVitest` hook. */
+export interface RouteLedgerVitestContext {
+  readonly vitest: { readonly config: { readonly reporters: unknown[] } };
+}
+
+/** The Vite plugin that adds the ledger's reporter to the Vitest run. */
+export interface RouteLedgerPlugin {
+  readonly name: 'qits:route-ledger';
+  configureVitest(context: RouteLedgerVitestContext): void;
+}
+
+/** {@link goldenMasterRoutes}: the browser command, its reporter, and the plugin that adds it. */
+export type GoldenMasterRoutes = RouteLedgerCommand & {
+  readonly reporter: RouteLedgerReporter;
+  readonly plugin: RouteLedgerPlugin;
+};
+
+/**
+ * A file ran completely when it passed and every test in it ran and passed: a skip or a failure
+ * leaves routes unseen. The same rule as `complete()` in `@qits/angular/screenshots`.
+ */
+function complete(testModule: RouteLedgerTestModule): boolean {
+  if (testModule.state() !== 'passed') return false;
+  if ((testModule.errors?.() ?? []).length > 0) return false;
+  for (const test of testModule.children.allTests()) {
+    if (test.result().state !== 'passed') return false;
+  }
+  return true;
+}
+
+/**
+ * The browser command that keeps the ledger at `ledgerPath` (relative to `root`, default the cwd),
+ * with the reporter that writes it. Called with the records of a spec file
+ * (`takeRouteRecords()` from `@qits/angular/testing/browser`), the command only stages them for
+ * that file, replacing what an earlier call staged for it; it writes nothing. When the run ends,
+ * the reporter rewrites the section of every spec file that ran completely and nothing else:
  *
- * - The section's key is the running spec's path relative to `root`, with `/` separators.
- * - Its records are sorted and without duplicates; an empty list removes the section.
+ * - The section's key is the spec's path relative to `root`, with `/` separators.
+ * - Its records are sorted and without duplicates; a file that ran completely and staged nothing
+ *   (or an empty list) loses its section.
+ * - A file that failed (in a test or in a hook such as `beforeAll`), was skipped or ran in part
+ *   (`-t`, `.only`) keeps its section as it was, so a broken run never empties the ledger.
  * - Sections of spec files that no longer exist (relative to `root`) are dropped.
  * - Keys are sorted, the JSON is indented by two spaces and ends in a newline, and the file is
  *   written only when that text changed, so a run that shows nothing new leaves it untouched.
  *
- * Each call reads and writes synchronously, so calls from several spec files in one process never
- * interleave, and holds `<ledger>.lock` while it does, so neither do runs in other processes.
+ * The write holds `<ledger>.lock`, so runs in other processes never interleave with it.
  *
- * A spec run with a filter (`-t`, `.only`) notes only what its tests showed, and that replaces the
- * section: run whole spec files before committing the ledger.
+ * Register the command under `browser.commands` and put `.plugin` in the Vitest config's `plugins`:
+ * without the plugin, nothing is ever written.
  */
 export function goldenMasterRoutes(
   ledgerPath: string,
   root: string = process.cwd(),
-): RouteLedgerCommand {
+): GoldenMasterRoutes {
   const base = resolve(root);
   const file = resolve(base, ledgerPath);
-  return (context, records) => {
+  const specOf = (path: string) => {
+    const absolute = isAbsolute(path) ? path : resolve(base, path);
+    return relative(base, absolute).split(sep).join('/');
+  };
+  /** spec path (relative, posix) → its staged records */
+  const staged = new Map<string, RouteRecord[]>();
+
+  const command: RouteLedgerCommand = (context, records) => {
     const testPath = context.testPath;
     if (!testPath) {
       throw new Error('goldenMasterRoutes: the command was called outside a test file');
     }
-    const absolute = isAbsolute(testPath) ? testPath : resolve(base, testPath);
-    const spec = relative(base, absolute).split(sep).join('/');
-    mkdirSync(dirname(file), { recursive: true });
-    withLock(`${file}.lock`, () => {
-      const ledger = read(file);
-      const next: RouteLedgerFile = {};
-      const section = normal(records);
-      const keys = new Set(Object.keys(ledger));
-      if (section.length) keys.add(spec);
-      for (const key of [...keys].sort()) {
-        if (key === spec) {
-          if (section.length) next[key] = section;
-        } else if (existsSync(resolve(base, key))) {
-          next[key] = normal(Array.isArray(ledger[key]) ? ledger[key] : []);
-        }
-      }
-      const text = `${JSON.stringify(next, null, 2)}\n`;
-      const current = existsSync(file) ? readFileSync(file, 'utf8') : undefined;
-      if (current === text) return;
-      if (current === undefined && Object.keys(next).length === 0) return;
-      writeFileSync(file, text);
-    });
+    staged.set(specOf(testPath), normal(records));
   };
+
+  const reporter: RouteLedgerReporter = {
+    onTestRunStart() {
+      staged.clear();
+    },
+    onTestRunEnd(testModules) {
+      const ran = new Set<string>();
+      for (const testModule of testModules) {
+        if (complete(testModule)) ran.add(specOf(testModule.moduleId));
+      }
+      mkdirSync(dirname(file), { recursive: true });
+      withLock(`${file}.lock`, () => {
+        const ledger = read(file);
+        const next: RouteLedgerFile = {};
+        const keys = new Set(Object.keys(ledger));
+        for (const spec of ran) keys.add(spec);
+        for (const key of [...keys].sort()) {
+          if (ran.has(key)) {
+            const section = staged.get(key) ?? [];
+            if (section.length) next[key] = section;
+          } else if (existsSync(resolve(base, key))) {
+            next[key] = normal(Array.isArray(ledger[key]) ? ledger[key] : []);
+          }
+        }
+        const text = `${JSON.stringify(next, null, 2)}\n`;
+        const current = existsSync(file) ? readFileSync(file, 'utf8') : undefined;
+        if (current === text) return;
+        if (current === undefined && Object.keys(next).length === 0) return;
+        writeFileSync(file, text);
+      });
+    },
+  };
+
+  let reporterAdded = false;
+  const plugin: RouteLedgerPlugin = {
+    name: 'qits:route-ledger',
+    // Vitest builds its reporters from the resolved config after every configureVitest hook.
+    configureVitest({ vitest }) {
+      if (reporterAdded) return;
+      reporterAdded = true;
+      vitest.config.reporters.push(reporter);
+    },
+  };
+
+  return Object.assign(command, { reporter, plugin });
 }
 
 /**
