@@ -15,6 +15,7 @@ import pageHasScreenshots from './rules/page-has-screenshots.mjs';
 import pageLocation from './rules/page-location.mjs';
 import pageSuffix from './rules/page-suffix.mjs';
 import routeMatchesDirectory from './rules/route-matches-directory.mjs';
+import routePaths from './rules/route-paths.mjs';
 import storeHasPact from './rules/store-has-pact.mjs';
 
 const plugin = {
@@ -28,6 +29,7 @@ const plugin = {
     'page-suffix': pageSuffix,
     'page-has-screenshots': pageHasScreenshots,
     'route-matches-directory': routeMatchesDirectory,
+    'route-paths': routePaths,
     'browser-spec-data-from-golden-masters': browserSpecDataFromGoldenMasters,
   },
   configs: {},
@@ -47,6 +49,7 @@ plugin.configs.recommended = [
       'qits/page-suffix': 'error',
       'qits/page-has-screenshots': 'error',
       'qits/route-matches-directory': 'error',
+      'qits/route-paths': 'error',
       'qits/browser-spec-data-from-golden-masters': 'error',
     },
   },

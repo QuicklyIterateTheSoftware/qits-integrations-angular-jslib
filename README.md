@@ -304,6 +304,98 @@ data?.entries?.[0].project?.slug; // error: not listed
 argument lists paths. `NOTHING` is the empty list. At run time `consume` returns the answer
 unchanged. `qits/consume-client-calls` makes every client call in a store go through it.
 
+## Where an interaction leads: `outcomes`
+
+An interaction declares, once, where it can end (ticket qits-2001): each **exit** is a route of
+the app, each **stay** an end on the same page (a refusal, a validation error). The declaration
+is a field initializer, because `outcomes()` injects the `Router`:
+
+```ts
+import { exit, outcomes, QitsExit, QitsTriggers, stay } from '@qits/angular';
+
+@Component({
+  imports: [QitsExit, QitsTriggers],
+  template: `
+    <a [qitsExit]="create.cancelled" [exitParams]="{ slug: slug() }">Cancel</a>
+    <button [qitsTriggers]="[create.created, create.refused]" (click)="submit()">Create</button>
+  `,
+})
+export class WorkCreatePage {
+  readonly create = outcomes('create-work-item', {
+    created: exit('projects/:slug/work/detail/:id'),
+    cancelled: exit('projects/:slug/work'),
+    refused: stay(),
+  });
+
+  async submit() {
+    const { data, error } = await this.store.create(/* … */);
+    if (error || !data) return this.create.refused.reach();
+    await this.create.created.go({ slug: this.slug(), id: data.id }, { replaceUrl: true });
+  }
+}
+```
+
+- **Entries.** Each declared key is a frozen entry carrying `interaction`, `outcome` (the key),
+  `kind` (`'exit'` or `'stay'`) and `to` (the path pattern; `null` for a stay).
+- **An exit** has `url(params)`, the absolute URL (`/projects/demo/work`, and `/` for the root
+  path `''`) with each param `encodeURIComponent`ed, and `go(params, behaviour?)`, which records
+  the outcome and returns `router.navigateByUrl(url, behaviour)`. `behaviour` is the router's
+  `NavigationBehaviorOptions` (`replaceUrl`, `state`, …). A path without params takes no
+  argument; a missing param throws.
+- **A stay** has `reach()`, which records the outcome and does nothing else.
+- **`QitsExit`** (`<a [qitsExit]="…" [exitParams]="…">`, on `<a>` only) renders a real `href`,
+  through the `LocationStrategy` as `RouterLink` does, so the base href is honoured. A plain
+  primary click records and navigates; a click with ctrl, meta, shift or alt, a middle click, or
+  a `target` other than `_self` is left to the browser and records nothing.
+- **Trigger marks.** `QitsExit` and `[qitsTriggers]="[…]"` set `data-qits-outcome` to
+  `<interaction>:<outcome>` per entry, space-separated in the order given
+  (`create-work-item:created create-work-item:refused`). `outcomeMark(...entries)` returns the
+  same string, for a component that binds `[attr.data-qits-outcome]` itself. The mark is a plain
+  attribute, so it survives into a frozen screenshot page. The interaction span reads it from the
+  target or an ancestor: `app.interaction.outcome` is the mark, and without a `data-track-event`
+  the first mark's interaction names the span (`interaction create-work-item`) and
+  `app.interaction.name`. `data-track-event` wins when both are there.
+
+**The compiler checks the names**, through the `QitsApp` interface an app augments. Unaugmented,
+`RoutePath` and `InteractionName` are `string`, and the params are still parsed from the literal
+path (`PathParams<'projects/:slug'>` is `{ slug: string | number }`).
+
+- `routePath`: `qits/route-paths` (below) generates `src/app/route-paths.ts` from the route tables,
+  with the augmentation in it. `exit()` then refuses a path the router does not serve, and `go()`
+  refuses a missing or misspelled param. Regenerate with `eslint --fix src/app/route-paths.ts`.
+- `interaction`: one line next to the app's own list of interactions, so `outcomes()` refuses an
+  unknown one:
+
+```ts
+// src/app/interactions.ts
+export type InteractionSlug = 'create-work-item' | 'open-project';
+declare module '@qits/angular' {
+  interface QitsApp {
+    interaction: InteractionSlug;
+  }
+}
+```
+
+**Recording in browser specs.** Call `recordOutcomes()` from `@qits/angular/testing/browser` once
+in the browser specs' setup file. Every `go()`, `reach()` and handled `QitsExit` click is then
+recorded with `{ interaction, outcome, kind, to, url? }` (`url` for an exit), plus `spec`
+(`expect.getState().testPath`) and `test` (`currentTestName`). `outcomeRecords()` gives the current
+test's records in order, for assertions. `takeOutcomeRecords()` gives the spec file's records since
+the last call and forgets them, as `takeRouteRecords()` does for routes. Records start empty before
+every test, and nothing outside a test is recorded. Without `recordOutcomes()` the main entry
+records nothing; its seam, `ɵsetOutcomeRecorder`, is internal.
+
+```ts
+// src/testing/browser/setup.ts
+import { recordOutcomes } from '@qits/angular/testing/browser';
+recordOutcomes();
+
+// a page spec
+import { outcomeRecords } from '@qits/angular/testing/browser';
+await page.getByRole('button', { name: 'Create' }).click();
+expect(outcomeRecords().map((r) => r.outcome)).toEqual(['created']);
+```
+
 ## Pacts and golden masters: `@qits/angular/testing`
 
 For an app that consumes a qits provider (epic qits-546). The provider records its real answer for
@@ -555,6 +647,7 @@ export default [...yourConfig, ...qits.configs.recommended];
 | `qits/page-suffix`                           | The exported component in a `*.page.ts` ends in `Page`, the one in a `*.layout.ts` ends in `Layout`, and a component named `…Page` / `…Layout` lives in such a file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `qits/page-has-screenshots`                  | Every `*.page.ts` and `*.layout.ts` under the routes directory, and every `*.layout.ts` under the `$layout` alias directory, has `<name>.page.browser.spec.ts` / `<name>.layout.browser.spec.ts` beside it, and that spec calls `toMatchScreenshot`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `qits/route-matches-directory`               | In a route table, every route with `component` or `loadComponent` (and every `loadChildren`) imports from the directory its URL names: the `path`s from the top of the table through `children`, `''` skipped, `:param` as `[param]`, relative to the routes directory. `path: '**'` may render any page; `redirectTo` routes are skipped. A route table under the routes directory is mounted at its own directory. A `*.layout.ts` under the `$layout` alias directory is shared and not checked. Imports through a path alias and non-literal paths are not checked.                                                                                                                                                                                                                                                                                                                |
+| `qits/route-paths`                           | Keeps `src/app/route-paths.ts` (option `file`) generated from the route tables: `export type RoutePath`, every full path of a route with `component`, `loadComponent`, `children` or `loadChildren` (`''` included, `**`, `redirectTo` and non-literal paths left out, a nested `*.routes.ts` prefixed by its directory; sorted, no leading slash), and the `declare module '@qits/angular' { interface QitsApp { routePath: RoutePath } }` augmentation that makes `exit()` refuse other paths. Reports `stale` on that file when it differs; the fix rewrites it, so `eslint --fix src/app/route-paths.ts` is the generator. Reports `missing` on a route table when the file does not exist. See [Where an interaction leads](#where-an-interaction-leads-outcomes).                                                                                                                |
 | `qits/browser-spec-data-from-golden-masters` | In every `*.browser.spec.ts` except the UI components' (option `syntheticAllowed`, default `['src/app/ui/**']`): no `patchState`, no `TestBed.overrideProvider`, no `useValue`/`useFactory`/`useClass`/`useExisting` for a `*Store` token or for any token imported from the app's state tree (`$core/…` or a path with `/core/`, such as `SelectedProject`; option `allowTokens: ['EVENT_SOURCE']` exempts named state-tree tokens that are transport seams only, never data, and never a `*Store`), no import from a `*.store` file except `import type`, no `recorded`/`fromGoldenMasters` import; the first argument of `flush(…)` traces back to a golden-master call, unless the options give a literal `status` of 400 or more (or 204 with `null`). See [Browser spec data comes from golden masters](#browser-spec-data-comes-from-golden-masters-qitsangulartestingbrowser). |
 
 Generated clients are `src/app/api/**` (relative to the nearest `package.json`) unless you pass
@@ -566,11 +659,12 @@ Generated clients are `src/app/api/**` (relative to the nearest `package.json`) 
 `projects/:slug/work` renders `src/app/routes/projects/[slug]/work/project-work.page.ts`
 (`ProjectWorkPage`). A route with `children` renders a layout, `<name>.layout.ts` with a class
 ending in `Layout`, in the directory of its own path (path `''` is `src/app/routes/`). Components
-that are not routed stay outside (`ui/components/`, `patterns/`). The four route rules take
+that are not routed stay outside (`ui/components/`, `patterns/`). The route rules take
 `{ routes: 'src/app/routes', routeTables: ['src/app/app.routes.ts', 'src/app/**/*.routes.ts'] }`
 (the defaults shown), relative to the nearest `package.json`; `page-has-screenshots` reads only
-`routes`. A shared layout may also live outside `routes/`: point the `$layout/*` path alias in
-the project's `tsconfig.json` (next to `package.json`, `extends` followed) at a directory, such as
+`routes`, and `route-paths` also takes `file` (default `src/app/route-paths.ts`). A shared layout
+may also live outside `routes/`: point the `$layout/*` path alias in the project's `tsconfig.json`
+(next to `package.json`, `extends` followed) at a directory, such as
 `"$layout/*": ["./src/app/layout/*"]`, and a `*.layout.ts` there is allowed and needs its
 screenshots too. Without the alias, layouts live under `routes/` only.
 

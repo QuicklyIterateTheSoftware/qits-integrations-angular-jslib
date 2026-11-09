@@ -37,12 +37,18 @@ initQitsIntegration()
 providers: [provideQitsIntegration(withFeatureCapture())];
 ```
 
-Two more entry points, both documented in the repository README:
+Where an interaction leads is declared with `outcomes('<interaction>', { done: exit('projects/:slug'),
+refused: stay() })`, linked with the `QitsExit` directive and marked with `QitsTriggers`; the paths
+are checked against the `RoutePath` type `qits/route-paths` generates.
+
+More entry points, all documented in the repository README:
 
 - `@qits/angular/testing`: golden masters and Pact V4 consumer pacts for specs (Node only; needs
   `@pact-foundation/pact`).
+- `@qits/angular/testing/browser`: the golden-master guard, the screenshot freezes and
+  `recordOutcomes()` for browser specs.
 - `@qits/angular/eslint`: lint rules (`client-only-in-stores`, `store-has-pact`, `pact-names`, the route rules,
-  `page-has-screenshots`) as
+  `page-has-screenshots`, and `route-paths`, which generates `src/app/route-paths.ts`) as
   a flat-config plugin: `export default [...yourConfig, ...qits.configs.recommended];`
 
 The rest of the consumer contract — the backend endpoints, the capture and state-snapshot APIs,
