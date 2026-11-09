@@ -380,8 +380,9 @@ declare module '@qits/angular' {
 **Recording in browser specs.** Call `recordOutcomes()` from `@qits/angular/testing/browser` once
 in the browser specs' setup file. Every `go()`, `reach()` and handled `QitsExit` click is then
 recorded with `{ interaction, outcome, kind, to, url? }` (`url` for an exit), plus `spec`
-(`expect.getState().testPath`) and `test` (`currentTestName`). `outcomeRecords()` gives the current
-test's records in order, for assertions. `takeOutcomeRecords()` gives the spec file's records since
+(`expect.getState().testPath`), `test` (`currentTestName`) and `route` (the pattern the TestBed's
+router had matched when it was reached, `currentRoutePattern()`, or `null`). `outcomeRecords()`
+gives the current test's records in order, for assertions. `takeOutcomeRecords()` gives the spec file's records since
 the last call and forgets them, as `takeRouteRecords()` does for routes. Records start empty before
 every test, and nothing outside a test is recorded. Without `recordOutcomes()` the main entry
 records nothing; its seam, `ɵsetOutcomeRecorder`, is internal.
@@ -396,6 +397,48 @@ import { outcomeRecords } from '@qits/angular/testing/browser';
 await page.getByRole('button', { name: 'Create' }).click();
 expect(outcomeRecords().map((r) => r.outcome)).toEqual(['created']);
 ```
+
+**Checking that every outcome is tested** (ticket qits-2003). After each test, `recordOutcomes()`
+sends the test's records through the browser command `qitsOutcomes`, which
+`screenshotReferences({ freezes })` registers (without it, nothing is sent), and the run writes
+them into the freeze manifest as `outcomes.fired`, beside `outcomes.declared`, read from the
+source (see [the manifest](#screenshots-frozen-as-html-freezescreenshots-and-the-freezes-option)).
+Each freeze also lists the trigger marks visible in its shot (`triggers`). Then
+`qits-angular screenshots --check` names, one line each:
+
+- **an outcome no browser test reaches.** A page's outcome needs a fire on its own route, a
+  layout's one in its subtree, an app-wide one anywhere;
+- **a stay no screenshot follows.** A stay leaves the page where it is, so the page after it must be
+  shown; an exit needs no screenshot of its own;
+- **a trigger no screenshot shows.** A page's needs a freeze of its route listing it in `triggers`,
+  a layout's one of its subtree, an app-wide one any freeze, `route: null` ones included. This is
+  not the same as reaching it: a test may click a button no screenshot shows;
+- **an `outcomes()` call it cannot read**, by `file:line`: a non-literal interaction, a spread, a
+  computed key, an entry that is no `exit()` / `stay()` call, an exit without a string literal.
+
+```text
+create-work-item:refused (projects/:slug/work/create): no browser test reaches it.
+create-work-item:refused (projects/:slug/work/create): a stay needs a screenshot after it is reached.
+create-work-item:refused: no screenshot of projects/:slug/work/create shows its trigger. Add a screenshot test where it is visible, with another provider state if needed (an open menu, a loaded list).
+src/app/routes/projects/projects.page.ts:12: an outcomes() call that cannot be read statically (a spread).
+```
+
+The declarations are read statically, with the app's own `typescript` (resolved from the app root;
+an optional peer of `@qits/angular`; when it is missing the check names it as a gap): every `.ts` file
+under `src/app` (specs left out) whose `outcomes(...)` call is the `outcomes` import from
+`@qits/angular`, renamed or through a namespace import. The scope is the declaring file's
+directory under the routes directory (`src/app/routes`, `--routes <dir>`, as the lint rules'
+`routes` option): a file there that is not a `*.layout.ts` declares for exactly the route its
+directory names (`projects/[slug]` → `projects/:slug`, the directory itself `''`); a `*.layout.ts`
+there for its route's whole subtree; a `*.layout.ts` under the `$layout` alias and any file outside
+the routes directory for the whole app (`route: null`). Layout and app-wide declarations are
+`global: true` and checked once, not per page.
+
+The rollout is opt-in: the outcome gaps are **report-only** (printed to stderr under a heading
+that says so, the exit code untouched) until the app adds `--enforce-outcomes`, which makes any gap
+exit 1, as an orphan does. An app without a declaration reports nothing, so it migrates page by
+page and adds the flag to its `test:browser` script once its gaps are gone. An update run
+(`UPDATE_SNAPSHOT`) lists the gaps and exits 0.
 
 ## Pacts and golden masters: `@qits/angular/testing`
 
@@ -705,6 +748,11 @@ qits-angular screenshots --check   # lists the orphans, exits 1 if there are any
 qits-angular screenshots --prune   # deletes them (only the platform's baselines job runs this)
 ```
 
+`--check` also reports the outcome gaps (report-only unless `--enforce-outcomes`; see
+[Where an interaction leads](#where-an-interaction-leads-outcomes)), reading `manifest.json` from
+`--freezes <dir>` (default `src/testing/browser/freezes`) and the declarations' scope from
+`--routes <dir>` (default `src/app/routes`).
+
 A reference is an orphan when:
 
 - its spec file is gone (found without a test run, so `--check` is useful in `lint` too);
@@ -753,18 +801,32 @@ What the run writes, under `dir` (default `src/testing/browser/freezes`, the tre
   `<root>/src/testing/browser/fonts/x.woff2`), referred to relatively (`../../…/assets/x.woff2`).
   Two different files with the same name fail the run. A copy no freeze uses any more is deleted.
 - `manifest.json`: `routes` (the tree as `describeRoutes()` gives it: `{path, fullPath, redirectTo?,
-children?}`), `freezes` (`{file, spec, test, name, route, records}`, sorted by `file`, which is
-  relative to `dir`) and `byRoute` (route pattern → files). `route` is the pattern the TestBed's
-  router had matched, and only for specs `routeSpecs` matches (default the page specs,
-  `*.page.browser.spec.ts`): layout and pattern specs mount stand-in routes, so theirs is `null`.
-  Two-space JSON, stable key order, trailing newline.
+children?}`), `freezes` (`{file, spec, test, name, route, records, triggers}`, sorted by `file`,
+  which is relative to `dir`), `byRoute` (route pattern → files) and `outcomes` (below). `route` is
+  the pattern the TestBed's router had matched, and only for specs `routeSpecs` matches (default
+  the page specs, `*.page.browser.spec.ts`): layout and pattern specs mount stand-in routes, so
+  theirs is `null`. `triggers` are the `<interaction>:<outcome>` marks (`data-qits-outcome`)
+  visible in the shot, split, deduplicated and sorted. They are measured on the live DOM before the
+  shot is serialized, because the HTML keeps a closed menu's marks too: a mark counts when the
+  element passes `checkVisibility({ checkVisibilityCSS: true })`, has no `hidden` attribute on itself
+  or an ancestor, has a box of non-zero size, and that box meets the shot's element (or the page's
+  scroll area for a page shot). Two-space JSON, stable key order, trailing newline.
+- `outcomes.declared`: `{route, interaction, outcome, kind, to, global, file}` per entry of the
+  app's `outcomes()` calls, read from the source at the end of the run (scoped by the `freezes`
+  option's `routes`, default `src/app/routes`), sorted by route, interaction and outcome.
+  `outcomes.fired`: `{spec, test, route, interaction, outcome, kind, freeze}` per outcome a test
+  reached (`recordOutcomes()`), sorted by spec and test, in order within a test. `freeze` is the
+  first freeze of the same spec and test whose shot came after it (the payload's `outcomes`, the
+  test's record count at shot time, is greater than the record's index), `null` when none did.
+  `route` follows the freezes' rule (`null` outside `routeSpecs`).
 
 Every run writes, update run or not, and replaces only what it saw completely
 (`completeForFreezes`): a spec in which nothing failed and every test that did not pass skipped
 itself (`it.skip`, `it.todo`, a false `skipIf`/`runIf`) gets exactly the freezes it sent (a shot
 no test takes any more loses its file); a spec file that no longer exists loses its freezes; a spec
 that failed, did not run, or that the run narrowed (`-t`, tags, line or id filters, `.only` in the
-file) keeps the freezes it had. The orphan record keeps its stricter rule (every test ran and
+file) keeps the freezes it had. Its fired outcomes follow the same rules: a complete spec replaces
+them, a gone spec drops them, any other keeps them. The orphan record keeps its stricter rule (every test ran and
 passed). Never edit a freeze by hand.
 
 The same bytes on every machine and in every test order, so a freeze is a DOM, never pixels:

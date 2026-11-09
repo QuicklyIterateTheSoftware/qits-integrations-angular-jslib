@@ -269,9 +269,11 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   `@qits/angular` to `src/public-api.ts` for the specs; ng-packagr resolves it to the built entry).
   `recordOutcomes()` (`record-outcomes.ts`, ticket qits-2001) reaches the main entry's outcome
   recorder the same way, which is what makes it one module instance: `beforeEach` installs it and
-  clears the test's records, `afterEach` uninstalls it, and each record is stamped with `spec` and
-  `test` from `expect.getState()`. `outcomeRecords()` is the current test's, `takeOutcomeRecords()`
-  drains the file's, in order, for qits-2003 to carry to the Node side.
+  clears the test's records, `afterEach` sends them through the `qitsOutcomes` browser command
+  (ticket qits-2003; skipped when no plugin registered it) and only then uninstalls it, and each
+  record is stamped with `spec` and `test` from `expect.getState()` and `route` from the guard's
+  `currentRoutePattern()` at fire time. `outcomeRecords()` is the current test's,
+  `takeOutcomeRecords()` drains the file's, in order.
 - **`@qits/angular/eslint`** (`projects/qits-integrations-angular/eslint/`): plain ESM, no build.
   ng-packagr copies the `.mjs` files as assets (minus `test/`), and the source `package.json`'s
   `exports["./eslint"]` points at them; ng-packagr merges that with the exports it generates.
@@ -318,6 +320,29 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   there, so importing the entry (the guard) never needs a browser run. The command names are
   spelled in both halves; keep them in step. `freeze-shot.browser.spec.ts` runs under
   `test-browser` (the `../testing/**/*.browser.spec.ts` include; `ng test` excludes it).
+  Outcomes (ticket qits-2003): each freeze payload also carries `outcomes` (the test's record count
+  at shot time) and `triggers` (`visible-triggers.ts`: the `data-qits-outcome` marks visible in the
+  shot — `checkVisibility` with CSS, no `hidden` on an ancestor, a non-zero box meeting the target's
+  box or the page's scroll area — measured on the **live DOM** before `freezeShot`, because the
+  HTML keeps a closed menu's marks too). The third command, `qitsOutcomes`, takes each test's
+  records. `end()` writes `triggers` per freeze and `outcomes: { declared, fired }`: `fired` follow
+  the freezes' per-spec rules (complete replaces, gone drops, otherwise kept), each linked to the
+  first freeze of its spec and test whose `outcomes` exceeds the record's index (`freeze`, or
+  `null`), its `route` nulled outside `routeSpecs` like a freeze's; `declared` is read afresh.
+  `outcomes.mjs` is the reader: the app's own `typescript` (an **optional peer**, resolved with
+  `createRequire` from the app root, loaded only when a file under `src/app` mentions
+  `@qits/angular` and `outcomes`; specs skipped), a call counts when its callee is the `outcomes`
+  import from `@qits/angular` (renamed, or via a namespace), each key one
+  `{route, interaction, outcome, kind, to, global, file}`. Scope by the file's directory under the
+  routes directory (`routes`, as the lint rules'; `--routes` on the command): a non-layout file is
+  the route its directory names (inverse of `segmentDirs`), a `*.layout.ts` its subtree
+  (`global`), a `$layout` layout or any file outside the routes directory app-wide (`route: null`,
+  `global`); anything it cannot read is an `unreadable` gap by file:line. `--check` names the gaps
+  (`outcomeGaps()`): unreached, a reached stay with no `freeze`, no freeze in scope listing the
+  trigger, unreadable. They are **report-only** (stderr, exit unchanged) unless
+  `--enforce-outcomes`; an app with no declaration prints nothing; an update run only lists them.
+  `--freezes <dir>` names the manifest's directory. The root page's route `''` also takes `null`,
+  since `currentRoutePattern()` reports the empty route as `null`.
 
 ## Conventions (inherited from the qits webui)
 
