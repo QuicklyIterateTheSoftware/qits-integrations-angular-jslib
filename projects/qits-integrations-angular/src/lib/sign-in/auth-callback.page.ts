@@ -61,7 +61,19 @@ type State =
       display: grid;
       place-items: center;
       text-align: center;
-      font-family: system-ui, sans-serif;
+    }
+    /* The app's own font, and a heading and link an app's CSS reset cannot flatten. */
+    h1 {
+      margin: 0 0 0.5rem;
+      font-size: 1.5rem;
+      font-weight: 600;
+    }
+    p {
+      margin: 0 0 1rem;
+    }
+    a {
+      color: inherit;
+      text-decoration: underline;
     }
     .qits-auth-spinner {
       display: inline-block;
