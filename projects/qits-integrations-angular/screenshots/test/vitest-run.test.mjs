@@ -215,7 +215,7 @@ freezeScreenshots({ routes: [{ path: '', redirectTo: 'a', pathMatch: 'full' }, {
   @keyframes spin { to { transform: rotate(1turn); } }
   @media (min-width: 1px) { .field { color: rgb(0, 128, 0); } .not-here { color: red; } }
 `;
-  const spec = (withMenu) => `import { expect, it } from 'vitest';
+  const spec = (withMenu, typed = 'Ada') => `import { expect, it } from 'vitest';
 import { page } from 'vitest/browser';
 
 const mount = (html: string) => {
@@ -231,7 +231,7 @@ it('a filled form', async () => {
   mount('<form data-testid="form" class="card"><!-- a comment --><label for="name">Name</label>' +
     '<input id="name" class="field" onclick="alert(1)"><script>window.ran = true</script>' +
     '<a href="javascript:alert(1)">x</a></form>');
-  await page.getByLabelText('Name').fill('Ada');
+  await page.getByLabelText('Name').fill('${typed}');
   await expect.element(page.getByTestId('form')).toMatchScreenshot('filled');
 });
 ${
@@ -245,6 +245,21 @@ it('an open menu', async () => {
     : ''
 }`;
   put(FORM, spec(true));
+  // A spec that holds a test with it.skip: its passing shot is frozen all the same.
+  const HELD = 'src/held/held.browser.spec.ts';
+  put(
+    HELD,
+    `import { expect, it } from 'vitest';
+import { page } from 'vitest/browser';
+
+it.skip('a held test', () => {});
+
+it('a shown box', async () => {
+  document.body.innerHTML = '<div data-testid="box" style="width:30px;height:10px;background:red"></div>';
+  await expect.element(page.getByTestId('box')).toMatchScreenshot('shown');
+});
+`,
+  );
 
   async function runFreezes({ update = false, testNamePattern } = {}) {
     const vitest = await startVitest('test', [], {
@@ -308,17 +323,34 @@ it('an open menu', async () => {
           route: null,
           records: [],
         },
+        {
+          file: `${HELD}/shown.html`,
+          spec: HELD,
+          test: 'a shown box',
+          name: 'shown',
+          route: null,
+          records: [],
+        },
       ],
       byRoute: {},
     });
     assert.ok(readFileSync(join(FREEZES, 'manifest.json'), 'utf8').endsWith('}\n'));
   });
 
+  it('freezes the passing shot of a spec that skips a test by declaration', () => {
+    assert.match(readFileSync(join(FREEZES, HELD, 'shown.html'), 'utf8'), /data-testid="box"/);
+  });
+
   it('writes the same bytes on the next run, and keeps a filtered spec as it was', async () => {
     const first = tree();
     assert.ok(await runFreezes());
     assert.deepEqual(tree(), first);
-    assert.ok(await runFreezes({ testNamePattern: 'filled' }));
+    // -t runs only "filled", which now shows another value: the spec's freezes stay as they were.
+    put(FORM, spec(true, 'Bob'));
+    assert.ok(await runFreezes({ update: true, testNamePattern: 'filled' }));
+    assert.deepEqual(tree(), first);
+    put(FORM, spec(true));
+    assert.ok(await runFreezes({ update: true }));
     assert.deepEqual(tree(), first);
   });
 
@@ -329,13 +361,16 @@ it('an open menu', async () => {
     assert.ok(!existsSync(join(FREEZES, FORM, 'menu')));
     assert.deepEqual(
       manifest().freezes.map((f) => f.name),
-      ['filled'],
+      ['filled', 'shown'],
     );
     rmSync(join(app, FORM));
     put('src/other/other.browser.spec.ts', `import { it } from 'vitest';\nit('runs', () => {});\n`);
     assert.ok(await runFreezes());
     assert.ok(!existsSync(join(FREEZES, 'src/form')));
     assert.ok(!existsSync(join(FREEZES, 'assets')));
-    assert.deepEqual(manifest().freezes, []);
+    assert.deepEqual(
+      manifest().freezes.map((f) => f.spec),
+      [HELD],
+    );
   });
 });

@@ -12,7 +12,7 @@
  * Vite `config` hook, see there), and the
  * same reporter writes them at the end of the run.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { platform } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import {
@@ -54,6 +54,51 @@ function complete(testModule) {
   return true;
 }
 
+/** `.only` in a module's source: it marks the module's other tests skipped, like a filter. */
+function declaresOnly(testModule) {
+  const flag = testModule.task?.containsOnly; // Vitest 5 rolls it up on the file
+  if (typeof flag === 'boolean') return flag;
+  try {
+    return /\b(?:it|test|describe|suite)(?:\.\w+)*\.only\b/.test(
+      readFileSync(testModule.moduleId, 'utf8'),
+    );
+  } catch {
+    return true;
+  }
+}
+
+/** Whether a run narrowed the tests inside files: `-t`, `--tags-filter`. */
+function filteredByConfig(config) {
+  if (!config) return false;
+  return (
+    !!config.testNamePattern || (Array.isArray(config.tagsFilter) && config.tagsFilter.length > 0)
+  );
+}
+
+/**
+ * Whether a module's freezes may be replaced by this run (ticket qits-1947): nothing failed, and
+ * every test that did not pass was skipped by its own declaration. The run must not have narrowed
+ * the tests inside the module (`-t`, tags, lines, ids, `.only`), because that marks the other tests
+ * skipped too, and their freezes would be deleted. Unlike {@link complete}, a spec with a
+ * permanent `it.skip` still freezes its passing shots.
+ */
+export function completeForFreezes(testModule, { filtered = false } = {}) {
+  if (filtered) return false;
+  const state = testModule.state();
+  if (state !== 'passed' && state !== 'skipped') return false;
+  if ((testModule.errors?.() ?? []).length > 0) return false;
+  if (filteredByConfig(testModule.project?.config)) return false;
+  if (declaresOnly(testModule)) return false;
+  for (const test of testModule.children.allTests()) {
+    const result = test.result();
+    if (result.state === 'passed') continue;
+    // With every filter ruled out, a skipped test skipped itself: `it.skip`, `it.todo`, a false
+    // `skipIf`/`runIf`, `ctx.skip()`. Failed or pending (never ran) is not complete.
+    if (result.state !== 'skipped') return false;
+  }
+  return true;
+}
+
 /**
  * @param {{ record?: string, freezes?: boolean | { dir?: string, routeSpecs?: RegExp } }} [options]
  *   `record`: the file to write, relative to the project root (default
@@ -71,6 +116,9 @@ export function screenshotReferences(options = {}) {
   let root;
   let screenshotDirectory = DEFAULT_SCREENSHOT_DIRECTORY;
   let reporterAdded = false;
+  let vitestInstance;
+  /** Module ids the run narrowed itself (a spec with lines, ids, a name pattern or tags). */
+  let narrowed = new Set();
 
   /** The writer, made with the root configureVitest saw (or, failing that, the command's project's). */
   const writerFor = (context) =>
@@ -87,9 +135,20 @@ export function screenshotReferences(options = {}) {
   };
 
   const reporter = {
-    onTestRunStart() {
+    onTestRunStart(specifications = []) {
       seen.clear();
       freezes?.start();
+      narrowed = new Set();
+      for (const spec of specifications) {
+        if (
+          spec.testLines?.length ||
+          spec.testIds?.length ||
+          spec.testNamePattern ||
+          spec.testTagsFilter
+        ) {
+          narrowed.add(spec.moduleId);
+        }
+      }
     },
     onTestRunEnd(testModules) {
       if (root === undefined) return;
@@ -108,7 +167,14 @@ export function screenshotReferences(options = {}) {
         file,
         `${JSON.stringify({ version: RECORD_VERSION, screenshotDirectory, specs }, null, 2)}\n`,
       );
-      freezes?.end(testModules, complete);
+      const runFiltered =
+        filteredByConfig(vitestInstance?.config) ||
+        filteredByConfig(vitestInstance?.configOverride);
+      freezes?.end(testModules, (testModule) =>
+        completeForFreezes(testModule, {
+          filtered: runFiltered || narrowed.has(testModule.moduleId),
+        }),
+      );
     },
   };
 
@@ -127,6 +193,7 @@ export function screenshotReferences(options = {}) {
       const browser = project.config.browser;
       if (!browser?.enabled) return;
       root ??= project.config.root;
+      vitestInstance ??= vitest;
       screenshotDirectory = browser.screenshotDirectory ?? DEFAULT_SCREENSHOT_DIRECTORY;
 
       browser.expect ??= {};

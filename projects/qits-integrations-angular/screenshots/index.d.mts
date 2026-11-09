@@ -24,6 +24,16 @@ export interface ScreenshotFreezesOptions {
   routeSpecs?: RegExp;
 }
 
+/**
+ * Whether a run may replace a spec module's freezes: nothing failed, every test that did not pass
+ * skipped itself (`it.skip`, `it.todo`, `skipIf`), and the run did not narrow the module's tests
+ * (`-t`, tags, lines, ids, `.only`). `filtered`: the run narrowed this module.
+ */
+export declare function completeForFreezes(
+  testModule: unknown,
+  options?: { filtered?: boolean },
+): boolean;
+
 /** `src/testing/browser/freezes`. */
 export declare const DEFAULT_FREEZE_DIRECTORY: string;
 

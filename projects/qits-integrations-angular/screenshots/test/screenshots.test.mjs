@@ -6,7 +6,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { dirname, join } from 'node:path';
 import { strict as assert } from 'node:assert';
 import { screenshots } from '../cli.mjs';
-import { findOrphans, freezeSlug, pruneOrphans, screenshotReferences } from '../index.mjs';
+import {
+  completeForFreezes,
+  findOrphans,
+  freezeSlug,
+  pruneOrphans,
+  screenshotReferences,
+} from '../index.mjs';
 import { DEFAULT_RECORD, fileHash } from '../record.mjs';
 
 mkdirSync('tmp', { recursive: true });
@@ -344,20 +350,24 @@ describe('screenshot freezes', () => {
   const PAGE = 'src/app/routes/projects/projects.page.browser.spec.ts';
   const CARD = 'src/app/ui/card/card.browser.spec.ts';
   const DIR = 'src/testing/browser/freezes';
-  const module = (root, spec, state = 'passed') => ({
+  /** A module stand-in: `state` for the module, `tests` the states of its tests. */
+  const module = (root, spec, state = 'passed', tests = [state]) => ({
     moduleId: join(root, spec),
     state: () => state,
     errors: () => [],
-    children: { allTests: () => [{ result: () => ({ state }) }] },
+    children: { allTests: () => tests.map((t) => ({ result: () => ({ state: t }) })) },
   });
   /** A run: `shots` maps a spec to the freezes it sends (name → html), `modules` its outcomes. */
-  function run(root, { shots = {}, modules, routes, options = { freezes: true } }) {
-    const vitest = { config: { reporters: [] } };
+  function run(
+    root,
+    { shots = {}, modules, routes, options = { freezes: true }, config = {}, specifications = [] },
+  ) {
+    const vitest = { config: { reporters: [], ...config } };
     const project = { config: { root, browser: { enabled: true } } };
     screenshotReferences(options).configureVitest({ vitest, project });
     const [reporter] = vitest.config.reporters;
     const { qitsFreeze, qitsFreezeRoutes } = project.config.browser.commands;
-    reporter.onTestRunStart();
+    reporter.onTestRunStart(specifications);
     if (routes) qitsFreezeRoutes({}, routes);
     for (const [spec, freezes] of Object.entries(shots)) {
       for (const [name, html] of Object.entries(freezes)) {
@@ -511,6 +521,56 @@ describe('screenshot freezes', () => {
       [`${PAGE}/list.html`, `${CARD}/card.html`],
     );
     assert.deepEqual(manifest(root).routes, [{ path: 'projects', fullPath: 'projects' }]);
+  });
+
+  it('replaces the freezes of a spec whose other tests skip themselves', () => {
+    const root = app({ [CARD]: "it.skip('held', () => {});" });
+    run(root, { shots: { [CARD]: { a: '<p>1</p>', old: '<p>1</p>' } } });
+    run(root, {
+      shots: { [CARD]: { a: '<p>2</p>' } },
+      modules: [module(root, CARD, 'passed', ['passed', 'skipped'])],
+    });
+    assert.equal(read(root, `${CARD}/a.html`), '<p>2</p>');
+    assert.ok(!existsSync(join(root, DIR, CARD, 'old.html')));
+    // A module whose only test is skipped is complete too, and has no shots.
+    assert.equal(completeForFreezes(module(root, CARD, 'skipped', ['skipped'])), true);
+  });
+
+  it('keeps the freezes of a spec the run narrowed, or that failed or did not finish', () => {
+    const narrowedRuns = [
+      { config: { testNamePattern: /a/ } },
+      { config: { tagsFilter: ['slow'] } },
+      { specifications: (root) => [{ moduleId: join(root, CARD), testLines: [3] }] },
+      { specifications: (root) => [{ moduleId: join(root, CARD), testIds: ['x'] }] },
+      { specifications: (root) => [{ moduleId: join(root, CARD), testNamePattern: /a/ }] },
+    ];
+    for (const narrowed of narrowedRuns) {
+      const root = app({ [CARD]: 'spec' });
+      run(root, { shots: { [CARD]: { a: '<p>1</p>', b: '<p>1</p>' } } });
+      run(root, {
+        ...narrowed,
+        specifications: narrowed.specifications?.(root) ?? [],
+        shots: { [CARD]: { a: '<p>2</p>' } },
+        modules: [module(root, CARD, 'passed', ['passed', 'skipped'])],
+      });
+      assert.equal(read(root, `${CARD}/a.html`), '<p>1</p>', JSON.stringify(narrowed));
+      assert.ok(existsSync(join(root, DIR, CARD, 'b.html')));
+    }
+    const root = app({ [CARD]: "it.only('a', () => {});", [PAGE]: 'spec' });
+    assert.equal(completeForFreezes(module(root, CARD, 'passed', ['passed', 'skipped'])), false);
+    assert.equal(completeForFreezes(module(root, PAGE, 'failed', ['passed', 'failed'])), false);
+    assert.equal(completeForFreezes(module(root, PAGE, 'passed', ['passed', 'pending'])), false);
+    assert.equal(
+      completeForFreezes({ ...module(root, PAGE), task: { containsOnly: true } }),
+      false,
+      "Vitest 5's containsOnly",
+    );
+    assert.equal(
+      completeForFreezes({ ...module(root, CARD), task: { containsOnly: false } }),
+      true,
+      'containsOnly wins over the source',
+    );
+    assert.equal(completeForFreezes(module(root, PAGE), { filtered: true }), false);
   });
 
   it('takes another directory and other route specs', () => {
