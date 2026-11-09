@@ -1,45 +1,15 @@
 import { existsSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
-import { ROUTES_SCHEMA, pageKind, routeLayout } from '../project.mjs';
-
-/** A property of an object literal by its plain key, or undefined. */
-function property(object, key) {
-  return object.properties.find(
-    (p) =>
-      p.type === 'Property' &&
-      !p.computed &&
-      ((p.key.type === 'Identifier' && p.key.name === key) || p.key.value === key),
-  );
-}
-
-/** A string literal or a template without expressions, as its text; otherwise undefined. */
-function text(node) {
-  if (node?.type === 'Literal' && typeof node.value === 'string') return node.value;
-  if (node?.type === 'TemplateLiteral' && node.expressions.length === 0)
-    return node.quasis[0].value.cooked;
-  return undefined;
-}
-
-/** `x as Routes`, `x satisfies Routes`, `x!`: the expression inside. */
-function unwrapParent(node) {
-  let parent = node.parent;
-  while (
-    parent &&
-    ['TSAsExpression', 'TSSatisfiesExpression', 'TSNonNullExpression'].includes(parent.type)
-  ) {
-    parent = parent.parent;
-  }
-  return parent;
-}
-
-/** The route object a route sits in as one of its `children`, or undefined at the top. */
-function parentRoute(route) {
-  const array = route.parent;
-  if (array?.type !== 'ArrayExpression') return undefined;
-  const prop = unwrapParent(array);
-  if (prop?.type !== 'Property' || prop.key.name !== 'children') return undefined;
-  return prop.parent?.type === 'ObjectExpression' ? prop.parent : undefined;
-}
+import {
+  ROUTES_SCHEMA,
+  literalText as text,
+  pageKind,
+  property,
+  routeLayout,
+  routeSegments as segments,
+  segmentDirs,
+  tableBase,
+} from '../project.mjs';
 
 /** The first `import('…')` with a literal specifier inside `node`. */
 function dynamicImport(node, keys) {
@@ -80,26 +50,7 @@ export default {
     const layout = routeLayout(context);
     if (!layout.isRouteTable) return {};
     const source = context.sourceCode;
-    const fileDir = dirname(layout.file);
-    const base = layout.under(fileDir)
-      ? fileDir
-          .slice(layout.routes.length)
-          .split('/')
-          .filter((s) => s)
-      : [];
-
-    /** The route's URL segments from the top of this table, or undefined when one is not static. */
-    const segments = (route) => {
-      const own = [];
-      for (let r = route; r; r = parentRoute(r)) {
-        const path = property(r, 'path');
-        if (!path) continue;
-        const value = text(path.value);
-        if (value === undefined) return undefined;
-        own.unshift(...value.split('/').filter((s) => s));
-      }
-      return own;
-    };
+    const base = tableBase(layout, layout.file);
 
     /** The project path a specifier imports, or undefined for a bare one (an alias, a package). */
     const imported = (specifier) => {
@@ -146,7 +97,7 @@ export default {
       }
       const absolute = specifier && imported(specifier);
       if (!absolute) return;
-      const dirs = [...base, ...segs].map((s) => (s.startsWith(':') ? `[${s.slice(1)}]` : s));
+      const dirs = segmentDirs([...base, ...segs]);
       const expected = [layout.routes, ...dirs].join('/');
       const actual = directoryOf(absolute);
       if (actual === expected) return;

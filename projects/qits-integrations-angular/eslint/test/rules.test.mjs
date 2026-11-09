@@ -5,7 +5,9 @@ import { dirname, join } from 'node:path';
 import { strict as assert } from 'node:assert';
 import { Linter, RuleTester } from 'eslint';
 import tseslint from 'typescript-eslint';
+import { format } from 'prettier';
 import qits from '../index.mjs';
+import { renderRoutePaths } from '../rules/route-paths.mjs';
 
 RuleTester.describe = describe;
 RuleTester.it = it;
@@ -1007,5 +1009,162 @@ describe('browser-spec-data-from-golden-masters messages', () => {
       assert.match(messages[id], /Feed the data through HTTP from a golden master instead/, id);
     }
     assert.match(messages.recorder, /wrap the goldenMaster command there/);
+  });
+});
+
+// route-paths: an app whose route tables are on disk, read by the rule on the generated file.
+const inPaths = (path) => join(app, 'paths', path);
+touch('paths/package.json', JSON.stringify({ name: 'qits-paths-app' }));
+touch(
+  'paths/src/app/app.routes.ts',
+  `import { Routes } from '@angular/router';
+import { authCallbackRoute } from '@qits/angular';
+import { ShellLayout } from './routes/shell.layout';
+import { NotFoundPage } from './routes/not-found/not-found.page';
+
+export const routes: Routes = [
+  authCallbackRoute,
+  {
+    path: '',
+    component: ShellLayout,
+    children: [
+      { path: '', redirectTo: 'projects', pathMatch: 'full' },
+      { path: 'projects', loadComponent: () => import('./routes/projects/projects.page') },
+      {
+        path: 'projects/:slug',
+        loadComponent: () => import('./routes/projects/[slug]/project.layout'),
+        children: [
+          { path: '', children: [] },
+          { path: ':tab', children: [] },
+        ],
+      },
+      { path: 'admin', loadChildren: () => import('./routes/admin/admin.routes') },
+      { path: segment, loadComponent: () => import('./routes/x/x.page') },
+      { path: 'old', redirectTo: 'projects' },
+      { path: 'settings', canActivate: [guard] },
+      { path: '**', component: NotFoundPage },
+    ],
+  },
+] as Routes;
+`,
+);
+touch(
+  'paths/src/app/routes/admin/admin.routes.ts',
+  `export default [
+  { path: '', loadComponent: () => import('./admin.page') },
+  { path: 'users/:id', loadComponent: () => import('./users/[id]/user.page') },
+] satisfies Routes;
+`,
+);
+const PATHS = ['', 'admin', 'admin/users/:id', 'projects', 'projects/:slug', 'projects/:slug/:tab'];
+const ROUTE_PATHS = inPaths('src/app/route-paths.ts');
+const CURRENT = renderRoutePaths(PATHS);
+touch('paths/src/app/route-paths.ts', CURRENT);
+
+// An app with route tables and no generated file.
+touch('missing/package.json', JSON.stringify({ name: 'qits-missing-app' }));
+touch('missing/src/app/app.routes.ts', "export const routes = [{ path: 'a', component: A }];\n");
+touch('missing/src/app/routes/b/b.routes.ts', "export default [{ path: '', component: B }];\n");
+const inMissing = (path) => join(app, 'missing', path);
+
+tester.run('route-paths', rules['route-paths'], {
+  valid: [
+    { filename: ROUTE_PATHS, code: CURRENT },
+    // Another name for the generated file.
+    {
+      filename: inPaths('src/types/routes.ts'),
+      code: renderRoutePaths(PATHS, 'src/types/routes.ts'),
+      options: [{ file: 'src/types/routes.ts' }],
+    },
+    // The app has the file: its route tables report nothing.
+    { filename: inPaths('src/app/app.routes.ts'), code: 'export const routes = [];' },
+    // Only the first route table reports a missing file.
+    { filename: inMissing('src/app/routes/b/b.routes.ts'), code: 'export default [];' },
+    // Neither the generated file nor a route table.
+    { filename: inMissing('src/app/core/menu.ts'), code: 'export const x = 1;' },
+  ],
+  invalid: [
+    // A route was added to the tables.
+    {
+      filename: ROUTE_PATHS,
+      code: renderRoutePaths(PATHS.filter((p) => p !== 'projects/:slug/:tab')),
+      output: CURRENT,
+      errors: [
+        {
+          messageId: 'stale',
+          data: {
+            file: 'src/app/route-paths.ts',
+            added: "'/projects/:slug/:tab'",
+            removed: 'none',
+          },
+        },
+      ],
+    },
+    // A route was removed from the tables.
+    {
+      filename: ROUTE_PATHS,
+      code: renderRoutePaths([...PATHS, 'gone', 'gone/:id'].sort()),
+      output: CURRENT,
+      errors: [
+        {
+          messageId: 'stale',
+          data: { file: 'src/app/route-paths.ts', added: 'none', removed: "'/gone', '/gone/:id'" },
+        },
+      ],
+    },
+    // An empty file is the generator's starting point.
+    {
+      filename: ROUTE_PATHS,
+      code: '',
+      output: CURRENT,
+      errors: [{ messageId: 'stale' }],
+    },
+    {
+      filename: inMissing('src/app/app.routes.ts'),
+      code: 'export const routes = [];',
+      errors: [{ messageId: 'missing', data: { file: 'src/app/route-paths.ts' } }],
+    },
+  ],
+});
+
+describe('route-paths generated file', () => {
+  const generated = (code) =>
+    new Linter().verifyAndFix(
+      code,
+      [
+        {
+          files: ['**/*.ts'],
+          languageOptions: { parser: tseslint.parser },
+          ...qits.configs.recommended[0],
+        },
+      ],
+      ROUTE_PATHS,
+    );
+  it('lists the paths the tables declare, and none they do not', () => {
+    const { output, messages } = generated('');
+    assert.deepEqual(messages, []);
+    const members = /export type RoutePath =([^;]*);/.exec(output)[1];
+    assert.deepEqual(
+      [...members.matchAll(/'([^']*)'/g)].map((m) => m[1]),
+      PATHS,
+    );
+    // the :tab child that has no directory, the nested table under its directory
+    assert.match(output, /'projects\/:slug\/:tab'/);
+    assert.match(output, /'admin\/users\/:id'/);
+    for (const absent of ['**', 'old', 'settings', 'auth/callback']) {
+      assert.doesNotMatch(output, new RegExp(`'${absent.replace(/\*/g, '\\*')}'`), absent);
+    }
+    assert.match(output, /eslint --fix src\/app\/route-paths\.ts/);
+    assert.match(
+      output,
+      /declare module '@qits\/angular' \{\n {2}interface QitsApp \{\n {4}routePath: RoutePath;\n {2}\}\n\}\n$/,
+    );
+  });
+  it('is the text prettier writes, one member per line', async () => {
+    const prettier = { parser: 'typescript', singleQuote: true, printWidth: 100 };
+    for (const paths of [[''], ['', 'projects', 'projects/:slug'], PATHS]) {
+      const text = renderRoutePaths(paths);
+      assert.equal(await format(text, prettier), text);
+    }
   });
 });

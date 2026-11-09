@@ -233,3 +233,76 @@ export function isComponentClass(node) {
     return callee?.type === 'MemberExpression' && callee.property.name === 'Component';
   });
 }
+
+/** A property of an object literal by its plain key, or undefined. */
+export function property(object, key) {
+  return object.properties.find(
+    (p) =>
+      p.type === 'Property' &&
+      !p.computed &&
+      ((p.key.type === 'Identifier' && p.key.name === key) || p.key.value === key),
+  );
+}
+
+/** A string literal or a template without expressions, as its text; otherwise undefined. */
+export function literalText(node) {
+  if (node?.type === 'Literal' && typeof node.value === 'string') return node.value;
+  if (node?.type === 'TemplateLiteral' && node.expressions.length === 0)
+    return node.quasis[0].value.cooked;
+  return undefined;
+}
+
+/** `x as Routes`, `x satisfies Routes`, `x!`: the expression inside. */
+function unwrapParent(node) {
+  let parent = node.parent;
+  while (
+    parent &&
+    ['TSAsExpression', 'TSSatisfiesExpression', 'TSNonNullExpression'].includes(parent.type)
+  ) {
+    parent = parent.parent;
+  }
+  return parent;
+}
+
+/** The route object a route sits in as one of its `children`, or undefined at the top. */
+export function parentRoute(route) {
+  const array = route.parent;
+  if (array?.type !== 'ArrayExpression') return undefined;
+  const prop = unwrapParent(array);
+  if (prop?.type !== 'Property' || prop.key.name !== 'children') return undefined;
+  return prop.parent?.type === 'ObjectExpression' ? prop.parent : undefined;
+}
+
+/**
+ * A route's URL segments from the top of its table (the literal `path`s joined down through
+ * `children`), or undefined when one of them is not a literal. Needs `parent` links on the AST.
+ */
+export function routeSegments(route) {
+  const own = [];
+  for (let r = route; r; r = parentRoute(r)) {
+    const path = property(r, 'path');
+    if (!path) continue;
+    const value = literalText(path.value);
+    if (value === undefined) return undefined;
+    own.unshift(...value.split('/').filter((s) => s));
+  }
+  return own;
+}
+
+/** URL segments as directories: a `:param` is a `[param]` directory. */
+export const segmentDirs = (segments) =>
+  segments.map((s) => (s.startsWith(':') ? `[${s.slice(1)}]` : s));
+
+/**
+ * Where a route table is mounted, as URL segments: a table under the routes directory is mounted
+ * at its own directory there, any other at the top.
+ */
+export function tableBase(layout, file) {
+  const fileDir = dirname(file);
+  return layout.under(fileDir)
+    ? fileDir
+        .slice(layout.routes.length)
+        .split('/')
+        .filter((s) => s)
+    : [];
+}

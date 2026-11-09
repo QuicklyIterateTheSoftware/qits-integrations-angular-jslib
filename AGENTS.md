@@ -18,8 +18,8 @@ seam for features), `withFeatureCapture(options?)`, `captureNow()`, `freezeDocum
 freeze core, exported so the qits webui's element picker can eventually consume it instead of its
 own copy), and `consume(call, paths)` / `Consumed<T, Paths>` (`consume.ts`: a store states the body
 paths it reads; the compiler then refuses any other field, and the pact spec binds the same list;
-type-level only, the run-time function returns the answer unchanged), and the bearer sign-in
-(`provideQitsBearerSignIn`, below). The two-phase shape is not incidental: Angular's `FetchBackend` captures `window.fetch`
+type-level only, the run-time function returns the answer unchanged), `outcomes()` (below), and the
+bearer sign-in (`provideQitsBearerSignIn`, below). The two-phase shape is not incidental: Angular's `FetchBackend` captures `window.fetch`
 on first use, so `initQitsIntegration()` must complete **before** `bootstrapApplication`.
 
 Ported verbatim from the qits fixture (`testing-repo-quarkus-angular`), each encoding a trap
@@ -40,7 +40,9 @@ Ported verbatim from the qits fixture (`testing-repo-quarkus-angular`), each enc
   wiring needs the injector, so it can't live in the pre-bootstrap init).
 - `interaction-telemetry.ts` — enrichment via the instrumentation's
   `shouldPreventSpanCreation` hook (despite the name); `data-track-event` is read from
-  `closest()`, because a submit's target is the form.
+  `closest()`, because a submit's target is the form. The outcome mark (`data-qits-outcome`) is
+  read the same way: `app.interaction.outcome`, and the span's name from its first mark's
+  interaction when no `data-track-event` names it (that one wins).
 - `fetch-caller-attribution.ts` — `window.fetch` wrapper installed **before**
   FetchInstrumentation registers so it runs inside the fetch span's context;
   `Error.stackTraceLimit` lifted around capture (plumbing alone is ~50 frames).
@@ -123,6 +125,34 @@ sign-in, `core/auth/dev-*.ts`, with the `dev` naming dropped):
   (same origin, or `https` at/under the platform domain): the only hosts that see the bearer.
 - `bearer-web-socket.ts` / `fetch-event-source.ts` — the `qits.bearer` subprotocol offer and the
   `fetch`-based SSE reader; neither reconnects by itself.
+
+Outcomes (`src/lib/outcomes/`, ticket qits-2001, epic qits-2000): where an interaction leads,
+declared once and checked by the compiler.
+
+- `outcomes.ts` — `outcomes(interaction, { key: exit('path/:p') | stay() })` gives one frozen entry
+  per key (`interaction`, `outcome`, `kind`, `to`). It `inject`s the `Router`, so it runs in an
+  injection context (a field initializer). An exit's `url(params)` is **absolute** (`/` + the
+  pattern with each `:param` `encodeURIComponent`ed; a missing one throws), so a `routerLink` built
+  from it never resolves against the current route; `go(params, behaviour?)` records, then returns
+  `navigateByUrl`'s Promise. A stay's `reach()` only records. Typing seam: the empty `QitsApp`
+  interface, which an app augments with `routePath` (the generated `route-paths.ts`, see
+  `qits/route-paths`) and `interaction`; `RoutePath` / `InteractionName` fall back to `string`.
+  `PathParams<P>` is a template-literal parse in the `consume.ts` manner. A path without params
+  takes `Readonly<Record<string, never>>`, **not** `PathParams`'s empty type: the compiler checks
+  no excess field against an empty type, so `go({ slug })` on such a path would pass.
+- `outcome-recorder.ts` — module-level recorder, `null` by default (production pays one null
+  check); `ɵsetOutcomeRecorder` is exported for `@qits/angular/testing/browser` only.
+- `qits-exit.directive.ts` / `qits-triggers.directive.ts` / `outcome-mark.ts` — `a[qitsExit]`
+  renders `href` as `RouterLink` does (`LocationStrategy.prepareExternalUrl` of the serialized
+  URL, so a base href is honoured) and takes only a plain primary click without `target` (or
+  `_self`); anything else is the browser's and records nothing. `QitsExit` and `[qitsTriggers]`
+  set `data-qits-outcome` through `outcomeMark()`. The attribute name is spelled out in the
+  directives and in `interaction-telemetry.ts`: that file is reached from the lazy
+  `telemetry-sdk.ts`, so importing a shared constant split `outcome-mark.ts` into its own chunk.
+- Type tests: `outcomes.spec.ts` augments `QitsApp` (`declare module '@qits/angular'`) and uses
+  `@ts-expect-error`; the vitest builder type-checks, so an unused directive fails the run. The
+  augmentation is global to the spec program; specs are excluded from the library build, so it
+  never ships. The other outcomes specs keep to its names.
 
 The library is **zoneless-first**: no `zone.js`, no `@opentelemetry/context-zone` — the default
 stack context manager is correct. The `instrumentation-user-interaction` `zone.js` peer is
@@ -237,12 +267,23 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   reads through `useRouteLookup(routeLedger(...))` into `qits-trigger.route`. The route pattern is
   `matchedRoutePath` from the main entry, imported by package name (`tsconfig.spec.json` maps
   `@qits/angular` to `src/public-api.ts` for the specs; ng-packagr resolves it to the built entry).
+  `recordOutcomes()` (`record-outcomes.ts`, ticket qits-2001) reaches the main entry's outcome
+  recorder the same way, which is what makes it one module instance: `beforeEach` installs it and
+  clears the test's records, `afterEach` uninstalls it, and each record is stamped with `spec` and
+  `test` from `expect.getState()`. `outcomeRecords()` is the current test's, `takeOutcomeRecords()`
+  drains the file's, in order, for qits-2003 to carry to the Node side.
 - **`@qits/angular/eslint`** (`projects/qits-integrations-angular/eslint/`): plain ESM, no build.
   ng-packagr copies the `.mjs` files as assets (minus `test/`), and the source `package.json`'s
   `exports["./eslint"]` points at them; ng-packagr merges that with the exports it generates.
   Rule tests run with `node --test` and ESLint's `RuleTester`, on a throwaway app tree under
   `tmp/` (git-ignored). The roles `pact-names` accepts are the wrapper's repository roles; keep
-  them in step.
+  them in step. `route-paths` (ticket qits-2001) is a generator run as a rule: it lints the
+  generated file (option `file`, default `src/app/route-paths.ts`, plus the shared `routes` /
+  `routeTables`), builds its text from the route tables (`export type RoutePath` and the
+  `declare module '@qits/angular' { interface QitsApp { routePath: RoutePath } }` augmentation),
+  reports `stale` when it differs, and its fix rewrites the whole file, so
+  `eslint --fix src/app/route-paths.ts` regenerates it. A route table with no such file reports
+  `missing`. It shares the route walk with `route-matches-directory` (`project.mjs`).
 
 - **`@qits/angular/screenshots`** and the **`qits-angular`** command
   (`projects/qits-integrations-angular/screenshots/`, `bin/`; epic qits-112): plain ESM, no build,

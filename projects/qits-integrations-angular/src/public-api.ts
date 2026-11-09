@@ -57,3 +57,23 @@ export type {
   SseMessage,
 } from './lib/sign-in/fetch-event-source';
 export { base64Url, randomToken, s256Challenge } from './lib/sign-in/pkce';
+export { exit, outcomes, stay } from './lib/outcomes/outcomes';
+export type {
+  ExitOutcome,
+  ExitSpec,
+  GoArgs,
+  InteractionName,
+  Outcome,
+  Outcomes,
+  PathParams,
+  QitsApp,
+  RoutePath,
+  StayOutcome,
+  StaySpec,
+  UrlArgs,
+} from './lib/outcomes/outcomes';
+export { outcomeMark } from './lib/outcomes/outcome-mark';
+export { QitsExit } from './lib/outcomes/qits-exit.directive';
+export { QitsTriggers } from './lib/outcomes/qits-triggers.directive';
+export { ɵsetOutcomeRecorder } from './lib/outcomes/outcome-recorder';
+export type { OutcomeRecord, OutcomeRecorder } from './lib/outcomes/outcome-recorder';
