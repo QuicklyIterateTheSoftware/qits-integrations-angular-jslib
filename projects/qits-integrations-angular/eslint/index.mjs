@@ -10,6 +10,7 @@
 import browserSpecDataFromGoldenMasters from './rules/browser-spec-data-from-golden-masters.mjs';
 import clientOnlyInStores from './rules/client-only-in-stores.mjs';
 import consumeClientCalls from './rules/consume-client-calls.mjs';
+import navigationThroughOutcomes from './rules/navigation-through-outcomes.mjs';
 import pactNames from './rules/pact-names.mjs';
 import pageHasScreenshots from './rules/page-has-screenshots.mjs';
 import pageLocation from './rules/page-location.mjs';
@@ -30,6 +31,7 @@ const plugin = {
     'page-has-screenshots': pageHasScreenshots,
     'route-matches-directory': routeMatchesDirectory,
     'route-paths': routePaths,
+    'navigation-through-outcomes': navigationThroughOutcomes,
     'browser-spec-data-from-golden-masters': browserSpecDataFromGoldenMasters,
   },
   configs: {},
@@ -50,6 +52,8 @@ plugin.configs.recommended = [
       'qits/page-has-screenshots': 'error',
       'qits/route-matches-directory': 'error',
       'qits/route-paths': 'error',
+      // warn until the apps navigate through outcomes (qits-2005 turns it to error in the app)
+      'qits/navigation-through-outcomes': 'warn',
       'qits/browser-spec-data-from-golden-masters': 'error',
     },
   },

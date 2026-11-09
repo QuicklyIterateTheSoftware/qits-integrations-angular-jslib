@@ -1183,3 +1183,244 @@ describe('route-paths generated file', () => {
     }
   });
 });
+
+// navigation-through-outcomes: an external template, and a package that is the library itself.
+touch(
+  'src/app/routes/linked/linked.html',
+  '<nav>\n  <a routerLink="/projects">Projects</a>\n</nav>\n',
+);
+touch('src/app/routes/plain/plain.html', '<a [qitsExit]="outcomes.cancel">Cancel</a>\n');
+touch('qits-angular/package.json', JSON.stringify({ name: '@qits/angular' }));
+const inLibrary = (path) => join(app, 'qits-angular', path);
+
+const ROUTER =
+  "import { Component, inject } from '@angular/core';\nimport { Router } from '@angular/router';\n";
+const FIELD = `${ROUTER}export class P {\n  private readonly router = inject(Router);\n  open() {\n    void this.router.navigate(['/projects']);\n  }\n}`;
+const component = (template, extra = '') =>
+  `import { Component } from '@angular/core';\n@Component({\n  selector: 'app-x',${extra}\n  template: \`${template}\`,\n})\nexport class X {}`;
+const NAVIGATE_MESSAGE =
+  "Navigate through a declared outcome, not Router.navigate: declare it with outcomes('<interaction>', { <name>: exit('<route path>') }) from @qits/angular and call .go(params).";
+
+tester.run('navigation-through-outcomes', rules['navigation-through-outcomes'], {
+  valid: [
+    // Navigation through a declared outcome.
+    {
+      filename: at('src/app/routes/work/create/work-create.page.ts'),
+      code: `${ROUTER}import { exit, outcomes } from '@qits/angular';\nexport class P {\n  readonly outcomes = outcomes('create', { created: exit('work/:id') });\n  done(id: string) {\n    void this.outcomes.created.go({ id });\n  }\n}`,
+    },
+    {
+      filename: at('src/app/routes/work/create/work-create.page.ts'),
+      code: component('<a [qitsExit]="outcomes.cancel">Cancel</a>'),
+    },
+    {
+      filename: at('src/app/routes/plain/plain.page.ts'),
+      code: component('', "\n  templateUrl: './plain.html',").replace('\n  template: ``,', ''),
+    },
+    // A click that does not navigate.
+    {
+      filename: at('src/app/routes/work/work.page.ts'),
+      code: component('<button (click)="tab.set(\'open\')">Open</button>'),
+    },
+    // routerLinkActive only styles a link.
+    {
+      filename: at('src/app/layout/shell.layout.ts'),
+      code: component(
+        '<a routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">x</a>',
+      ),
+    },
+    // A navigate on something that is not the Router.
+    {
+      filename: at('src/app/routes/work/work.page.ts'),
+      code: `${ROUTER}export class P {\n  private readonly wizard = inject(Wizard);\n  next(steps: { navigate(n: number): void }) {\n    this.wizard.navigate(1);\n    steps.navigate(2);\n  }\n}`,
+    },
+    // Without a Router import nothing is the Router.
+    {
+      filename: at('src/app/routes/work/work.page.ts'),
+      code: 'export class P {\n  router = inject(Router);\n  go() {\n    this.router.navigate([]);\n  }\n}',
+    },
+    // createUrlTree / parseUrl do not navigate; a destructured navigate is not followed.
+    {
+      filename: at('src/app/core/auth/session.guard.ts'),
+      code: `${ROUTER}export const guard = () => {\n  const router = inject(Router);\n  const { navigate } = router;\n  void navigate;\n  return router.createUrlTree(['/sign-in']) ?? router.parseUrl('/');\n};`,
+    },
+    // An object key named routerLink is data; the template binding it is what gets reported.
+    {
+      filename: at('src/app/core/work/work-briefs.store.ts'),
+      code: "export const briefs = [{ routerLink: '/work' }];",
+    },
+    // A template with an expression in it is not read.
+    {
+      filename: at('src/app/routes/work/work.page.ts'),
+      code: "import { Component } from '@angular/core';\nconst LINK = 'routerLink=\"/a\"';\n@Component({ selector: 'app-x', template: `<a ${LINK}>a</a>` })\nexport class X {}",
+    },
+    // A missing templateUrl is the build's to report.
+    {
+      filename: at('src/app/routes/gone/gone.page.ts'),
+      code: "import { Component } from '@angular/core';\n@Component({ selector: 'app-x', templateUrl: './gone.html' })\nexport class X {}",
+    },
+    // Specs, the test harness, the generated clients and the library itself are not read.
+    { filename: at('src/app/routes/work/work.page.spec.ts'), code: FIELD },
+    { filename: at('src/app/routes/work/work.page.browser.spec.ts'), code: FIELD },
+    { filename: at('src/testing/harness.ts'), code: FIELD },
+    { filename: at('src/app/api/projects/sdk.gen.ts'), code: FIELD },
+    { filename: inLibrary('src/app/qits-exit.directive.ts'), code: FIELD },
+    { filename: inLibrary('src/lib/outcomes/outcomes.ts'), code: FIELD },
+    // Other scopes.
+    {
+      filename: at('src/app/routes/work/work.page.ts'),
+      code: FIELD,
+      options: [{ include: ['src/app/core/**'] }],
+    },
+    {
+      filename: at('src/app/routes/work/work.page.ts'),
+      code: FIELD,
+      options: [{ exclude: ['src/app/routes/**'] }],
+    },
+  ],
+  invalid: [
+    {
+      filename: at('src/app/routes/work/work.page.ts'),
+      code: FIELD,
+      errors: [{ message: NAVIGATE_MESSAGE, line: 6, column: 22, endColumn: 30 }],
+    },
+    {
+      filename: at('src/app/routes/root.page.ts'),
+      code: `${ROUTER}export class RootPage {\n  constructor() {\n    void inject(Router).navigateByUrl('/projects', { replaceUrl: true });\n  }\n}`,
+      errors: [{ messageId: 'navigate', data: { method: 'navigateByUrl' }, line: 5 }],
+    },
+    // Aliased imports.
+    {
+      filename: at('src/app/routes/work/work.page.ts'),
+      code: "import { inject as di } from '@angular/core';\nimport { Router as R } from '@angular/router';\nexport class P {\n  #r = di(R);\n  go() {\n    void this.#r.navigateByUrl('/');\n  }\n}",
+      errors: [{ messageId: 'navigate', data: { method: 'navigateByUrl' } }],
+    },
+    // Constructor injection, a parameter, a typed field, a local.
+    {
+      filename: at('src/app/patterns/work-list/work-list.ts'),
+      code: `${ROUTER}export class L {\n  private other!: Router;\n  constructor(private r: Router) {\n    r.navigate([]);\n  }\n  go(router: Router) {\n    this.r.navigate(['/a']);\n    router.navigateByUrl('/b');\n    this.other.navigate([]);\n    const local = inject(Router);\n    local.navigate([]);\n  }\n}`,
+      errors: [
+        { messageId: 'navigate', line: 6 },
+        { messageId: 'navigate', line: 9 },
+        { messageId: 'navigate', line: 10 },
+        { messageId: 'navigate', line: 11 },
+        { messageId: 'navigate', line: 13 },
+      ],
+    },
+    // Optional chaining.
+    {
+      filename: at('src/app/routes/work/work.page.ts'),
+      code: `${ROUTER}export class P {\n  router? = inject(Router);\n  go() {\n    void this.router?.navigate(['/a']);\n  }\n}`,
+      errors: [{ messageId: 'navigate', line: 6 }],
+    },
+    // Inline template: bound inside @if, plain, at the attribute.
+    {
+      filename: at('src/app/routes/work/work.page.ts'),
+      code: component(
+        '\n    @if (open) {\n      <a [routerLink]="[\'/projects\']">P</a>\n    }\n    <a routerLink="/work">W</a>\n  ',
+      ),
+      errors: [
+        {
+          messageId: 'routerLink',
+          data: { where: '' },
+          line: 6,
+          column: 10,
+          endLine: 6,
+          endColumn: 38,
+        },
+        {
+          messageId: 'routerLink',
+          data: { where: '' },
+          line: 8,
+          column: 8,
+          endLine: 8,
+          endColumn: 26,
+        },
+      ],
+    },
+    // On <ng-template>.
+    {
+      filename: at('src/app/patterns/menu/menu.ts'),
+      code: component(
+        '<ng-template routerLink="/a"></ng-template><ng-template [routerLink]="x"></ng-template>',
+      ),
+      errors: [{ messageId: 'routerLink' }, { messageId: 'routerLink' }],
+    },
+    // A structural directive's wrapper repeats the attribute: reported once.
+    {
+      filename: at('src/app/patterns/menu/menu.ts'),
+      code: component('<a *ngIf="x" routerLink="/a">a</a>'),
+      errors: [{ messageId: 'routerLink' }],
+    },
+    // Escapes in the literal: the location falls back to the template property.
+    {
+      filename: at('src/app/patterns/menu/menu.ts'),
+      code: "import { Component } from '@angular/core';\n@Component({\n  selector: 'app-x',\n  template: '<a title=\"it\\'s\" routerLink=\"/a\">a</a>',\n})\nexport class X {}",
+      errors: [{ messageId: 'routerLink', line: 4, column: 3 }],
+    },
+    // External template: on templateUrl, naming the file, line and column.
+    {
+      filename: at('src/app/routes/linked/linked.page.ts'),
+      code: "import { Component } from '@angular/core';\n@Component({\n  selector: 'app-x',\n  templateUrl: './linked.html',\n})\nexport class X {}",
+      errors: [
+        {
+          message:
+            'A raw routerLink (src/app/routes/linked/linked.html:2:6) is a navigation no outcome declares: use <a [qitsExit]="outcomes.<name>" [exitParams]="{…}"> (or .go() from a click) with outcomes()/exit() from @qits/angular.',
+          line: 4,
+          column: 3,
+        },
+      ],
+    },
+    // A ui component is in scope.
+    {
+      filename: at('src/app/ui/components/tag-link/tag-link.ts'),
+      code: component('<a [routerLink]="link()">{{ label() }}</a>'),
+      errors: [{ messageId: 'routerLink' }],
+    },
+  ],
+});
+
+describe('navigation-through-outcomes in recommended', () => {
+  const config = [
+    {
+      files: ['**/*.ts'],
+      languageOptions: { parser: tseslint.parser },
+      ...qits.configs.recommended[0],
+    },
+  ];
+  it('is the one rule set to warn', () => {
+    const levels = qits.configs.recommended[0].rules;
+    assert.equal(levels['qits/navigation-through-outcomes'], 'warn');
+    assert.deepEqual(
+      Object.keys(levels).filter((r) => levels[r] === 'warn'),
+      ['qits/navigation-through-outcomes'],
+    );
+  });
+  it('warns, and an eslint-disable pair round an inline template silences it', () => {
+    const file = at('src/app/routes/work/work.page.ts');
+    const lint = (code) =>
+      new Linter()
+        .verify(code, config, file)
+        .filter((m) => m.ruleId === 'qits/navigation-through-outcomes');
+    const code = component('<a routerLink="/a">a</a>');
+    assert.deepEqual(
+      lint(code).map((m) => m.severity),
+      [1],
+    );
+    const disabled = code
+      .replace(
+        '  template:',
+        '  /* eslint-disable qits/navigation-through-outcomes -- links out of the app */\n  template:',
+      )
+      .replace('`,\n', '`,\n  /* eslint-enable qits/navigation-through-outcomes */\n');
+    assert.deepEqual(lint(disabled), []);
+    assert.deepEqual(
+      lint(
+        FIELD.replace(
+          '    void this.router',
+          '    // eslint-disable-next-line qits/navigation-through-outcomes -- redirect page\n    void this.router',
+        ),
+      ),
+      [],
+    );
+  });
+});

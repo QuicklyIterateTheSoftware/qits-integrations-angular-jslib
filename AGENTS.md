@@ -287,6 +287,19 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   `eslint --fix src/app/route-paths.ts` regenerates it. The file is opt-in: a missing one is not
   reported anywhere (qits-2010) — see the rule below.
   It shares the route walk with `route-matches-directory` (`project.mjs`).
+  `navigation-through-outcomes` (ticket qits-2002, epic qits-2000) reports `Router.navigate` /
+  `navigateByUrl` calls and raw `routerLink`s in templates under `include` (default `src/app/**`)
+  minus `exclude` (default `src/app/api/**`); specs and any file whose package is `@qits/angular`
+  (`QitsExit` and `go()` navigate by design) are skipped. No type information: the `Router` is
+  resolved syntactically from its `@angular/router` import (`inject(R)`, `this.<field>` set to
+  `inject(R)` or typed `R`, parameter properties, typed or `inject(R)` locals). Templates are parsed
+  with `parseTemplate` from `@angular/compiler`, a **required peer** for that (every Angular app
+  has it; the root devDepends on it, which `check-exports` demands). Inline reports land on the
+  attribute (literal start + `sourceSpan` offset), or on the `template` property when the literal
+  has escapes; an external one on `templateUrl`, naming `<file>.html:line:col`. It is the one rule
+  `recommended` sets to **`warn`**, because it reports what every unmigrated app has and no fix
+  clears (the qits-2010 rule below): it stays `warn` here until qits-2005 turns it to `error` in
+  the app once the app navigates through outcomes.
   **A rule added to `configs.recommended` must pass on a consumer that has not adopted it yet**: it
   is `error` on every consumer's whole codebase the moment the library bumps, so it may only report
   on something a consumer opts into by a file existing (as `route-paths` now does) or something
