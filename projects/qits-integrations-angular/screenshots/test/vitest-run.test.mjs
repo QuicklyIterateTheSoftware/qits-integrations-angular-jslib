@@ -177,6 +177,7 @@ export default defineConfig({
       '@angular/core/testing',
       '@angular/common/http',
       '@angular/common/http/testing',
+      '@angular/platform-browser/testing',
       '@angular/router',
       '@opentelemetry/api',
     ],
@@ -284,6 +285,25 @@ it('a shown box', async () => {
     await vitest.close();
     process.exitCode = 0;
     return passed;
+  }
+
+  /** One update run's failure messages, per spec (relative to the app). */
+  async function failuresOf() {
+    const vitest = await startVitest('test', [], {
+      root: app,
+      watch: false,
+      update: true,
+      reporters: ['dot'],
+    });
+    const failures = {};
+    const collect = (task, spec) => {
+      for (const error of task.result?.errors ?? []) (failures[spec] ??= []).push(error.message);
+      for (const child of task.tasks ?? []) collect(child, spec);
+    };
+    for (const file of vitest.state.getFiles()) collect(file, file.filepath.slice(app.length + 1));
+    await vitest.close();
+    process.exitCode = 0;
+    return failures;
   }
 
   before(async () => {
@@ -401,5 +421,47 @@ it('a shown box', async () => {
       manifest().freezes.map((f) => f.spec),
       [HELD],
     );
+  });
+
+  // Ticket qits-1998: a page spec under the routes directory that shows its page outside the app's
+  // routes fails its shot, and nothing is frozen for it; a spec elsewhere freezes as before.
+  it("fails a route-directory page spec's shot of a bare createComponent, naming the spec", async () => {
+    const BARE = 'src/app/routes/bare/bare.page.browser.spec.ts';
+    put(
+      BARE,
+      `import { Component } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
+import { BrowserTestingModule, platformBrowserTesting } from '@angular/platform-browser/testing';
+import { expect, it } from 'vitest';
+import { page } from 'vitest/browser';
+
+TestBed.initTestEnvironment(BrowserTestingModule, platformBrowserTesting());
+const BarePage = Component({ selector: 'app-bare', template: '<p data-testid="bare">bare</p>' })(
+  class BarePage {},
+);
+
+it('a bare page', async () => {
+  TestBed.createComponent(BarePage).detectChanges();
+  await expect.element(page.getByTestId('bare')).toMatchScreenshot('bare');
+});
+`,
+    );
+    const failures = await failuresOf();
+    assert.deepEqual(Object.keys(failures), [BARE]);
+    const [message] = failures[BARE];
+    assert.match(
+      message,
+      /^freezeScreenshots: src\/app\/routes\/bare\/bare\.page\.browser\.spec\.ts /,
+    );
+    assert.match(message, /took the screenshot 'bare' in 'a bare page'/);
+    assert.match(message, /the TestBed has no router/);
+    assert.match(message, /openRoute\(\), or provideRouter\(routes\)/);
+    assert.ok(!existsSync(join(FREEZES, BARE)));
+    assert.ok(existsSync(join(FREEZES, HELD, 'shown.html')));
+    assert.deepEqual(
+      manifest().freezes.map((f) => f.spec),
+      [HELD],
+    );
+    rmSync(join(app, 'src/app'), { recursive: true, force: true });
   });
 });

@@ -695,6 +695,7 @@ export default [...yourConfig, ...qits.configs.recommended];
 | `qits/page-location`                         | A `*.page.ts` or `*.layout.ts` file lives under the routes directory (a `*.layout.ts` also under the `$layout` alias directory, when the project has one), and every component class under the routes directory lives in such a file. Other files there (a resolver, a guard, a `*.routes.ts`) and specs are fine.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `qits/page-suffix`                           | The exported component in a `*.page.ts` ends in `Page`, the one in a `*.layout.ts` ends in `Layout`, and a component named `…Page` / `…Layout` lives in such a file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `qits/page-has-screenshots`                  | Every `*.page.ts` and `*.layout.ts` under the routes directory, and every `*.layout.ts` under the `$layout` alias directory, has `<name>.page.browser.spec.ts` / `<name>.layout.browser.spec.ts` beside it, and that spec calls `toMatchScreenshot`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `qits/page-screenshots-through-routes`       | A `*.page.browser.spec.ts` / `*.layout.browser.spec.ts` under the routes directory opens its page through the app's routes: it calls one of `helpers` (default `['openRoute']`) or passes a route table imported from a route-table file to the router (`provideRouter(routes)`). Reported: `TestBed.createComponent(X)` with `X` from a `*.page.ts` / `*.layout.ts`; `provideRouter`, `RouterModule.forRoot` or `RouterTestingModule.withRoutes` given anything else (`[]`, an inline table, a local constant); and a spec doing neither, once, on its first `toMatchScreenshot`. Specs elsewhere (patterns, UI components, a `$layout` layout) are not read.                                                                                                                                                                                                                                                                                                                          |
 | `qits/route-matches-directory`               | In a route table, every route with `component` or `loadComponent` (and every `loadChildren`) imports from the directory its URL names: the `path`s from the top of the table through `children`, `''` skipped, `:param` as `[param]`, relative to the routes directory. `path: '**'` may render any page; `redirectTo` routes are skipped. A route table under the routes directory is mounted at its own directory. A `*.layout.ts` under the `$layout` alias directory is shared and not checked. Imports through a path alias and non-literal paths are not checked.                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `qits/route-paths`                           | Keeps `src/app/route-paths.ts` (option `file`) generated from the route tables: `export type RoutePath`, every full path of a route with `component`, `loadComponent`, `children` or `loadChildren` (`''` included, `**`, `redirectTo` and non-literal paths left out, a nested `*.routes.ts` prefixed by its directory; sorted, no leading slash), and the `declare module '@qits/angular' { interface QitsApp { routePath: RoutePath } }` augmentation that makes `exit()` refuse other paths. Reports `stale` on that file when it differs; the fix rewrites it, so `eslint --fix src/app/route-paths.ts` is the generator. The file is opt-in: create it (empty is enough) and run that fix; a missing file is not reported. See [Where an interaction leads](#where-an-interaction-leads-outcomes).                                                                                                                                                                                |
 | `qits/navigation-through-outcomes`           | **`warn`**, the one rule that is not `error`. Navigation goes through a declared outcome ([Where an interaction leads](#where-an-interaction-leads-outcomes)): it reports a `Router.navigate` / `Router.navigateByUrl` call and a raw `routerLink` (plain or `[routerLink]`, on any element or `<ng-template>`) in a component's `template` or `templateUrl`. The `Router` is found without type information: the names it is imported under from `@angular/router`, then `inject(Router)`, a `this.<name>` whose field is `inject(Router)` or typed `Router` (constructor parameter properties too), and a parameter or variable typed `Router` or set to `inject(Router)`. `routerLinkActive`, `createUrlTree` / `parseUrl` (they do not navigate) and clicks that do neither are not reported, nor are specs, `src/testing/` or the library itself. An external template's report sits on `templateUrl` and names `<file>.html:<line>:<col>`. Options `include` / `exclude` (below). |
@@ -722,7 +723,8 @@ ending in `Layout`, in the directory of its own path (path `''` is `src/app/rout
 that are not routed stay outside (`ui/components/`, `patterns/`). The route rules take
 `{ routes: 'src/app/routes', routeTables: ['src/app/app.routes.ts', 'src/app/**/*.routes.ts'] }`
 (the defaults shown), relative to the nearest `package.json`; `page-has-screenshots` reads only
-`routes`, and `route-paths` also takes `file` (default `src/app/route-paths.ts`). A shared layout
+`routes`, `page-screenshots-through-routes` also takes `helpers` (default `['openRoute']`), and
+`route-paths` also takes `file` (default `src/app/route-paths.ts`). A shared layout
 may also live outside `routes/`: point the `$layout/*` path alias in the project's `tsconfig.json`
 (next to `package.json`, `extends` followed) at a directory, such as
 `"$layout/*": ["./src/app/layout/*"]`, and a `*.layout.ts` there is allowed and needs its
@@ -736,6 +738,24 @@ rule off for it above its `@Component`, and say why:
 // eslint-disable-next-line qits/page-has-screenshots -- redirects to /projects, renders nothing
 @Component({ selector: 'app-old', template: '' })
 export class OldPage {}
+```
+
+The screenshots show the page where the app shows it: through the app's own route table, so the
+layouts above it render around it and each freeze names the real route (ticket qits-1998). A page
+or layout spec under the routes directory that mounts the page itself
+(`TestBed.createComponent(ProjectsPage)`), hands the router a table of its own
+(`provideRouter([{ path: 'projects', component: ProjectsPage }])`, `provideRouter([])`), or never
+opens a route fails `page-screenshots-through-routes`. Open it with the app's helper (`openRoute()`
+by default; name yours with `{ helpers: ['openPage'] }`) or with `provideRouter(routes)` and
+`routes` imported from `app.routes.ts` (or another route-table file). `freezeScreenshots()` checks
+the same at run time ([below](#screenshots-frozen-as-html-freezescreenshots-and-the-freezes-option)).
+A real exception opts out with a reason, above its first screenshot or for the whole file:
+
+```ts
+// eslint-disable-next-line qits/page-screenshots-through-routes -- shows the bare page on purpose
+await expect.element(view).toMatchScreenshot('bare');
+// or, first in the file:
+/* eslint-disable qits/page-screenshots-through-routes -- mounts a stand-in route on purpose */
 ```
 
 ## Reference screenshots no test uses: `@qits/angular/screenshots`
@@ -796,13 +816,26 @@ freezeScreenshots({ routes }); // routes: optional; sent once per spec file, no 
 // vitest-browser.config.ts (Node side)
 plugins: [screenshotReferences({ freezes: true })];
 // or { freezes: { dir: 'src/testing/browser/freezes', routeSpecs: /\.page\.browser\.spec\.ts$/ } }
+// (the browser side takes freezeScreenshots({ routes, routeSpecs }) with the same default)
 ```
 
 `freezeScreenshots()` overwrites the matcher once (`chai.util.overwriteMethod` on
 `chai.Assertion.prototype`, `chai` from `vitest`): Vitest's matcher runs first, and when it passed,
 the element `expect.element` resolved is serialized (`freezeShot()`) and sent through the browser
 command `qitsFreeze`; the route tree goes through `qitsFreezeRoutes`. Both are registered by the
-`freezes` option. A failing shot fails the test and freezes nothing. It also clears the guard's
+`freezes` option. A failing shot fails the test and freezes nothing.
+
+A shot in a page or layout spec under the routes directory (option `routeSpecs`, default
+`DEFAULT_ROUTE_SPECS`, `/(^|\/)src\/app\/routes\/.*\.(page|layout)\.browser\.spec\.[cm]?[jt]sx?$/`,
+matched against the test file) must show the app's routes, or it fails its test after Vitest's
+matcher passed and nothing is frozen for it (ticket qits-1998). With `routes` given, the TestBed
+must have a router (asked without creating one) whose top matched route is one of `routes`
+(`renderedThroughRoutes(router, routes)`: the element itself or the router's copy of it, since the
+`Router` copies every route it is given; a stand-in route, a layout with other children or another
+component fails). Without `routes`, the router must have matched a route pattern. The error names
+the spec (relative to the root), the shot and the test, and says to open the page through the app's
+routes (`openRoute()`, or `provideRouter(routes)` with the routes from `app.routes.ts`). The lint
+rule `qits/page-screenshots-through-routes` reports the same before a run. `freezeScreenshots()` also clears the guard's
 per-test records before every test (`currentTestRecords()`, the recorded answers flushed since the
 test started, router or not).
 
@@ -820,8 +853,9 @@ What the run writes, under `dir` (default `src/testing/browser/freezes`, the tre
 children?}`), `freezes` (`{file, spec, test, name, route, records, triggers}`, sorted by `file`,
   which is relative to `dir`), `byRoute` (route pattern → files) and `outcomes` (below). `route` is
   the pattern the TestBed's router had matched, and only for specs `routeSpecs` matches (default
-  the page specs, `*.page.browser.spec.ts`): layout and pattern specs mount stand-in routes, so
-  theirs is `null`. `triggers` are the `<interaction>:<outcome>` marks (`data-qits-outcome`)
+  `DEFAULT_ROUTE_SPECS`, the page and layout specs under `src/app/routes/`, which open their page
+  through the app's routes): pattern and UI specs, and a `$layout` layout's (the shell), mount
+  stand-in routes, so theirs is `null`. `triggers` are the `<interaction>:<outcome>` marks (`data-qits-outcome`)
   visible in the shot, split, deduplicated and sorted. They are measured on the live DOM before the
   shot is serialized, because the HTML keeps a closed menu's marks too: a mark counts when the
   element passes `checkVisibility({ checkVisibilityCSS: true })`, has no `hidden` attribute on itself

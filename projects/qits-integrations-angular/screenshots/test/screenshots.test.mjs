@@ -502,6 +502,27 @@ describe('screenshot freezes', () => {
     ]);
   });
 
+  it('names the route of the page and layout specs under the routes directory only', () => {
+    const LAYOUT = 'src/app/routes/projects/[slug]/work/work.layout.browser.spec.ts';
+    const PATTERN = 'src/app/patterns/list/list.page.browser.spec.ts';
+    const SHELL = 'src/app/layout/shell/shell.layout.browser.spec.ts';
+    const specs = [PAGE, LAYOUT, PATTERN, SHELL];
+    const root = app(Object.fromEntries(specs.map((spec) => [spec, 'spec'])));
+    run(root, { shots: Object.fromEntries(specs.map((spec) => [spec, { shot: '<p>x</p>' }])) });
+    const routes = Object.fromEntries(manifest(root).freezes.map((f) => [f.spec, f.route]));
+    assert.deepEqual(routes, {
+      [PAGE]: 'projects',
+      // A routed layout opens its page through the app's routes (qits-1998).
+      [LAYOUT]: 'projects',
+      // A pattern spec and the shell's mount stand-in routes.
+      [PATTERN]: null,
+      [SHELL]: null,
+    });
+    assert.deepEqual(manifest(root).byRoute, {
+      projects: [`${LAYOUT}/shot.html`, `${PAGE}/shot.html`],
+    });
+  });
+
   it('replaces only what a run saw completely', () => {
     const gone = 'src/app/gone/gone.browser.spec.ts';
     const root = app({ [PAGE]: 'spec', [CARD]: 'spec', [gone]: 'spec', 'src/a.png': 'png' });

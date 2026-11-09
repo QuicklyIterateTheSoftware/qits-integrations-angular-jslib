@@ -300,6 +300,11 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   `recommended` sets to **`warn`**, because it reports what every unmigrated app has and no fix
   clears (the qits-2010 rule below): it stays `warn` here until qits-2005 turns it to `error` in
   the app once the app navigates through outcomes.
+  `page-screenshots-through-routes` (ticket qits-1998) reads only `*.page.browser.spec.ts` /
+  `*.layout.browser.spec.ts` under the routes directory: a `TestBed.createComponent` of an import
+  from a `*.page.ts` / `*.layout.ts`, a router provider given anything but an identifier imported
+  from a route-table file, and (only when neither was reported) a spec calling none of `helpers`
+  (default `openRoute`, landing's own helper). The runtime half is in `freezeScreenshots()`.
   **A rule added to `configs.recommended` must pass on a consumer that has not adopted it yet**: it
   is `error` on every consumer's whole codebase the moment the library bumps, so it may only report
   on something a consumer opts into by a file existing (as `route-paths` now does) or something
@@ -330,7 +335,13 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   `expect.extend` put it there) and freezes the `object` flag after the matcher passed;
   `freeze-shot.ts` is the serializer (filtered CSS **rules**, never computed styles, so it is
   renderer-independent — unlike `document-freeze.ts`). `vitest/browser` is imported dynamically
-  there, so importing the entry (the guard) never needs a browser run. The command names are
+  there, so importing the entry (the guard) never needs a browser run. A shot in a spec
+  `routeSpecs` matches (default `DEFAULT_ROUTE_SPECS`, page and layout specs under
+  `src/app/routes/`, the same default as the Node side's) fails unless the TestBed's router shows
+  one of `options.routes` (`renderedThroughRoutes`, qits-1998). **Not by identity**: the `Router`
+  constructor runs `resetConfig`, whose `standardizeConfig` copies every route (children too), so
+  `routerState…routeConfig` is never an element of the array `provideRouter` got; a copy is
+  recognised by every non-`children`, non-`_` key holding the same value, children recursively. The command names are
   spelled in both halves; keep them in step. `freeze-shot.browser.spec.ts` runs under
   `test-browser` (the `../testing/**/*.browser.spec.ts` include; `ng test` excludes it).
   Outcomes (ticket qits-2003): each freeze payload also carries `outcomes` (the test's record count

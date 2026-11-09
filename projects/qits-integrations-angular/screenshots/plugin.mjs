@@ -111,8 +111,9 @@ export function completeForFreezes(testModule, { filtered = false } = {}) {
  *   `record`: the file to write, relative to the project root (default
  *   `node_modules/.cache/@qits/angular/screenshot-references.json`). `freezes`: write the screenshot
  *   freezes too, to `dir` (default `src/testing/browser/freezes`), naming the route for the specs
- *   `routeSpecs` matches (default the page specs, `*.page.browser.spec.ts`); `routes` is the routes
- *   directory the manifest's declared outcomes are scoped by (default `src/app/routes`).
+ *   `routeSpecs` matches (default the page and layout specs under `src/app/routes/`,
+ *   `DEFAULT_ROUTE_SPECS`); `routes` is the routes directory the manifest's declared outcomes are
+ *   scoped by (default `src/app/routes`).
  */
 export function screenshotReferences(options = {}) {
   const recordOption = options.record ?? DEFAULT_RECORD;

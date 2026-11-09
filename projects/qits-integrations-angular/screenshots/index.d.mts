@@ -19,7 +19,8 @@ export interface ScreenshotFreezesOptions {
   dir?: string;
   /**
    * The specs whose freezes name the route the router matched. Default
-   * {@link DEFAULT_ROUTE_SPECS}, the page specs; any other spec's freezes have `route: null`.
+   * {@link DEFAULT_ROUTE_SPECS}, the page and layout specs under `src/app/routes/`; any other
+   * spec's freezes have `route: null`.
    */
   routeSpecs?: RegExp;
   /**
@@ -42,7 +43,10 @@ export declare function completeForFreezes(
 /** `src/testing/browser/freezes`. */
 export declare const DEFAULT_FREEZE_DIRECTORY: string;
 
-/** `/\.page\.browser\.spec\.[cm]?[jt]sx?$/`. */
+/**
+ * `/(^|\/)src\/app\/routes\/.*\.(page|layout)\.browser\.spec\.[cm]?[jt]sx?$/`: the page and
+ * layout specs under `src/app/routes/`, which open the page through the app's routes.
+ */
 export declare const DEFAULT_ROUTE_SPECS: RegExp;
 
 /** A screenshot's name as its freeze's file name (without `.html`), as Vitest slugs it. */

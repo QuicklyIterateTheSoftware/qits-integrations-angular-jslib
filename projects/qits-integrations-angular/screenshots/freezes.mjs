@@ -15,7 +15,7 @@
  *       "spec": "src/app/routes/projects/projects.page.browser.spec.ts",
  *       "test": "projects page > lists the projects",
  *       "name": "list",
- *       "route": "projects",              // null unless the spec is a page spec (routeSpecs)
+ *       "route": "projects",              // null unless a page or layout spec under routes/ (routeSpecs)
  *       "records": [{ "provider": "qits-projects-service", "state": "…", "operationId": "…" }],
  *       "triggers": ["projects:open"]     // the visible outcome marks, `<interaction>:<outcome>`
  *     }],
@@ -56,8 +56,13 @@ import { DEFAULT_ROUTES, declaredOutcomes } from './outcomes.mjs';
 
 export const DEFAULT_FREEZE_DIRECTORY = 'src/testing/browser/freezes';
 
-/** The specs whose freezes name their route: the page specs (layout and pattern specs mount stand-in routes). */
-export const DEFAULT_ROUTE_SPECS = /\.page\.browser\.spec\.[cm]?[jt]sx?$/;
+/**
+ * The specs whose freezes name their route: the page and layout specs under `src/app/routes/`,
+ * which open the page through the app's routes (`freezeScreenshots()` checks that, with the same
+ * default). Pattern and UI specs, and a `$layout` layout's (the shell), mount stand-in routes.
+ */
+export const DEFAULT_ROUTE_SPECS =
+  /(^|\/)src\/app\/routes\/.*\.(page|layout)\.browser\.spec\.[cm]?[jt]sx?$/;
 
 /** The browser commands, as `@qits/angular/testing/browser` names them. */
 export const FREEZE_COMMAND = 'qitsFreeze';

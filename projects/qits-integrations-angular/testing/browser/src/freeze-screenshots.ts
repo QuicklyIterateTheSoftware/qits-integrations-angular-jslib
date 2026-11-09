@@ -9,8 +9,13 @@
  * freezes the element it compared. `expect.element` resolves the element before the matcher runs
  * (the `object` flag), and the screenshot is stable by then, so the freeze is the DOM the PNG shows.
  * A failing shot fails the test, and nothing is frozen for it.
+ *
+ * A page or layout spec under the routes directory ({@link DEFAULT_ROUTE_SPECS}, ticket qits-1998)
+ * must show the page through the app's own routes: a shot it takes on a TestBed without the app's
+ * router, or on a stand-in route table, fails the test, and nothing is frozen for it.
  */
-import type { Routes } from '@angular/router';
+import { TestBed } from '@angular/core/testing';
+import { ROUTES, Router, type Route, type Routes } from '@angular/router';
 import { beforeAll, beforeEach, chai, expect } from 'vitest';
 import { describeRoutes, type RouteDescription } from './describe-routes';
 import {
@@ -33,6 +38,14 @@ export const FREEZE_COMMAND = 'qitsFreeze';
 
 /** The browser command the route tree is sent to, once per spec file. */
 export const FREEZE_ROUTES_COMMAND = 'qitsFreezeRoutes';
+
+/**
+ * The specs whose shots must show the app's routes: the page and layout specs under
+ * `src/app/routes/`, as the Node side's `DEFAULT_ROUTE_SPECS` (`@qits/angular/screenshots`) names
+ * the specs whose freezes keep their route.
+ */
+export const DEFAULT_ROUTE_SPECS =
+  /(^|\/)src\/app\/routes\/.*\.(page|layout)\.browser\.spec\.[cm]?[jt]sx?$/;
 
 /** What the browser sends the Node side for one passing screenshot. */
 export interface ScreenshotFreezePayload {
@@ -75,6 +88,104 @@ export interface FreezeScreenshotsOptions {
    * giving it replaces the default.
    */
   readonly dropInlineStyles?: readonly DroppedInlineStyle[];
+  /**
+   * The specs whose shots must show the page through the app's routes, matched against the test
+   * file's path. Default {@link DEFAULT_ROUTE_SPECS}, the page and layout specs under
+   * `src/app/routes/`. With `routes` given, a shot passes when the router's top matched route is
+   * one of `routes` ({@link renderedThroughRoutes}); without it, when the router has
+   * matched a route pattern at all. Any other shot fails its test, and nothing is frozen for it.
+   */
+  readonly routeSpecs?: RegExp;
+}
+
+/** The key Angular gives a named outlet's componentless route (`standardizeConfig`). */
+const PRIMARY_OUTLET = 'primary';
+
+/**
+ * Whether `copy`, a route in the router's config, is the router's copy of `original`. The `Router`
+ * never keeps the objects it is given: its constructor runs `resetConfig`, which copies every route
+ * shallowly (`standardizeConfig`, children included), so a copy is told by its values: every key
+ * but `children` holds the same value (the same component class, `loadComponent` function, `data`
+ * object, guard array), and the children are copies of the original's, in order. The router's own
+ * bookkeeping (`_loadedRoutes`, `_injector`, …) is ignored, and so is the empty outlet component
+ * `standardizeConfig` adds to a componentless route of a named outlet.
+ */
+function copyOf(copy: Route, original: Route): boolean {
+  if (copy === original) return true;
+  const keys = new Set(
+    [...Object.keys(copy), ...Object.keys(original)].filter((k) => !k.startsWith('_')),
+  );
+  for (const key of keys) {
+    if (key === 'children') continue;
+    const a = (copy as Record<string, unknown>)[key];
+    const b = (original as Record<string, unknown>)[key];
+    if (a === b) continue;
+    const addedOutlet =
+      key === 'component' &&
+      b === undefined &&
+      original.outlet !== undefined &&
+      original.outlet !== PRIMARY_OUTLET;
+    if (!addedOutlet) return false;
+  }
+  const children = copy.children ?? [];
+  const originals = original.children ?? [];
+  return children.length === originals.length && children.every((c, i) => copyOf(c, originals[i]));
+}
+
+/**
+ * Whether `router` shows a route of `routes`, the app's route tree: its top matched route
+ * (`routerState.snapshot.root.firstChild.routeConfig`) is an element of `routes`, or the router's
+ * copy of one (the router copies every route it is given, see {@link copyOf}): the same values
+ * all the way down its children. So it holds for a page opened through the app's routes (a root
+ * page matched at `''` included, and `provideRouter([...routes])`), and fails for a stand-in table
+ * (a route the app's tree does not hold, a layout with fewer children, another component or
+ * `loadComponent`), a router that has matched nothing, and no router.
+ */
+export function renderedThroughRoutes(
+  router: Pick<Router, 'routerState'> | null | undefined,
+  routes: Routes,
+): boolean {
+  const top = router?.routerState.snapshot.root.firstChild?.routeConfig;
+  return top != null && routes.some((route) => copyOf(top, route));
+}
+
+/**
+ * The TestBed's router, or undefined without one. `ROUTES` is asked first, as the guard's
+ * `currentRoutePattern()` does: `Router` is `providedIn: 'root'`, so injecting it would make one.
+ */
+function testBedRouter(): Router | undefined {
+  try {
+    if (!TestBed.inject(ROUTES, null)) return undefined;
+    return TestBed.inject(Router, null) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Why a shot does not show the app's routes, or undefined when it does. */
+function notThroughRoutes(routes: Routes | undefined): string | undefined {
+  if (!routes) {
+    return currentRoutePattern() === null
+      ? 'the TestBed has no router that matched a route'
+      : undefined;
+  }
+  const router = testBedRouter();
+  if (!router) return 'the TestBed has no router';
+  if (renderedThroughRoutes(router, routes)) return undefined;
+  if (!router.routerState.snapshot.root.firstChild) return 'the router has matched no route';
+  return "the router matched a route that is not one of the app's routes (a stand-in route table)";
+}
+
+/** The spec's path relative to the project root when the browser run knows it, else as given. */
+async function specName(testPath: string): Promise<string> {
+  try {
+    const { server } = await import('vitest/browser');
+    const root = server.config.root.split('\\').join('/').replace(/\/+$/, '');
+    if (root && testPath.startsWith(`${root}/`)) return testPath.slice(root.length + 1);
+  } catch {
+    // not in a browser run: keep the path as it is
+  }
+  return testPath;
 }
 
 const INSTALLED = Symbol.for('qits.freezeScreenshots');
@@ -112,6 +223,7 @@ const counters = new WeakMap<Task, { repeat: number; current: number }>();
 export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void {
   const renameClasses = options.renameClasses ?? DEFAULT_RENAMED_CLASSES;
   const dropInlineStyles = options.dropInlineStyles ?? DEFAULT_DROPPED_INLINE_STYLES;
+  const routeSpecs = options.routeSpecs ?? DEFAULT_ROUTE_SPECS;
   beforeEach(() => clearTestRecords());
   if (options.routes) {
     const routes: RouteDescription[] = describeRoutes(options.routes);
@@ -141,6 +253,17 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
         const test = expect.getState().currentTestName ?? '';
         const name = typeof args[0] === 'string' ? args[0] : `${test} ${count(this)}`;
         await original.apply(this, args);
+        const testPath = (expect.getState().testPath ?? '').split('\\').join('/');
+        const why = routeSpecs.test(testPath) ? notThroughRoutes(options.routes) : undefined;
+        if (why) {
+          throw new Error(
+            `freezeScreenshots: ${await specName(testPath)} took the screenshot '${name}' in ` +
+              `'${test}' without the app's routes: ${why}. A page or layout spec under the ` +
+              "routes directory shows the page where the app shows it: open the page through the app's " +
+              'routes (openRoute(), or provideRouter(routes) with the routes from app.routes.ts) and ' +
+              'navigate to its URL before the shot. Nothing was frozen for it.',
+          );
+        }
         const target = shotTarget(chai.util.flag(this, 'object'));
         // On the live DOM, before the serializer: the HTML cannot tell a hidden mark from a shown one.
         const triggers = visibleTriggers(target, document);

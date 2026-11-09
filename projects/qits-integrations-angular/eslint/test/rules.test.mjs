@@ -735,6 +735,234 @@ describe('page-has-screenshots opt-out', () => {
   });
 });
 
+// The page and layout screenshot specs (ticket qits-1998): through the app's routes.
+const ROUTED_SPEC = at('src/app/routes/projects/projects.page.browser.spec.ts');
+const ROUTED_LAYOUT_SPEC = at('src/app/routes/projects/[slug]/work/work.layout.browser.spec.ts');
+const OPEN_ROUTE = `import { openRoute, provideAppRoute } from '../../../testing/browser/app-route';
+beforeEach(() => TestBed.configureTestingModule({ providers: provideAppRoute() }));
+it('lists', async () => {
+  await openRoute('/projects');
+  await expect.element(page.getByRole('main')).toMatchScreenshot('list');
+});`;
+const SHOT = "  await expect.element(page.getByRole('main')).toMatchScreenshot('list');";
+const routerSpec = (imports, providers) => `${imports}
+import { TestBed } from '@angular/core/testing';
+it('lists', async () => {
+  TestBed.configureTestingModule({ ${providers} });
+${SHOT}
+});`;
+const PROVIDE_ROUTER = "import { provideRouter } from '@angular/router';";
+/** A report's data: the spec and the default helper, unless given. */
+const through = (data) => ({
+  spec: 'projects.page.browser.spec.ts',
+  helpers: 'openRoute()',
+  ...data,
+});
+
+tester.run('page-screenshots-through-routes', rules['page-screenshots-through-routes'], {
+  valid: [
+    { filename: ROUTED_SPEC, code: OPEN_ROUTE },
+    { filename: ROUTED_LAYOUT_SPEC, code: OPEN_ROUTE },
+    // The app's own table, imported from a route-table file (app.routes.ts, or a *.routes.ts).
+    {
+      filename: at('src/app/routes/auth-callback.page.browser.spec.ts'),
+      code: routerSpec(
+        `${PROVIDE_ROUTER}\nimport { routes } from '../app.routes';`,
+        'providers: [provideRouter(routes)]',
+      ),
+    },
+    {
+      filename: ROUTED_SPEC,
+      code: routerSpec(
+        "import { RouterModule as R } from '@angular/router';\nimport { adminRoutes } from '../admin/admin.routes';",
+        'imports: [R.forRoot(adminRoutes as Routes)]',
+      ),
+    },
+    // A pattern spec, a UI component's spec, a $layout layout's (the shell keeps its stand-ins).
+    {
+      filename: at('src/app/patterns/list/list.browser.spec.ts'),
+      code: routerSpec(
+        PROVIDE_ROUTER,
+        "providers: [provideRouter([{ path: '', component: Host }])]",
+      ),
+    },
+    {
+      filename: inAliased('src/app/layout/shell/shell.layout.browser.spec.ts'),
+      code: routerSpec(
+        PROVIDE_ROUTER,
+        "providers: [provideRouter([{ path: 'a', component: Stub }])]",
+      ),
+    },
+    // Not a page or layout spec, even under the routes directory.
+    {
+      filename: at('src/app/routes/projects/project-card.browser.spec.ts'),
+      code: `import { ProjectsPage } from './projects.page';\nTestBed.createComponent(ProjectsPage);\n${SHOT}`,
+    },
+    // createComponent of something that is not a page: the route still has to come from somewhere.
+    {
+      filename: ROUTED_SPEC,
+      code: `import { Host } from './host';\nawait openRoute('/projects');\nTestBed.createComponent(Host);`,
+    },
+    // Another helper, and another routes directory.
+    {
+      filename: at('src/pages/home/home.page.browser.spec.ts'),
+      code: `await openPage('/');\n${SHOT}`,
+      options: [{ routes: 'src/pages', helpers: ['openPage'] }],
+    },
+  ],
+  invalid: [
+    {
+      filename: ROUTED_SPEC,
+      code: `import { TestBed } from '@angular/core/testing';\nimport { ProjectsPage } from './projects.page';\nit('lists', async () => {\n  TestBed.createComponent(ProjectsPage);\n${SHOT}\n});`,
+      errors: [
+        {
+          messageId: 'createsPage',
+          data: {
+            spec: 'projects.page.browser.spec.ts',
+            name: 'ProjectsPage',
+            helpers: 'openRoute()',
+          },
+          line: 4,
+        },
+      ],
+    },
+    // A layout, imported through the $layout alias or with its extension.
+    {
+      filename: ROUTED_LAYOUT_SPEC,
+      code: `import { WorkLayout } from './work.layout.ts';\nTestBed.createComponent(WorkLayout);\n${SHOT}`,
+      errors: [
+        {
+          messageId: 'createsPage',
+          data: through({ spec: 'work.layout.browser.spec.ts', name: 'WorkLayout' }),
+        },
+      ],
+    },
+    {
+      filename: inAliased('src/app/routes/home.page.browser.spec.ts'),
+      code: `import { ShellLayout } from '$layout/shell/shell.layout';\nTestBed.createComponent(ShellLayout);\n${SHOT}`,
+      errors: [
+        {
+          messageId: 'createsPage',
+          data: through({ spec: 'home.page.browser.spec.ts', name: 'ShellLayout' }),
+        },
+      ],
+    },
+    {
+      filename: ROUTED_SPEC,
+      code: routerSpec(
+        PROVIDE_ROUTER,
+        "providers: [provideRouter([{ path: 'projects', component: ProjectsPage }])]",
+      ),
+      errors: [
+        { messageId: 'inlineRoutes', data: through({ what: 'an inline route table' }), line: 4 },
+      ],
+    },
+    {
+      filename: ROUTED_SPEC,
+      code: routerSpec(PROVIDE_ROUTER, 'providers: [provideRouter([])]'),
+      errors: [{ messageId: 'inlineRoutes', data: through({ what: 'an empty route table' }) }],
+    },
+    {
+      filename: ROUTED_SPEC,
+      code: routerSpec(
+        `${PROVIDE_ROUTER}\nconst routes = [{ path: 'projects', component: ProjectsPage }];`,
+        'providers: [provideRouter(routes)]',
+      ),
+      errors: [
+        {
+          messageId: 'inlineRoutes',
+          data: through({ what: "'routes' (not imported from a route-table file)" }),
+        },
+      ],
+    },
+    // Imported, but not from a route-table file.
+    {
+      filename: ROUTED_SPEC,
+      code: routerSpec(
+        `${PROVIDE_ROUTER}\nimport { routes } from './stand-in';`,
+        'providers: [provideRouter(routes)]',
+      ),
+      errors: [{ messageId: 'inlineRoutes' }],
+    },
+    {
+      filename: ROUTED_SPEC,
+      code: routerSpec(
+        "import { RouterTestingModule } from '@angular/router/testing';",
+        "imports: [RouterTestingModule.withRoutes([{ path: 'projects', component: ProjectsPage }])]",
+      ),
+      errors: [{ messageId: 'inlineRoutes', data: through({ what: 'an inline route table' }) }],
+    },
+    // An inline table beside openRoute is still reported.
+    {
+      filename: ROUTED_SPEC,
+      code: `${PROVIDE_ROUTER}\nprovideRouter();\n${OPEN_ROUTE}`,
+      errors: [{ messageId: 'inlineRoutes', data: through({ what: 'no routes' }), line: 2 }],
+    },
+    // No route at all: once, on the first screenshot.
+    {
+      filename: ROUTED_LAYOUT_SPEC,
+      code: `it('a', async () => {\n  document.body.innerHTML = '<main></main>';\n${SHOT}\n${SHOT}\n});`,
+      errors: [
+        {
+          messageId: 'noRoute',
+          data: { spec: 'work.layout.browser.spec.ts', helpers: 'openRoute()' },
+          line: 3,
+          column: 9,
+        },
+      ],
+    },
+    {
+      filename: ROUTED_SPEC,
+      code: "it('renders', () => {});",
+      errors: [{ messageId: 'noRoute', line: 1, column: 1 }],
+    },
+    {
+      filename: ROUTED_SPEC,
+      code: `await openRoute('/projects');\n${SHOT}`,
+      options: [{ helpers: ['openPage', 'openShell'] }],
+      errors: [{ messageId: 'noRoute', data: through({ helpers: 'openPage() / openShell()' }) }],
+    },
+  ],
+});
+
+describe('page-screenshots-through-routes opt-out', () => {
+  const lint = (code, file = ROUTED_SPEC) =>
+    new Linter()
+      .verify(
+        code,
+        [
+          {
+            files: ['**/*.ts'],
+            languageOptions: { parser: tseslint.parser },
+            ...qits.configs.recommended[0],
+          },
+        ],
+        file,
+      )
+      .filter((m) => m.ruleId?.startsWith('qits/'));
+  const NO_ROUTE = `it('a', async () => {\n${SHOT}\n});`;
+  it('is an error in recommended', () => {
+    assert.equal(
+      qits.configs.recommended[0].rules['qits/page-screenshots-through-routes'],
+      'error',
+    );
+    assert.deepEqual(
+      lint(NO_ROUTE).map((m) => [m.ruleId, m.severity]),
+      [['qits/page-screenshots-through-routes', 2]],
+    );
+  });
+  it('a disable comment above the first screenshot, or at the top of the file, silences it', () => {
+    const next =
+      '  // eslint-disable-next-line qits/page-screenshots-through-routes -- shows the bare page on purpose';
+    assert.deepEqual(lint(NO_ROUTE.replace(SHOT, `${next}\n${SHOT}`)), []);
+    const top =
+      '/* eslint-disable qits/page-screenshots-through-routes -- mounts a stand-in on purpose */';
+    const page = `import { TestBed } from '@angular/core/testing';\nimport { ProjectsPage } from './projects.page';\nTestBed.createComponent(ProjectsPage);\n${NO_ROUTE}`;
+    assert.equal(lint(page).length, 1);
+    assert.deepEqual(lint(`${top}\n${page}`), []);
+  });
+});
+
 const PAGE_SPEC = at('src/app/routes/projects/project-list.page.browser.spec.ts');
 const LAYOUT_SPEC = at('src/app/routes/shell.layout.browser.spec.ts');
 tester.run(

@@ -14,6 +14,7 @@ import navigationThroughOutcomes from './rules/navigation-through-outcomes.mjs';
 import pactNames from './rules/pact-names.mjs';
 import pageHasScreenshots from './rules/page-has-screenshots.mjs';
 import pageLocation from './rules/page-location.mjs';
+import pageScreenshotsThroughRoutes from './rules/page-screenshots-through-routes.mjs';
 import pageSuffix from './rules/page-suffix.mjs';
 import routeMatchesDirectory from './rules/route-matches-directory.mjs';
 import routePaths from './rules/route-paths.mjs';
@@ -29,6 +30,7 @@ const plugin = {
     'page-location': pageLocation,
     'page-suffix': pageSuffix,
     'page-has-screenshots': pageHasScreenshots,
+    'page-screenshots-through-routes': pageScreenshotsThroughRoutes,
     'route-matches-directory': routeMatchesDirectory,
     'route-paths': routePaths,
     'navigation-through-outcomes': navigationThroughOutcomes,
@@ -50,6 +52,7 @@ plugin.configs.recommended = [
       'qits/page-location': 'error',
       'qits/page-suffix': 'error',
       'qits/page-has-screenshots': 'error',
+      'qits/page-screenshots-through-routes': 'error',
       'qits/route-matches-directory': 'error',
       'qits/route-paths': 'error',
       // warn until the apps navigate through outcomes (qits-2005 turns it to error in the app)
