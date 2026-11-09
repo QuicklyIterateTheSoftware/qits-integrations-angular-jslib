@@ -35,6 +35,20 @@ export const QITS_SIGN_IN_FETCH = new InjectionToken<typeof fetch>('QITS_SIGN_IN
   factory: () => (input, init) => fetch(input, init),
 });
 
+/** Why `complete()` refused: the idp's query, this tab's own state, or the code swap. */
+export type QitsSignInFailure = 'refused' | 'unknown-state' | 'no-code' | 'not-swapped';
+
+/** A sign-in that `complete()` could not finish, with the reason a caller can show. */
+export class QitsSignInError extends Error {
+  constructor(
+    readonly reason: QitsSignInFailure,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'QitsSignInError';
+  }
+}
+
 interface Tokens {
   readonly accessToken: string;
   /** Epoch milliseconds. */
@@ -65,7 +79,8 @@ interface TokenAnswer {
  *   `sessionStorage` under the flow's `state`, and the tab navigates to the idp's authorize page.
  *   It starts at most one flow per page.
  * - `complete(query)` (the `/auth/callback` page) checks the `state`, swaps the code for tokens and
- *   answers the path to go back to. A `state` this tab did not start is refused.
+ *   answers the path to go back to. A `state` this tab did not start is refused. Every failure
+ *   throws a {@link QitsSignInError} naming the {@link QitsSignInFailure} reason.
  * - `accessToken()` answers a token that is still valid, refreshing first when it is not.
  * - `refresh()` swaps the refresh token for new tokens. The idp rotates the refresh token on every
  *   use and revokes the whole family when one is used twice, so there is only ever one refresh in
@@ -129,13 +144,19 @@ export class QitsTokens {
     if (state) remove(key);
     const error = query.get('error');
     if (error) {
-      throw new Error(
+      throw new QitsSignInError(
+        'refused',
         `The idp refused the sign-in: ${error} ${query.get('error_description') ?? ''}`,
       );
     }
-    if (!pending) throw new Error('The sign-in came back with a state this tab did not start.');
+    if (!pending) {
+      throw new QitsSignInError(
+        'unknown-state',
+        'The sign-in came back with a state this tab did not start.',
+      );
+    }
     const code = query.get('code');
-    if (!code) throw new Error('The sign-in came back without a code.');
+    if (!code) throw new QitsSignInError('no-code', 'The sign-in came back without a code.');
     const answer = await this.post({
       grant_type: 'authorization_code',
       client_id: this.clientId,
@@ -143,7 +164,9 @@ export class QitsTokens {
       redirect_uri: this.redirectUri,
       code_verifier: pending.verifier,
     });
-    if (!answer) throw new Error('The idp did not swap the code for tokens.');
+    if (!answer) {
+      throw new QitsSignInError('not-swapped', 'The idp did not swap the code for tokens.');
+    }
     return pending.returnPath;
   }
 
@@ -209,7 +232,14 @@ export class QitsTokens {
       if (response.status >= 400 && response.status < 500) this.logout();
       return null;
     }
-    const tokens = parse((await response.json()) as TokenAnswer, this.tokens);
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      // A 2xx with a body that is not JSON: treat it like a failed swap.
+      return null;
+    }
+    const tokens = parse(body as TokenAnswer, this.tokens);
     if (!tokens) return null;
     this.keep(tokens);
     write(this.tokensKey, tokens);

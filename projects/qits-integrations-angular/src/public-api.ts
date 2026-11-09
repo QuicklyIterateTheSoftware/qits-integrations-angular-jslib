@@ -28,9 +28,11 @@ export type { QitsBearerSignInOptions, QitsSignInSettings } from './lib/sign-in/
 export {
   EXPIRY_SKEW_MS,
   QITS_SIGN_IN_FETCH,
+  QitsSignInError,
   QitsTokens,
   REFRESH_AHEAD_MS,
 } from './lib/sign-in/qits-tokens';
+export type { QitsSignInFailure } from './lib/sign-in/qits-tokens';
 export { QitsSession, qitsSignedInGuard } from './lib/sign-in/qits-session';
 export { qitsBearerInterceptor } from './lib/sign-in/bearer-interceptor';
 export { QitsBearerFetch } from './lib/sign-in/bearer-fetch';

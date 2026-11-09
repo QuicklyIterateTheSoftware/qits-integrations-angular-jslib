@@ -4,6 +4,7 @@ import { s256Challenge } from './pkce';
 import {
   pendingKey,
   QITS_SIGN_IN_FETCH,
+  QitsSignInError,
   QitsTokens,
   REFRESH_AHEAD_MS,
   tokensKey,
@@ -136,12 +137,12 @@ describe('QitsTokens', () => {
     const service = tokens();
     await expect(
       service.complete(new URLSearchParams({ code: 'C', state: 'forged' })),
-    ).rejects.toThrow(/state/);
+    ).rejects.toMatchObject({ reason: 'unknown-state' } satisfies Partial<QitsSignInError>);
     const state = (await login(service)).searchParams.get('state') ?? '';
     replies.push(async () => answer('A1', 'R1'));
     await service.complete(new URLSearchParams({ code: 'C', state }));
-    await expect(service.complete(new URLSearchParams({ code: 'C', state }))).rejects.toThrow(
-      /state/,
+    await expect(service.complete(new URLSearchParams({ code: 'C', state }))).rejects.toMatchObject(
+      { reason: 'unknown-state' } satisfies Partial<QitsSignInError>,
     );
     expect(posts).toHaveLength(1);
   });
@@ -151,8 +152,45 @@ describe('QitsTokens', () => {
     const state = (await login(service)).searchParams.get('state') ?? '';
     await expect(
       service.complete(new URLSearchParams({ error: 'access_denied', state })),
-    ).rejects.toThrow(/access_denied/);
+    ).rejects.toMatchObject({
+      reason: 'refused',
+      message: expect.stringContaining('access_denied') as unknown as string,
+    } satisfies Partial<QitsSignInError>);
     expect(posts).toHaveLength(0);
+  });
+
+  it('refuses a callback with no code', async () => {
+    const service = tokens();
+    const state = (await login(service)).searchParams.get('state') ?? '';
+    await expect(service.complete(new URLSearchParams({ state }))).rejects.toMatchObject({
+      reason: 'no-code',
+    } satisfies Partial<QitsSignInError>);
+    expect(posts).toHaveLength(0);
+  });
+
+  it('reports a code swap the idp refuses', async () => {
+    const service = tokens();
+    const state = (await login(service)).searchParams.get('state') ?? '';
+    replies.push(async () => new Response('{"error":"invalid_grant"}', { status: 400 }));
+    await expect(service.complete(new URLSearchParams({ code: 'C', state }))).rejects.toMatchObject(
+      { reason: 'not-swapped' } satisfies Partial<QitsSignInError>,
+    );
+  });
+
+  it('reports a 2xx code swap answer that is not JSON', async () => {
+    const service = tokens();
+    const state = (await login(service)).searchParams.get('state') ?? '';
+    replies.push(async () => new Response('not json', { status: 200 }));
+    await expect(service.complete(new URLSearchParams({ code: 'C', state }))).rejects.toMatchObject(
+      { reason: 'not-swapped' } satisfies Partial<QitsSignInError>,
+    );
+  });
+
+  it('answers null on refresh when the token endpoint answers a non-JSON 2xx body', async () => {
+    const service = tokens();
+    await signIn(service);
+    replies.push(async () => new Response('not json', { status: 200 }));
+    expect(await service.refresh()).toBeNull();
   });
 
   it('keeps the tokens across a reload', async () => {
