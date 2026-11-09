@@ -489,14 +489,19 @@ The guard notes it, and a committed ledger carries it to the pact specs.
   routes only from `routes`. `takeRouteRecords()` returns what was noted, sorted and without
   duplicates, and forgets it; `clearRouteRecords()` only forgets.
 - **The ledger keeps it.** `goldenMasterRoutes(ledgerPath, root?)` (from `@qits/angular/testing`)
-  is the Vitest browser command the setup file sends the records to after each spec file. It
-  rewrites the running spec's section of the JSON ledger and nothing else: `{ "<spec path relative
-to root>": [records] }`, records sorted and without duplicates, keys sorted, two-space JSON with a
-  trailing newline, written only when the text changed. An empty list removes the spec's section;
-  the sections of spec files that no longer exist are dropped. `root` defaults to the cwd. Keep it
-  at `src/testing/browser/routes.json` and commit it: that is the path the `screenshot-baselines`
-  automation commits and QA checks for staleness, beside the references. A run filtered to some tests (`-t`, `.only`) replaces the section
-  with what those tests showed, so run whole spec files before committing.
+  is the Vitest browser command the setup file sends the records to after each spec file, and
+  `.plugin` on it is the Vite plugin that adds its reporter to the run: put the command in
+  `browser.commands` and the plugin in the config's `plugins`, or nothing is written. A call only
+  stages the spec's records; when the run ends, the reporter rewrites the section of every spec
+  file that ran completely (it passed, and so did every test in it) and nothing else:
+  `{ "<spec path relative to root>": [records] }`, records sorted and without duplicates, keys
+  sorted, two-space JSON with a trailing newline, written only when the text changed. A spec file
+  that ran completely and recorded nothing loses its section; a file that failed (in a test or in
+  a hook such as `beforeAll`), was skipped or ran in part (`-t`, `.only`) keeps its section as it
+  was, so a broken run never empties the ledger. The sections of spec files that no longer exist
+  are dropped. `root` defaults to the cwd. Keep it at `src/testing/browser/routes.json` and commit
+  it: that is the path the `screenshot-baselines` automation commits and QA checks for staleness,
+  beside the references.
 - **The pact specs read it.** `routeLedger(ledgerPath)` gives `(provider, state, operationId) =>
 routes`, the routes of every section, sorted and without duplicates (`[]` without a ledger);
   `useRouteLookup(...)` makes `addGoldenInteraction` ask it. A changed ledger changes the pacts, so
@@ -505,7 +510,8 @@ routes`, the routes of every section, sorted and without duplicates (`[]` withou
 ```ts
 // vitest-browser.config.ts (Node side)
 import { goldenMasterRoutes } from '@qits/angular/testing';
-// … commands: { goldenMaster, goldenMasterRoutes: goldenMasterRoutes('src/testing/browser/routes.json') }
+const routes = goldenMasterRoutes('src/testing/browser/routes.json');
+// … plugins: [routes.plugin], browser: { commands: { goldenMaster, goldenMasterRoutes: routes } }
 
 // src/testing/browser/setup.ts
 import { guardGoldenMasters, takeRouteRecords } from '@qits/angular/testing/browser';
