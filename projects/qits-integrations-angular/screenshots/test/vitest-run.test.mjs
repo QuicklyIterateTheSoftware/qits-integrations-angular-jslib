@@ -132,9 +132,9 @@ describe('screenshotReferences in a Vitest browser run', { timeout: 180_000 }, (
   });
 });
 
-// The screenshot freezes (ticket qits-1947): freezeScreenshots() in the setup file (the library's
-// source, with @qits/angular pointed at the one module it uses), screenshotReferences({ freezes })
-// in the config.
+// The screenshot freezes (ticket qits-1947): freezeScreenshots() and recordOutcomes() in the setup
+// file (the library's source, with @qits/angular pointed at the two modules they use),
+// screenshotReferences({ freezes }) in the config.
 describe('screenshot freezes in a Vitest browser run', { timeout: 300_000 }, () => {
   const LIBRARY = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
   const app = mkdtempSync(join(process.cwd(), 'tmp', 'freezes-run-'));
@@ -167,7 +167,7 @@ export default defineConfig({
   plugins: [screenshotReferences({ freezes: true })],
   resolve: {
     alias: [
-      { find: /^@qits\\/angular$/, replacement: ${JSON.stringify(join(LIBRARY, 'src/lib/route-telemetry.ts'))} },
+      { find: /^@qits\\/angular$/, replacement: ${JSON.stringify(join(app, 'src/qits-angular.ts'))} },
     ],
   },
   optimizeDeps: {
@@ -196,11 +196,19 @@ export default defineConfig({
 `,
   );
   put(
+    'src/qits-angular.ts',
+    `export * from ${JSON.stringify(join(LIBRARY, 'src/lib/route-telemetry.ts'))};
+export * from ${JSON.stringify(join(LIBRARY, 'src/lib/outcomes/outcome-recorder.ts'))};
+`,
+  );
+  put(
     'src/setup.ts',
     // The guard imports Angular's partially compiled packages: JIT needs the compiler here.
     `import '@angular/compiler';
 import { freezeScreenshots } from ${JSON.stringify(join(LIBRARY, 'testing/browser/src/freeze-screenshots.ts'))};
+import { recordOutcomes } from ${JSON.stringify(join(LIBRARY, 'testing/browser/src/record-outcomes.ts'))};
 
+recordOutcomes();
 freezeScreenshots({ routes: [{ path: '', redirectTo: 'a', pathMatch: 'full' }, { path: 'a', children: [{ path: 'b/:id' }] }] });
 `,
   );
@@ -217,6 +225,7 @@ freezeScreenshots({ routes: [{ path: '', redirectTo: 'a', pathMatch: 'full' }, {
 `;
   const spec = (withMenu, typed = 'Ada') => `import { expect, it } from 'vitest';
 import { page } from 'vitest/browser';
+import { recordOutcome } from '@qits/angular';
 
 const mount = (html: string) => {
   document.head.querySelector('style[data-freeze-test]')?.remove();
@@ -238,7 +247,9 @@ ${
   withMenu
     ? `
 it('an open menu', async () => {
-  mount('<div data-testid="menu" class="card"><button class="field">Open</button></div>');
+  mount('<div data-testid="menu" class="card"><button class="field" data-qits-outcome="menu:open">Open</button>' +
+    '<button hidden data-qits-outcome="menu:closed">Close</button></div>');
+  recordOutcome({ interaction: 'menu', outcome: 'open', kind: 'stay', to: null });
   await expect.element(page.getByTestId('menu')).toMatchScreenshot('menu/open');
 });
 `
@@ -300,7 +311,7 @@ it('a shown box', async () => {
     assert.ok(existsSync(freeze('menu/open')));
   });
 
-  it('lists the freezes, their records and the route tree in the manifest', () => {
+  it('lists the freezes, their records, triggers and outcomes, and the route tree in the manifest', () => {
     assert.deepEqual(manifest(), {
       routes: [
         { path: '', fullPath: '', redirectTo: 'a' },
@@ -314,6 +325,7 @@ it('a shown box', async () => {
           name: 'filled',
           route: null,
           records: [],
+          triggers: [],
         },
         {
           file: `${FORM}/menu/open.html`,
@@ -322,6 +334,8 @@ it('a shown box', async () => {
           name: 'menu/open',
           route: null,
           records: [],
+          // The hidden button's mark is in the HTML, but not visible in the shot.
+          triggers: ['menu:open'],
         },
         {
           file: `${HELD}/shown.html`,
@@ -330,9 +344,24 @@ it('a shown box', async () => {
           name: 'shown',
           route: null,
           records: [],
+          triggers: [],
         },
       ],
       byRoute: {},
+      outcomes: {
+        declared: [],
+        fired: [
+          {
+            spec: FORM,
+            test: 'an open menu',
+            route: null,
+            interaction: 'menu',
+            outcome: 'open',
+            kind: 'stay',
+            freeze: `${FORM}/menu/open.html`,
+          },
+        ],
+      },
     });
     assert.ok(readFileSync(join(FREEZES, 'manifest.json'), 'utf8').endsWith('}\n'));
   });

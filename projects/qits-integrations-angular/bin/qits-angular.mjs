@@ -8,7 +8,7 @@ const [command, ...args] = process.argv.slice(2);
 if (!Object.hasOwn(COMMANDS, command ?? '')) {
   console.error(
     'Usage: qits-angular <command> [options]\n\nCommands:\n' +
-      '  screenshots  find reference screenshots no test uses (--help)',
+      '  screenshots  find reference screenshots no test uses, and outcome gaps (--help)',
   );
   process.exitCode = command === '--help' || command === '-h' ? 0 : 2;
 } else {

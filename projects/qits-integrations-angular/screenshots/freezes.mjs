@@ -16,15 +16,29 @@
  *       "test": "projects page > lists the projects",
  *       "name": "list",
  *       "route": "projects",              // null unless the spec is a page spec (routeSpecs)
- *       "records": [{ "provider": "qits-projects-service", "state": "…", "operationId": "…" }]
+ *       "records": [{ "provider": "qits-projects-service", "state": "…", "operationId": "…" }],
+ *       "triggers": ["projects:open"]     // the visible outcome marks, `<interaction>:<outcome>`
  *     }],
- *     "byRoute": { "projects": ["src/app/routes/projects/projects.page.browser.spec.ts/list.html"] }
+ *     "byRoute": { "projects": ["src/app/routes/projects/projects.page.browser.spec.ts/list.html"] },
+ *     "outcomes": {
+ *       "declared": [{ "route": "projects", "interaction": "projects", "outcome": "open",
+ *                      "kind": "exit", "to": "projects/:slug", "global": false,
+ *                      "file": "src/app/routes/projects/projects.page.ts" }],
+ *       "fired": [{ "spec": "…", "test": "…", "route": "projects", "interaction": "projects",
+ *                   "outcome": "open", "kind": "exit", "freeze": "…/list.html" }]
+ *     }
  *   }
  *
  * `file` is relative to the freeze directory. A run replaces only what it saw completely: a spec
  * whose tests all ran and passed gets exactly the freezes it sent (its other files are deleted), a
  * spec file that no longer exists loses its freezes, and a spec that failed, was filtered or did not
  * run keeps the freezes it had. Every run writes, update run or not.
+ *
+ * The outcomes (ticket qits-2003): `declared` is read from the app's source at the end of every run
+ * (`declaredOutcomes()` in `outcomes.mjs`); `fired` are the records `recordOutcomes()` sends through
+ * `qitsOutcomes` after each test, kept per spec by the freezes' rules. A fired record's `freeze` is
+ * the first freeze of its test whose shot came after it (the freeze's `outcomes` count, the test's
+ * records at shot time, is greater than the record's index in the test), `null` when no shot did.
  */
 import {
   copyFileSync,
@@ -38,6 +52,7 @@ import {
 } from 'node:fs';
 import { basename, dirname, extname, join, posix, relative, resolve } from 'node:path';
 import { toPosix } from './record.mjs';
+import { DEFAULT_ROUTES, declaredOutcomes } from './outcomes.mjs';
 
 export const DEFAULT_FREEZE_DIRECTORY = 'src/testing/browser/freezes';
 
@@ -47,11 +62,12 @@ export const DEFAULT_ROUTE_SPECS = /\.page\.browser\.spec\.[cm]?[jt]sx?$/;
 /** The browser commands, as `@qits/angular/testing/browser` names them. */
 export const FREEZE_COMMAND = 'qitsFreeze';
 export const FREEZE_ROUTES_COMMAND = 'qitsFreezeRoutes';
+export const OUTCOMES_COMMAND = 'qitsOutcomes';
 
 /** What a same-origin URL is in the HTML the browser sends (`FREEZE_ASSET_PREFIX` there). */
 const ASSET = /qits-freeze-asset:(\/[^"'\s),?#]*)/g;
 
-const MANIFEST = 'manifest.json';
+export const MANIFEST = 'manifest.json';
 const ASSETS = 'assets';
 
 /**
@@ -76,16 +92,22 @@ const compare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 /**
  * Collects the freezes of one run and writes them at its end.
  *
- * @param {{ root: string, dir?: string, routeSpecs?: RegExp }} options
+ * @param {{ root: string, dir?: string, routeSpecs?: RegExp, routes?: string }} options
+ *   `routes`: the routes directory the declarations are scoped by (default `src/app/routes`).
  */
 export function freezeWriter({
   root,
   dir = DEFAULT_FREEZE_DIRECTORY,
   routeSpecs = DEFAULT_ROUTE_SPECS,
+  routes: routesDir = DEFAULT_ROUTES,
 }) {
   const base = resolve(root, dir);
-  /** spec → Map(file → { entry, html, assets: Map(name → source) }) */
+  /** spec → Map(file → { entry, html, assets: Map(name → source), outcomes, shot }) */
   let pending = new Map();
+  /** spec → Map(test → the test's fired records, in order) */
+  let pendingOutcomes = new Map();
+  /** Orders the shots of a run, so a record links to the first shot after it. */
+  let shots = 0;
   /** asset name → the request path it was copied from, this run */
   let assetSources = new Map();
   let routes;
@@ -113,6 +135,8 @@ export function freezeWriter({
   return {
     start() {
       pending = new Map();
+      pendingOutcomes = new Map();
+      shots = 0;
       assetSources = new Map();
       routes = undefined;
     },
@@ -123,7 +147,7 @@ export function freezeWriter({
     },
 
     /** The `qitsFreeze` command, for the spec at `testPath`. */
-    add(testPath, { name, test, html, route, records }) {
+    add(testPath, { name, test, html, route, records, outcomes, triggers }) {
       const spec = toPosix(relative(root, testPath));
       const file = `${spec}/${freezeSlug(name)}.html`;
       const toAssets = toPosix(relative(dirname(join(base, file)), join(base, ASSETS)));
@@ -150,10 +174,35 @@ export function freezeWriter({
           state,
           operationId,
         })),
+        triggers: [...new Set(triggers ?? [])].sort(compare),
       };
       const freezes = pending.get(spec) ?? new Map();
-      freezes.set(file, { entry, html: rewritten, assets });
+      freezes.set(file, { entry, html: rewritten, assets, outcomes: outcomes ?? 0, shot: ++shots });
       pending.set(spec, freezes);
+    },
+
+    /**
+     * The `qitsOutcomes` command, for the spec at `testPath`: the records one test reached, in
+     * order. A test that sends again (a retry) replaces what it sent before.
+     */
+    addOutcomes(testPath, records) {
+      const spec = toPosix(relative(root, testPath));
+      const byTest = pendingOutcomes.get(spec) ?? new Map();
+      const sent = new Map();
+      for (const { test, route, interaction, outcome, kind } of records ?? []) {
+        const list = sent.get(test) ?? [];
+        list.push({
+          spec,
+          test,
+          route: routeSpecs.test(spec) ? (route ?? null) : null,
+          interaction,
+          outcome,
+          kind,
+        });
+        sent.set(test, list);
+      }
+      for (const [test, list] of sent) byTest.set(test, list);
+      pendingOutcomes.set(spec, byTest);
     },
 
     /**
@@ -164,11 +213,13 @@ export function freezeWriter({
       const manifestPath = join(base, MANIFEST);
       const old = readManifest(manifestPath);
       const entries = new Map(old.freezes.map((entry) => [entry.file, entry]));
+      let fired = old.fired;
       const drop = (spec) => {
         for (const [file, entry] of entries) if (entry.spec === spec) entries.delete(file);
+        fired = fired.filter((record) => record.spec !== spec);
       };
 
-      for (const spec of new Set(old.freezes.map((entry) => entry.spec))) {
+      for (const spec of new Set([...old.freezes, ...old.fired].map((entry) => entry.spec))) {
         if (existsSync(join(root, spec))) continue;
         drop(spec);
         rmSync(join(base, spec), { recursive: true, force: true });
@@ -184,6 +235,15 @@ export function freezeWriter({
           writeIfChanged(join(base, file), html);
           for (const [name, source] of assets) copyIfChanged(source, join(base, ASSETS, name));
           entries.set(file, entry);
+        }
+        const shotsInOrder = [...freezes.values()].sort((a, b) => a.shot - b.shot);
+        for (const [test, records] of pendingOutcomes.get(spec) ?? []) {
+          records.forEach((record, index) => {
+            const after = shotsInOrder.find(
+              (shot) => shot.entry.test === test && shot.outcomes > index,
+            );
+            fired.push({ ...record, freeze: after?.entry.file ?? null });
+          });
         }
         const directory = join(base, spec);
         for (const path of filesUnder(directory)) {
@@ -201,17 +261,38 @@ export function freezeWriter({
       )) {
         byRoute[route] = freezes.filter((f) => f.route === route).map((f) => f.file);
       }
+      let declared = [];
+      try {
+        declared = declaredOutcomes({ root, routes: routesDir }).declared;
+      } catch (error) {
+        console.warn(`screenshot freezes: ${error.message} The manifest declares no outcomes.`);
+      }
+      // Stable: a test's records keep the order they were reached in.
+      fired.sort((a, b) => compare(a.spec, b.spec) || compare(a.test, b.test));
       const manifest = {
         routes: routes ?? old.routes,
-        freezes: freezes.map(({ file, spec, test, name, route, records }) => ({
+        freezes: freezes.map(({ file, spec, test, name, route, records, triggers }) => ({
           file,
           spec,
           test,
           name,
           route,
           records,
+          triggers: triggers ?? [],
         })),
         byRoute,
+        outcomes: {
+          declared,
+          fired: fired.map(({ spec, test, route, interaction, outcome, kind, freeze }) => ({
+            spec,
+            test,
+            route,
+            interaction,
+            outcome,
+            kind,
+            freeze,
+          })),
+        },
       };
       writeIfChanged(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     },
@@ -224,9 +305,10 @@ function readManifest(path) {
     return {
       routes: Array.isArray(manifest.routes) ? manifest.routes : [],
       freezes: Array.isArray(manifest.freezes) ? manifest.freezes : [],
+      fired: Array.isArray(manifest.outcomes?.fired) ? manifest.outcomes.fired : [],
     };
   } catch {
-    return { routes: [], freezes: [] };
+    return { routes: [], freezes: [], fired: [] };
   }
 }
 

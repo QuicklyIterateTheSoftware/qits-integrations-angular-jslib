@@ -25,6 +25,8 @@ import {
   currentTestRecords,
   type TestRecord,
 } from './golden-master-guard';
+import { outcomeRecords } from './record-outcomes';
+import { visibleTriggers } from './visible-triggers';
 
 /** The browser command each freeze is sent to; `screenshotReferences({ freezes })` registers it. */
 export const FREEZE_COMMAND = 'qitsFreeze';
@@ -45,6 +47,13 @@ export interface ScreenshotFreezePayload {
   readonly records: TestRecord[];
   /** Same-origin paths the HTML refers to as `qits-freeze-asset:<path>`. */
   readonly assets: string[];
+  /**
+   * How many outcomes the test had reached when the shot was taken (`outcomeRecords()`; `0`
+   * without `recordOutcomes()`): the Node side links each outcome to the first shot after it.
+   */
+  readonly outcomes: number;
+  /** The `<interaction>:<outcome>` trigger marks visible in the shot, sorted (`visibleTriggers`). */
+  readonly triggers: string[];
 }
 
 /** Options for {@link freezeScreenshots}. */
@@ -132,10 +141,10 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
         const test = expect.getState().currentTestName ?? '';
         const name = typeof args[0] === 'string' ? args[0] : `${test} ${count(this)}`;
         await original.apply(this, args);
-        const freeze = freezeShot(shotTarget(chai.util.flag(this, 'object')), document, {
-          renameClasses,
-          dropInlineStyles,
-        });
+        const target = shotTarget(chai.util.flag(this, 'object'));
+        // On the live DOM, before the serializer: the HTML cannot tell a hidden mark from a shown one.
+        const triggers = visibleTriggers(target, document);
+        const freeze = freezeShot(target, document, { renameClasses, dropInlineStyles });
         const payload: ScreenshotFreezePayload = {
           name,
           test,
@@ -143,6 +152,8 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
           route: currentRoutePattern(),
           records: currentTestRecords(),
           assets: freeze.assets,
+          outcomes: outcomeRecords().length,
+          triggers,
         };
         await (
           await command(FREEZE_COMMAND)

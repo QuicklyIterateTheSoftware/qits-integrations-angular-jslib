@@ -10,7 +10,8 @@
  * With the `freezes` option it also writes the screenshot freezes (ticket qits-1947,
  * `freezes.mjs`): it registers the browser commands `freezeScreenshots()` sends them to (in its
  * Vite `config` hook, see there), and the
- * same reporter writes them at the end of the run.
+ * same reporter writes them at the end of the run. The outcomes `recordOutcomes()` sends after each
+ * test (`qitsOutcomes`, ticket qits-2003) go into the same manifest.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { platform } from 'node:os';
@@ -22,7 +23,12 @@ import {
   fileHash,
   toPosix,
 } from './record.mjs';
-import { FREEZE_COMMAND, FREEZE_ROUTES_COMMAND, freezeWriter } from './freezes.mjs';
+import {
+  FREEZE_COMMAND,
+  FREEZE_ROUTES_COMMAND,
+  OUTCOMES_COMMAND,
+  freezeWriter,
+} from './freezes.mjs';
 
 /** Vitest's own default (`@vitest/browser`, `defaultOptions.resolveScreenshotPath`). */
 const vitestDefault = ({
@@ -100,11 +106,13 @@ export function completeForFreezes(testModule, { filtered = false } = {}) {
 }
 
 /**
- * @param {{ record?: string, freezes?: boolean | { dir?: string, routeSpecs?: RegExp } }} [options]
+ * @param {{ record?: string,
+ *   freezes?: boolean | { dir?: string, routeSpecs?: RegExp, routes?: string } }} [options]
  *   `record`: the file to write, relative to the project root (default
  *   `node_modules/.cache/@qits/angular/screenshot-references.json`). `freezes`: write the screenshot
  *   freezes too, to `dir` (default `src/testing/browser/freezes`), naming the route for the specs
- *   `routeSpecs` matches (default the page specs, `*.page.browser.spec.ts`).
+ *   `routeSpecs` matches (default the page specs, `*.page.browser.spec.ts`); `routes` is the routes
+ *   directory the manifest's declared outcomes are scoped by (default `src/app/routes`).
  */
 export function screenshotReferences(options = {}) {
   const recordOption = options.record ?? DEFAULT_RECORD;
@@ -130,6 +138,10 @@ export function screenshotReferences(options = {}) {
     },
     [FREEZE_ROUTES_COMMAND]: (context, routes) => {
       writerFor(context).setRoutes(routes);
+      return null;
+    },
+    [OUTCOMES_COMMAND]: (context, records) => {
+      writerFor(context).addOutcomes(context.testPath, records);
       return null;
     },
   };

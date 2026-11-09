@@ -22,6 +22,11 @@ export interface ScreenshotFreezesOptions {
    * {@link DEFAULT_ROUTE_SPECS}, the page specs; any other spec's freezes have `route: null`.
    */
   routeSpecs?: RegExp;
+  /**
+   * The routes directory the manifest's declared outcomes are scoped by, relative to the root, as
+   * the lint rules' `routes` option. Default `src/app/routes`.
+   */
+  routes?: string;
 }
 
 /**
@@ -56,10 +61,62 @@ export interface FreezeManifest {
     name: string;
     route: string | null;
     records: { provider: string; state: string; operationId: string }[];
+    /** The `<interaction>:<outcome>` marks visible in the shot, sorted. */
+    triggers: string[];
   }[];
   /** Route pattern → the freezes (`file`) of page specs on that route. */
   byRoute: Record<string, string[]>;
+  outcomes: {
+    /** Read from the source at the end of the run, sorted by route, interaction and outcome. */
+    declared: DeclaredOutcome[];
+    /** What the browser tests reached, sorted by spec and test, in order within a test. */
+    fired: FiredOutcome[];
+  };
 }
+
+/** One entry of an `outcomes()` call, as `declaredOutcomes()` reads it. */
+export interface DeclaredOutcome {
+  /** The page's route, a layout's (its whole subtree), or `null` for an app-wide declaration. */
+  route: string | null;
+  interaction: string;
+  outcome: string;
+  kind: 'exit' | 'stay';
+  /** The exit's path pattern; `null` for a stay. */
+  to: string | null;
+  /** A layout's or an app-wide declaration: checked once, for its scope, not per page. */
+  global: boolean;
+  /** The declaring file, relative to the root. */
+  file: string;
+}
+
+/** One outcome a browser test reached. */
+export interface FiredOutcome {
+  spec: string;
+  test: string;
+  /** The route the router had matched when it was reached; `null` unless a page spec. */
+  route: string | null;
+  interaction: string;
+  outcome: string;
+  kind: 'exit' | 'stay';
+  /** The first freeze of the test whose shot came after it, or `null`. */
+  freeze: string | null;
+}
+
+/**
+ * Reads the app's `outcomes()` declarations with its own `typescript` (resolved from `root`; throws
+ * naming the package when it is missing). `routes`: default `src/app/routes`.
+ */
+export declare function declaredOutcomes(options: { root: string; routes?: string }): {
+  declared: DeclaredOutcome[];
+  unreadable: { file: string; line: number; why: string }[];
+};
+
+/** The outcome gaps `qits-angular screenshots --check` names, one message each. */
+export declare function outcomeGaps(input: {
+  declared: DeclaredOutcome[];
+  unreadable: { file: string; line: number; why: string }[];
+  manifest?: FreezeManifest;
+}): string[];
 
 export interface FreezeRoute {
   path: string;

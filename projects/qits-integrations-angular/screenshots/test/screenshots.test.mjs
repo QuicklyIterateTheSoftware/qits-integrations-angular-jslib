@@ -3,11 +3,13 @@
 // real Vitest run is in vitest-run.test.mjs (pnpm test:browser, needs Chromium).
 import { after, describe, it } from 'node:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { strict as assert } from 'node:assert';
 import { screenshots } from '../cli.mjs';
 import {
   completeForFreezes,
+  declaredOutcomes,
   findOrphans,
   freezeSlug,
   pruneOrphans,
@@ -407,6 +409,7 @@ describe('screenshot freezes', () => {
     assert.deepEqual(Object.keys(contributed.test.browser.commands), [
       'qitsFreeze',
       'qitsFreezeRoutes',
+      'qitsOutcomes',
     ]);
     assert.equal(screenshotReferences().config({}), undefined);
     // configureVitest keeps what the config hook registered.
@@ -463,6 +466,7 @@ describe('screenshot freezes', () => {
           name: 'list',
           route: 'projects',
           records,
+          triggers: [],
         },
         {
           file: `${PAGE}/menu/open.html`,
@@ -471,6 +475,7 @@ describe('screenshot freezes', () => {
           name: 'menu/open',
           route: 'projects',
           records,
+          triggers: [],
         },
         // Not a page spec: no route.
         {
@@ -480,9 +485,11 @@ describe('screenshot freezes', () => {
           name: 'card',
           route: null,
           records,
+          triggers: [],
         },
       ],
       byRoute: { projects: [`${PAGE}/list.html`, `${PAGE}/menu/open.html`] },
+      outcomes: { declared: [], fired: [] },
     });
     assert.deepEqual(Object.keys(JSON.parse(text).freezes[0]), [
       'file',
@@ -491,6 +498,7 @@ describe('screenshot freezes', () => {
       'name',
       'route',
       'records',
+      'triggers',
     ]);
   });
 
@@ -583,5 +591,522 @@ describe('screenshot freezes', () => {
       projects: [`${CARD}/card.html`],
     });
     assert.deepEqual(manifest(root, 'out/freezes').routes, []);
+  });
+});
+
+// The outcomes (ticket qits-2003): what the source declares, what the tests reached and showed.
+const WORK_CREATE = 'src/app/routes/projects/[slug]/work/create/work-create.page.ts';
+const PROJECTS_LAYOUT = 'src/app/routes/projects/projects.layout.ts';
+const SHELL = 'src/app/layout/shell.layout.ts';
+const MENU = 'src/app/ui/menu/menu.component.ts';
+const ROOT_PAGE = 'src/app/routes/home.page.ts';
+const BROKEN = 'src/app/routes/broken/broken.page.ts';
+const DECLARATIONS = {
+  'tsconfig.json': '{ "compilerOptions": { "paths": { "$layout/*": ["src/app/layout/*"] } } }',
+  [WORK_CREATE]: `import { Component } from '@angular/core';
+import { exit, outcomes, stay } from '@qits/angular';
+
+@Component({ template: '' })
+export class WorkCreatePage {
+  readonly create = outcomes('create-work-item', {
+    refused: stay(),
+    created: exit('projects/:slug/work/detail/:id'),
+  });
+}
+`,
+  // A renamed import.
+  [PROJECTS_LAYOUT]: `import { exit as leave, outcomes as declare } from '@qits/angular';
+
+export class ProjectsLayout {
+  readonly nav = declare('project-nav', { home: leave(\`projects\`) });
+}
+`,
+  // A layout under the $layout alias, through a namespace import.
+  [SHELL]: `import * as qits from '@qits/angular';
+
+export class ShellLayout {
+  readonly session = qits.outcomes('session', { 'signed-out': qits.stay() });
+}
+`,
+  // Outside the routes directory.
+  [MENU]: `import { outcomes, stay } from '@qits/angular';
+
+export class Menu {
+  readonly menu = outcomes('menu', { open: stay() });
+}
+`,
+  // The routes directory itself is the empty route.
+  [ROOT_PAGE]: `import { outcomes, stay } from '@qits/angular';
+
+export class HomePage {
+  readonly home = outcomes('home', { greeted: stay() });
+}
+`,
+  [BROKEN]: `import { exit, outcomes, stay } from '@qits/angular';
+
+const name = 'broken';
+const path = 'projects';
+const key = 'k';
+const rest = {};
+const other = () => stay();
+export class BrokenPage {
+  readonly a = outcomes(name, { a: stay() });
+  readonly b = outcomes('b', {
+    ...rest,
+    [key]: stay(),
+    c: other(),
+    d: exit(path),
+    ok: stay(),
+  });
+}
+`,
+  // Not counted: a spec, another package's outcomes(), and a file outside src/app.
+  'src/app/routes/projects/projects.page.spec.ts': `import { outcomes, stay } from '@qits/angular';
+outcomes('spec-only', { x: stay() });
+`,
+  'src/app/routes/projects/local.ts': `import { outcomes, stay } from './elsewhere';
+// @qits/angular
+outcomes('not-ours', { x: stay() });
+`,
+  'src/main.ts': `import { outcomes, stay } from '@qits/angular';
+outcomes('main', { x: stay() });
+`,
+};
+
+describe('declaredOutcomes', () => {
+  it('reads page, layout, $layout, outside and renamed declarations, and the unreadable calls', () => {
+    const root = app(DECLARATIONS);
+    const { declared, unreadable } = declaredOutcomes({ root });
+    assert.deepEqual(declared, [
+      {
+        route: '',
+        interaction: 'home',
+        outcome: 'greeted',
+        kind: 'stay',
+        to: null,
+        global: false,
+        file: ROOT_PAGE,
+      },
+      {
+        route: 'broken',
+        interaction: 'b',
+        outcome: 'ok',
+        kind: 'stay',
+        to: null,
+        global: false,
+        file: BROKEN,
+      },
+      {
+        route: 'projects',
+        interaction: 'project-nav',
+        outcome: 'home',
+        kind: 'exit',
+        to: 'projects',
+        global: true,
+        file: PROJECTS_LAYOUT,
+      },
+      {
+        route: 'projects/:slug/work/create',
+        interaction: 'create-work-item',
+        outcome: 'created',
+        kind: 'exit',
+        to: 'projects/:slug/work/detail/:id',
+        global: false,
+        file: WORK_CREATE,
+      },
+      {
+        route: 'projects/:slug/work/create',
+        interaction: 'create-work-item',
+        outcome: 'refused',
+        kind: 'stay',
+        to: null,
+        global: false,
+        file: WORK_CREATE,
+      },
+      {
+        route: null,
+        interaction: 'menu',
+        outcome: 'open',
+        kind: 'stay',
+        to: null,
+        global: true,
+        file: MENU,
+      },
+      {
+        route: null,
+        interaction: 'session',
+        outcome: 'signed-out',
+        kind: 'stay',
+        to: null,
+        global: true,
+        file: SHELL,
+      },
+    ]);
+    assert.deepEqual(unreadable, [
+      { file: BROKEN, line: 9, why: 'its interaction is not a string literal' },
+      { file: BROKEN, line: 11, why: 'a spread' },
+      { file: BROKEN, line: 12, why: 'a computed key' },
+      { file: BROKEN, line: 13, why: 'the entry c is not an exit() or stay() call' },
+      { file: BROKEN, line: 14, why: 'the exit d is not given a string literal' },
+    ]);
+  });
+
+  it('takes another routes directory', () => {
+    const root = app({
+      'src/app/pages/projects/[slug]/detail.page.ts': DECLARATIONS[MENU],
+    });
+    assert.deepEqual(
+      declaredOutcomes({ root, routes: 'src/app/pages' }).declared.map((d) => [d.route, d.global]),
+      [['projects/:slug', false]],
+    );
+    assert.deepEqual(
+      declaredOutcomes({ root }).declared.map((d) => [d.route, d.global]),
+      [[null, true]],
+    );
+  });
+
+  it('needs no typescript without a declaration, and names it when one needs it', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'qits-outcomes-'));
+    after(() => rmSync(outside, { recursive: true, force: true }));
+    mkdirSync(join(outside, 'src/app'), { recursive: true });
+    writeFileSync(join(outside, 'src/app/plain.ts'), 'export const x = 1;\n');
+    assert.deepEqual(declaredOutcomes({ root: outside }), { declared: [], unreadable: [] });
+    writeFileSync(join(outside, 'src/app/menu.ts'), DECLARATIONS[MENU]);
+    assert.throws(
+      () => declaredOutcomes({ root: outside }),
+      /the package typescript does not resolve/,
+    );
+  });
+});
+
+describe('outcomes in the freeze manifest', () => {
+  const PAGE = 'src/app/routes/projects/[slug]/work/create/work-create.page.browser.spec.ts';
+  const CARD = 'src/app/ui/card/card.browser.spec.ts';
+  const DIR = 'src/testing/browser/freezes';
+  const module = (root, spec, state = 'passed') => ({
+    moduleId: join(root, spec),
+    state: () => state,
+    errors: () => [],
+    children: { allTests: () => [{ result: () => ({ state }) }] },
+  });
+  const fire = (test, outcome, route = 'projects/:slug/work/create') => ({
+    interaction: 'create-work-item',
+    outcome,
+    kind: outcome === 'created' ? 'exit' : 'stay',
+    to: null,
+    spec: 'ignored: the command context names the spec',
+    test,
+    route,
+  });
+  /**
+   * A run: `steps` per spec, in order, each `['shot', test, name, outcomes, triggers]` or
+   * `['fired', test, ...outcome names]`; `modules` the outcome of each spec (default passed).
+   */
+  function run(root, steps, modules) {
+    const vitest = { config: { reporters: [] } };
+    const project = { config: { root, browser: { enabled: true } } };
+    screenshotReferences({ freezes: true }).configureVitest({ vitest, project });
+    const [reporter] = vitest.config.reporters;
+    const { qitsFreeze, qitsOutcomes } = project.config.browser.commands;
+    reporter.onTestRunStart([]);
+    for (const [spec, list] of Object.entries(steps)) {
+      const context = { testPath: join(root, spec) };
+      for (const [what, test, ...rest] of list) {
+        if (what === 'fired') {
+          qitsOutcomes(
+            context,
+            rest.map((outcome) => fire(test, outcome)),
+          );
+        } else {
+          const [name, outcomes, triggers] = rest;
+          qitsFreeze(context, {
+            name,
+            test,
+            html: '<p></p>',
+            route: 'projects/:slug/work/create',
+            records: [],
+            assets: [],
+            outcomes,
+            triggers,
+          });
+        }
+      }
+    }
+    reporter.onTestRunEnd(modules ?? Object.keys(steps).map((spec) => module(root, spec)));
+  }
+  const manifest = (root) => JSON.parse(readFileSync(join(root, DIR, 'manifest.json'), 'utf8'));
+
+  it('lists the declared and fired outcomes, links each fire to the first shot after it, and the triggers', () => {
+    const root = app({ [PAGE]: 'spec', [CARD]: 'spec', [WORK_CREATE]: DECLARATIONS[WORK_CREATE] });
+    run(root, {
+      [PAGE]: [
+        ['shot', 'creates', 'empty', 0, ['create-work-item:refused', 'create-work-item:created']],
+        ['shot', 'refuses', 'before', 0, []],
+        ['shot', 'refuses', 'refused', 1, ['create-work-item:created', 'create-work-item:created']],
+        ['shot', 'refuses', 'later', 2, []],
+        // Sent after the test, as recordOutcomes() does: refused before the "refused" shot, then
+        // refused again before "later"; "creates" reached created after its only shot.
+        ['fired', 'refuses', 'refused', 'refused', 'refused'],
+        ['fired', 'creates', 'created'],
+      ],
+      [CARD]: [['fired', 'opens', 'refused']],
+    });
+    const { freezes, outcomes } = manifest(root);
+    assert.deepEqual(
+      freezes.map((f) => [f.name, f.triggers]),
+      [
+        ['before', []],
+        ['empty', ['create-work-item:created', 'create-work-item:refused']],
+        ['later', []],
+        ['refused', ['create-work-item:created']],
+      ],
+    );
+    assert.deepEqual(outcomes.declared, declaredOutcomes({ root }).declared);
+    assert.equal(outcomes.declared.length, 2);
+    const file = (name) => `${PAGE}/${name}.html`;
+    assert.deepEqual(outcomes.fired, [
+      {
+        spec: PAGE,
+        test: 'creates',
+        route: 'projects/:slug/work/create',
+        interaction: 'create-work-item',
+        outcome: 'created',
+        kind: 'exit',
+        freeze: null,
+      },
+      ...[file('refused'), file('later'), null].map((freeze) => ({
+        spec: PAGE,
+        test: 'refuses',
+        route: 'projects/:slug/work/create',
+        interaction: 'create-work-item',
+        outcome: 'refused',
+        kind: 'stay',
+        freeze,
+      })),
+      // Not a page spec: no route, as for its freezes.
+      {
+        spec: CARD,
+        test: 'opens',
+        route: null,
+        interaction: 'create-work-item',
+        outcome: 'refused',
+        kind: 'stay',
+        freeze: null,
+      },
+    ]);
+  });
+
+  it('keeps the fired outcomes of a spec a partial run skipped or failed, and drops a gone spec’s', () => {
+    const other = 'src/app/routes/projects/projects.page.browser.spec.ts';
+    const gone = 'src/app/routes/gone/gone.page.browser.spec.ts';
+    const root = app({ [PAGE]: 'spec', [CARD]: 'spec', [other]: 'spec', [gone]: 'spec' });
+    run(root, {
+      [PAGE]: [['fired', 'refuses', 'refused']],
+      [CARD]: [['fired', 'opens', 'refused']],
+      [other]: [['fired', 'lists', 'refused']],
+      [gone]: [['fired', 'goes', 'refused']],
+    });
+    rmSync(join(root, gone));
+    // PAGE ran completely and reached nothing now; CARD failed; `other` did not run.
+    run(root, { [PAGE]: [], [CARD]: [['fired', 'opens', 'created']] }, [
+      module(root, PAGE),
+      module(root, CARD, 'failed'),
+    ]);
+    assert.deepEqual(
+      manifest(root).outcomes.fired.map((f) => [f.spec, f.test, f.outcome]),
+      [
+        [other, 'lists', 'refused'],
+        [CARD, 'opens', 'refused'],
+      ],
+    );
+  });
+
+  it('replaces what a retried test sent before', () => {
+    const root = app({ [PAGE]: 'spec' });
+    run(root, {
+      [PAGE]: [
+        ['fired', 'refuses', 'refused', 'refused'],
+        ['fired', 'refuses', 'created'],
+      ],
+    });
+    assert.deepEqual(
+      manifest(root).outcomes.fired.map((f) => f.outcome),
+      ['created'],
+    );
+  });
+});
+
+describe('qits-angular screenshots --check, the outcome gaps', () => {
+  const PAGE = 'src/app/routes/projects/[slug]/work/create/work-create.page.browser.spec.ts';
+  const DIR = 'src/testing/browser/freezes';
+  const check = (root, args = [], env = {}) => {
+    const out = [];
+    const err = [];
+    const code = screenshots(['--check', ...args], {
+      cwd: root,
+      env,
+      out: (l) => out.push(l),
+      err: (l) => err.push(l),
+    });
+    return { code, out: out.join('\n'), err: err.join('\n') };
+  };
+  const withManifest = (files, manifest, dir = DIR) =>
+    app({ ...files, [`${dir}/manifest.json`]: JSON.stringify(manifest) });
+  const freeze = (route, triggers, name = 'x') => ({
+    file: `${PAGE}/${name}.html`,
+    spec: PAGE,
+    test: 't',
+    name,
+    route,
+    records: [],
+    triggers,
+  });
+  const fired = (interaction, outcome, route, freezeFile = null) => ({
+    spec: PAGE,
+    test: 't',
+    route,
+    interaction,
+    outcome,
+    kind: 'stay',
+    freeze: freezeFile,
+  });
+  const CREATE = 'projects/:slug/work/create';
+  const declarations = {
+    'tsconfig.json': DECLARATIONS['tsconfig.json'],
+    [WORK_CREATE]: DECLARATIONS[WORK_CREATE],
+    [PROJECTS_LAYOUT]: DECLARATIONS[PROJECTS_LAYOUT],
+    [MENU]: DECLARATIONS[MENU],
+  };
+
+  it('names an unreached outcome, a stay without a freeze, a trigger no screenshot shows, and an unreadable call', () => {
+    const root = withManifest(
+      { ...declarations, [BROKEN]: DECLARATIONS[BROKEN] },
+      {
+        freezes: [
+          // On another route: does not show the page's trigger, but the layout's subtree has it.
+          freeze('projects/:slug', ['create-work-item:created', 'project-nav:home']),
+          freeze(null, ['menu:open'], 'menu'),
+        ],
+        outcomes: {
+          fired: [
+            // On its page, but no shot after it.
+            fired('create-work-item', 'refused', CREATE),
+            // In the layout's subtree, anywhere for the app-wide menu.
+            fired('project-nav', 'home', 'projects/:slug'),
+            fired('menu', 'open', null, `${PAGE}/menu.html`),
+            // On another page: does not reach the page's created.
+            fired('create-work-item', 'created', 'projects/:slug'),
+          ],
+        },
+      },
+    );
+    const { code, err } = check(root);
+    assert.equal(code, 0, 'report-only');
+    const gaps = err.split('\n');
+    assert.match(
+      gaps[0],
+      /: 11 outcome gap\(s\), report-only \(they fail the check with --enforce-outcomes\):$/,
+    );
+    assert.deepEqual(gaps.slice(1), [
+      '  b:ok (broken): no browser test reaches it.',
+      '  b:ok: no screenshot of broken shows its trigger. Add a screenshot test where it is visible, with another provider state if needed (an open menu, a loaded list).',
+      '  create-work-item:created (projects/:slug/work/create): no browser test reaches it.',
+      '  create-work-item:created: no screenshot of projects/:slug/work/create shows its trigger. Add a screenshot test where it is visible, with another provider state if needed (an open menu, a loaded list).',
+      '  create-work-item:refused (projects/:slug/work/create): a stay needs a screenshot after it is reached.',
+      '  create-work-item:refused: no screenshot of projects/:slug/work/create shows its trigger. Add a screenshot test where it is visible, with another provider state if needed (an open menu, a loaded list).',
+      `  ${BROKEN}:9: an outcomes() call that cannot be read statically (its interaction is not a string literal).`,
+      `  ${BROKEN}:11: an outcomes() call that cannot be read statically (a spread).`,
+      `  ${BROKEN}:12: an outcomes() call that cannot be read statically (a computed key).`,
+      `  ${BROKEN}:13: an outcomes() call that cannot be read statically (the entry c is not an exit() or stay() call).`,
+      `  ${BROKEN}:14: an outcomes() call that cannot be read statically (the exit d is not given a string literal).`,
+    ]);
+  });
+
+  it('checks a layout once for its subtree and an app-wide outcome anywhere', () => {
+    const root = withManifest(declarations, {
+      freezes: [freeze('projects', ['project-nav:home']), freeze(null, ['menu:open'], 'menu')],
+      outcomes: {
+        fired: [fired('project-nav', 'home', 'projects'), fired('menu', 'open', null, 'm.html')],
+      },
+    });
+    const { err } = check(root);
+    assert.doesNotMatch(err, /project-nav|menu:open/);
+    // Outside the layout's subtree, neither fire nor shot counts for it.
+    const elsewhere = withManifest(declarations, {
+      freezes: [freeze('teams', ['project-nav:home'])],
+      outcomes: { fired: [fired('project-nav', 'home', 'teams')] },
+    });
+    const gaps = check(elsewhere).err;
+    assert.match(gaps, /project-nav:home \(projects and below\): no browser test reaches it\./);
+    assert.match(
+      gaps,
+      /project-nav:home: no screenshot of projects or a route below it shows its trigger\./,
+    );
+    assert.match(gaps, /menu:open \(app-wide\): no browser test reaches it\./);
+    assert.match(gaps, /menu:open: no screenshot shows its trigger\./);
+    // Checked once, not once per page.
+    assert.equal(gaps.match(/project-nav:home \(/g).length, 1);
+  });
+
+  it('exits 1 on an outcome gap with --enforce-outcomes, and 0 when there is none', () => {
+    const root = withManifest(
+      { [MENU]: DECLARATIONS[MENU] },
+      { freezes: [], outcomes: { fired: [] } },
+    );
+    const enforced = check(root, ['--enforce-outcomes']);
+    assert.equal(enforced.code, 1);
+    assert.match(
+      enforced.err,
+      /: 2 outcome gap\(s\):\n  menu:open \(app-wide\): no browser test reaches it\./,
+    );
+    assert.doesNotMatch(enforced.err, /report-only/);
+    // An update run lists them and passes.
+    const update = check(root, ['--enforce-outcomes'], { UPDATE_SNAPSHOT: 'all' });
+    assert.equal(update.code, 0);
+    assert.match(update.out, /2 outcome gap\(s\):[\s\S]*This is an update run/);
+
+    const covered = withManifest(
+      { [MENU]: DECLARATIONS[MENU] },
+      {
+        freezes: [freeze(null, ['menu:open'])],
+        outcomes: { fired: [fired('menu', 'open', null, `${PAGE}/x.html`)] },
+      },
+    );
+    const passed = check(covered, ['--enforce-outcomes']);
+    assert.equal(passed.code, 0);
+    assert.equal(passed.err, '');
+    assert.match(passed.out, /every declared outcome \(1\) is reached by a test/);
+  });
+
+  it('reports nothing for an app without declarations, and says when the manifest is missing', () => {
+    const none = app({ 'src/app/app.ts': 'export const x = 1;\n' });
+    const quiet = check(none, ['--enforce-outcomes']);
+    assert.equal(quiet.code, 0);
+    assert.equal(quiet.err, '');
+    assert.doesNotMatch(quiet.out, /outcome/);
+
+    const missing = app({ [MENU]: DECLARATIONS[MENU] });
+    const { code, err } = check(missing, ['--enforce-outcomes']);
+    assert.equal(code, 1);
+    assert.match(err, /no freeze manifest at src\/testing\/browser\/freezes\/manifest\.json/);
+  });
+
+  it('takes --freezes and --routes', () => {
+    const root = withManifest(
+      { 'src/app/pages/projects/projects.page.ts': DECLARATIONS[MENU] },
+      {
+        freezes: [freeze('projects', ['menu:open'])],
+        outcomes: { fired: [fired('menu', 'open', 'projects', 'x.html')] },
+      },
+      'out/freezes',
+    );
+    assert.equal(
+      check(root, ['--enforce-outcomes', '--freezes', 'out/freezes', '--routes', 'src/app/pages'])
+        .code,
+      0,
+    );
+    // Without --routes the file is app-wide, which these fires also satisfy; without --freezes no manifest.
+    assert.equal(check(root, ['--enforce-outcomes', '--freezes', 'out/freezes']).code, 0);
+    assert.equal(check(root, ['--enforce-outcomes']).code, 1);
   });
 });
