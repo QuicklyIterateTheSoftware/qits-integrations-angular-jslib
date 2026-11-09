@@ -282,8 +282,14 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   `routeTables`), builds its text from the route tables (`export type RoutePath` and the
   `declare module '@qits/angular' { interface QitsApp { routePath: RoutePath } }` augmentation),
   reports `stale` when it differs, and its fix rewrites the whole file, so
-  `eslint --fix src/app/route-paths.ts` regenerates it. A route table with no such file reports
-  `missing`. It shares the route walk with `route-matches-directory` (`project.mjs`).
+  `eslint --fix src/app/route-paths.ts` regenerates it. The file is opt-in: a missing one is not
+  reported anywhere (qits-2010) — see the rule below.
+  It shares the route walk with `route-matches-directory` (`project.mjs`).
+  **A rule added to `configs.recommended` must pass on a consumer that has not adopted it yet**: it
+  is `error` on every consumer's whole codebase the moment the library bumps, so it may only report
+  on something a consumer opts into by a file existing (as `route-paths` now does) or something
+  `eslint --fix` can clear by itself — never on a bare absence with no fix, which turns every
+  unadopted consumer red with an error no automation can clear (qits-2010).
 
 - **`@qits/angular/screenshots`** and the **`qits-angular`** command
   (`projects/qits-integrations-angular/screenshots/`, `bin/`; epic qits-112): plain ESM, no build,

@@ -3,7 +3,7 @@ import { after, describe, it } from 'node:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { strict as assert } from 'node:assert';
-import { Linter, RuleTester } from 'eslint';
+import { ESLint, Linter, RuleTester } from 'eslint';
 import tseslint from 'typescript-eslint';
 import { format } from 'prettier';
 import qits from '../index.mjs';
@@ -1078,10 +1078,12 @@ tester.run('route-paths', rules['route-paths'], {
     },
     // The app has the file: its route tables report nothing.
     { filename: inPaths('src/app/app.routes.ts'), code: 'export const routes = [];' },
-    // Only the first route table reports a missing file.
+    // Route tables are never visited; only the generated file is.
     { filename: inMissing('src/app/routes/b/b.routes.ts'), code: 'export default [];' },
     // Neither the generated file nor a route table.
     { filename: inMissing('src/app/core/menu.ts'), code: 'export const x = 1;' },
+    // The app has not opted in: route-paths.ts does not exist, so nothing is reported.
+    { filename: inMissing('src/app/app.routes.ts'), code: 'export const routes = [];' },
   ],
   invalid: [
     // A route was added to the tables.
@@ -1119,12 +1121,25 @@ tester.run('route-paths', rules['route-paths'], {
       output: CURRENT,
       errors: [{ messageId: 'stale' }],
     },
-    {
-      filename: inMissing('src/app/app.routes.ts'),
-      code: 'export const routes = [];',
-      errors: [{ messageId: 'missing', data: { file: 'src/app/route-paths.ts' } }],
-    },
   ],
+});
+
+describe('route-paths on an app that has not opted in', () => {
+  it('reports nothing through a real ESLint run on recommended', async () => {
+    const eslint = new ESLint({
+      cwd: inMissing(''),
+      overrideConfigFile: true,
+      overrideConfig: [
+        {
+          files: ['**/*.ts'],
+          languageOptions: { parser: tseslint.parser },
+          ...qits.configs.recommended[0],
+        },
+      ],
+    });
+    const [result] = await eslint.lintFiles(['src/app/app.routes.ts']);
+    assert.ok(!result.messages.some((m) => m.ruleId === 'qits/route-paths'), result.messages);
+  });
 });
 
 describe('route-paths generated file', () => {

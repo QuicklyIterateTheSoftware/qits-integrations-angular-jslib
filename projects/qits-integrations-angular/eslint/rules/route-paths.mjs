@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
   DEFAULT_ROUTE_TABLES,
@@ -158,9 +158,9 @@ function describe(paths) {
  * listed for every route that renders something (`component`, `loadComponent`, `children`,
  * `loadChildren`), joined from the top of its table; a table under the routes directory is
  * mounted at its own directory. `''` is always listed; `**`, `redirectTo` routes and routes whose
- * path chain is not literal are not. On the generated file the rule reports `stale` when its text
- * differs, and `--fix` rewrites it; on the first route table it reports `missing` when the file
- * does not exist.
+ * path chain is not literal are not. The file is opt-in: create it (empty is enough) and run
+ * `eslint --fix <file>` to generate it. On the generated file the rule reports `stale` when its
+ * text differs, and `--fix` rewrites it; a missing file is not reported anywhere.
  */
 export default {
   meta: {
@@ -179,8 +179,6 @@ export default {
     messages: {
       stale:
         "'{{file}}' is out of date with the route tables (added: {{added}}; removed: {{removed}}). Regenerate it with `eslint --fix {{file}}`.",
-      missing:
-        "The app has route tables but no '{{file}}', the RoutePath type generated from them. Create it with `touch {{file}} && eslint --fix {{file}}`.",
       unparsable: "Route table '{{table}}' could not be parsed to generate '{{file}}': {{error}}",
     },
   },
@@ -188,24 +186,9 @@ export default {
     const options = context.options[0] ?? {};
     const file = (options.file ?? DEFAULT_ROUTE_PATHS_FILE).replace(/^\.\//, '');
     const layout = routeLayout(context);
-    const isGenerated = layout.file === file;
-    if (!isGenerated && !layout.isRouteTable) return {};
+    if (layout.file !== file) return {};
     const root = nearestPackage(layout.absolute)?.dir ?? context.cwd;
     const tables = routeTables(root, options.routeTables ?? DEFAULT_ROUTE_TABLES);
-
-    if (!isGenerated) {
-      return {
-        Program(node) {
-          if (tables[0] !== layout.file || existsSync(resolve(root, file))) return;
-          context.report({
-            node,
-            loc: { line: 1, column: 0 },
-            messageId: 'missing',
-            data: { file },
-          });
-        },
-      };
-    }
 
     return {
       Program(node) {

@@ -39,7 +39,8 @@ providers: [provideQitsIntegration(withFeatureCapture())];
 
 Where an interaction leads is declared with `outcomes('<interaction>', { done: exit('projects/:slug'),
 refused: stay() })`, linked with the `QitsExit` directive and marked with `QitsTriggers`; the paths
-are checked against the `RoutePath` type `qits/route-paths` generates.
+are checked against the `RoutePath` type `qits/route-paths` generates. That file is opt-in: it is
+only checked once the app creates it.
 
 More entry points, all documented in the repository README:
 
