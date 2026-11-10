@@ -129,12 +129,16 @@ sign-in, `core/auth/dev-*.ts`, with the `dev` naming dropped):
 Outcomes (`src/lib/outcomes/`, ticket qits-2001, epic qits-2000): where an interaction leads,
 declared once and checked by the compiler.
 
-- `outcomes.ts` — `outcomes(interaction, { key: exit('path/:p') | stay() })` gives one frozen entry
-  per key (`interaction`, `outcome`, `kind`, `to`). It `inject`s the `Router`, so it runs in an
-  injection context (a field initializer). An exit's `url(params)` is **absolute** (`/` + the
+- `outcomes.ts` — `outcomes(interaction, { key: exit('path/:p') | stay() | returnTo() | external('name') }, { triggered? })`
+  gives one frozen entry per key (`interaction`, `outcome`, `kind`, `to`). It `inject`s the `Router` and the `DOCUMENT`, so it runs in an injection context
+  (a field initializer). An exit's `url(params)` is **absolute** (`/` + the
   pattern with each `:param` `encodeURIComponent`ed; a missing one throws), so a `routerLink` built
   from it never resolves against the current route; `go(params, behaviour?)` records, then returns
-  `navigateByUrl`'s Promise. A stay's `reach()` only records. Typing seam: the empty `QitsApp`
+  `navigateByUrl`'s Promise. A stay's `reach()` only records. A return's `go(url, behaviour?)`
+  (ticket qits-2044) follows only an app URL (one leading `/`, tabs and line breaks dropped first as
+  a browser does; else `/`); an external's `leave(href)` records, then `location.assign`s. The third
+  argument does nothing at run time: the screenshot reader reads `triggered: false` (an interaction
+  no element triggers) from the source. Typing seam: the empty `QitsApp`
   interface, which an app augments with `routePath` (the generated `route-paths.ts`, see
   `qits/route-paths`) and `interaction`; `RoutePath` / `InteractionName` fall back to `string`.
   `PathParams<P>` is a template-literal parse in the `consume.ts` manner. A path without params
@@ -152,7 +156,19 @@ declared once and checked by the compiler.
 - Type tests: `outcomes.spec.ts` augments `QitsApp` (`declare module '@qits/angular'`) and uses
   `@ts-expect-error`; the vitest builder type-checks, so an unused directive fails the run. The
   augmentation is global to the spec program; specs are excluded from the library build, so it
-  never ships. The other outcomes specs keep to its names.
+  never ships. The other outcomes specs keep to its names, and so do the library's own declarations
+  (`sign-in`, `sign-in-failed`, `session-guard` are in its `interaction` union), because the
+  sign-in sources are compiled into the same spec program.
+- The library declares its own outcomes (ticket qits-2044): `QitsAuthCallbackPage` (`sign-in`:
+  `succeeded` returnTo, `failed` stay, `triggered: false`; `sign-in-failed:restarted`, the Start
+  again `QitsExit` to `''`) and `QitsSession` (`session-guard:signedOut`, external `idp`,
+  `triggered: false`; `ensure()` takes `QitsTokens.authorizeUrl()`, the first half of `login()`, and
+  leaves through it). `scripts/library-outcomes.mjs` (`pnpm outcomes:library`) reads them with the
+  screenshot reader's `readOutcomes()` into `screenshots/outcomes.json`, which ships (the screenshots
+  assets glob takes `json`; `check-exports` checks it); its `SCOPES` table gives each declaring
+  file's `route` / `global` and `provides` (the exports whose import brings the entries into an
+  app), and a declaring file missing there fails the run. A screenshots test fails when the
+  committed file is stale.
 
 The library is **zoneless-first**: no `zone.js`, no `@opentelemetry/context-zone` — the default
 stack context manager is correct. The `instrumentation-user-interaction` `zone.js` peer is
@@ -289,8 +305,11 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   It shares the route walk with `route-matches-directory` (`project.mjs`).
   `navigation-through-outcomes` (ticket qits-2002, epic qits-2000) reports `Router.navigate` /
   `navigateByUrl` calls and raw `routerLink`s in templates under `include` (default `src/app/**`)
-  minus `exclude` (default `src/app/api/**`); specs and any file whose package is `@qits/angular`
-  (`QitsExit` and `go()` navigate by design) are skipped. No type information: the `Router` is
+  minus `exclude` (default `src/app/api/**`); specs are skipped. The library holds itself to it
+  (ticket qits-2044): its own `eslint.config.js` `require()`s `./eslint/index.mjs` (ESM without
+  top-level await) and sets the rule with `include: ['src/lib/**']`,
+  `exclude: ['src/lib/outcomes/**']` — only the outcome API, whose `QitsExit` and `go()` navigate by design, is
+  left out. No type information: the `Router` is
   resolved syntactically from its `@angular/router` import (`inject(R)`, `this.<field>` set to
   `inject(R)` or typed `R`, parameter properties, typed or `inject(R)` locals). Templates are parsed
   with `parseTemplate` from `@angular/compiler`, a **required peer** for that (every Angular app
@@ -355,15 +374,19 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   `null`), its `route` nulled outside `routeSpecs` like a freeze's; `declared` is read afresh.
   `outcomes.mjs` is the reader: the app's own `typescript` (an **optional peer**, resolved with
   `createRequire` from the app root, loaded only when a file under `src/app` mentions
-  `@qits/angular` and `outcomes`; specs skipped), a call counts when its callee is the `outcomes`
-  import from `@qits/angular` (renamed, or via a namespace), each key one
-  `{route, interaction, outcome, kind, to, global, file}`. Scope by the file's directory under the
+  `@qits/angular` and `outcomes` or a `provides` name; specs skipped), a call counts when its callee
+  is the `outcomes` import from `@qits/angular` (renamed, or via a namespace), each key one
+  `{route, interaction, outcome, kind, to, global, triggered, file}`;
+  `readOutcomes({ ts, files, from })` is that reading over any file list. The library's shipped `outcomes.json` (resolved next
+  to `outcomes.mjs`, so the installed version counts) joins when a non-spec file under `src/app`
+  value-imports one of an entry's `provides` from `@qits/angular` (by name or `ns.x`), without
+  `provides`. Scope by the file's directory under the
   routes directory (`routes`, as the lint rules'; `--routes` on the command): a non-layout file is
   the route its directory names (inverse of `segmentDirs`), a `*.layout.ts` its subtree
   (`global`), a `$layout` layout or any file outside the routes directory app-wide (`route: null`,
   `global`); anything it cannot read is an `unreadable` gap by file:line. `--check` names the gaps
   (`outcomeGaps()`): unreached, a reached stay with no `freeze`, no freeze in scope listing the
-  trigger, unreadable. They are **report-only** (stderr, exit unchanged) unless
+  trigger (not for `triggered: false`), unreadable. They are **report-only** (stderr, exit unchanged) unless
   `--enforce-outcomes`; an app with no declaration prints nothing; an update run only lists them.
   `--freezes <dir>` names the manifest's directory. The root page's route `''` also takes `null`,
   since `currentRoutePattern()` reports the empty route as `null`.
