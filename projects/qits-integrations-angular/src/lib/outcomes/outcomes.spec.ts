@@ -1,20 +1,23 @@
-import { Component } from '@angular/core';
+import { Component, DOCUMENT, Injector, runInInjectionContext } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter, Router } from '@angular/router';
 import type { InteractionName, RoutePath } from '@qits/angular';
 import { outcomeMark } from './outcome-mark';
 import { ɵsetOutcomeRecorder, type OutcomeRecord } from './outcome-recorder';
-import { exit, outcomes, stay, type PathParams } from './outcomes';
+import { exit, external, outcomes, returnTo, stay, type PathParams } from './outcomes';
 
 /*
  * The app's side of the typing seam, as a generated `route-paths.ts` and an app's interactions
  * write it. A module augmentation is global to the program, so every spec compiled with this one
  * sees these names (the outcomes browser specs keep to them); the library build excludes specs.
+ * The library's own interactions (`sign-in`, `sign-in-failed`, `session-guard`) are in the list
+ * because its sign-in sources are compiled into the same program.
  */
 declare module '@qits/angular' {
   interface QitsApp {
     routePath: '' | 'projects' | 'projects/:slug' | 'projects/:slug/work/detail/:id';
-    interaction: 'create-work-item' | 'open-project';
+    interaction:
+      'create-work-item' | 'open-project' | 'sign-in' | 'sign-in-failed' | 'session-guard';
   }
 }
 
@@ -139,6 +142,118 @@ describe('outcomes', () => {
   });
 });
 
+describe('returnTo and external', () => {
+  let records: OutcomeRecord[];
+  const assign = vi.fn();
+
+  beforeEach(() => {
+    records = [];
+    assign.mockReset();
+    ɵsetOutcomeRecorder((record) => records.push(record));
+  });
+
+  afterEach(() => ɵsetOutcomeRecorder(null));
+
+  /** The declarations, with a `DOCUMENT` whose location only notes where it was sent. */
+  function declare() {
+    setUp();
+    const injector = Injector.create({
+      providers: [{ provide: DOCUMENT, useValue: { location: { assign } } }],
+      parent: TestBed.inject(Injector),
+    });
+    return runInInjectionContext(injector, () =>
+      outcomes(
+        'open-project',
+        { back: returnTo(), idp: external('idp'), refused: stay() },
+        { triggered: false },
+      ),
+    );
+  }
+
+  it('declare frozen specs', () => {
+    expect(returnTo()).toEqual({ kind: 'returnTo' });
+    expect(Object.isFrozen(returnTo())).toBe(true);
+    expect(external('idp')).toEqual({ kind: 'external', to: 'idp' });
+    expect(Object.isFrozen(external('idp'))).toBe(true);
+  });
+
+  it('give entries that name themselves', () => {
+    const open = declare();
+    expect(Object.isFrozen(open.back)).toBe(true);
+    expect(open.back).toMatchObject({
+      interaction: 'open-project',
+      outcome: 'back',
+      kind: 'returnTo',
+      to: null,
+    });
+    expect(open.idp).toMatchObject({
+      interaction: 'open-project',
+      outcome: 'idp',
+      kind: 'external',
+      to: 'idp',
+    });
+  });
+
+  it('returnTo go records, then navigates to the URL it is handed', async () => {
+    const open = declare();
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigateByUrl');
+    await expect(open.back.go('/projects/demo?tab=work', { replaceUrl: true })).resolves.toBe(true);
+    expect(navigate).toHaveBeenCalledWith('/projects/demo?tab=work', { replaceUrl: true });
+    expect(records).toEqual([
+      {
+        interaction: 'open-project',
+        outcome: 'back',
+        kind: 'returnTo',
+        to: null,
+        url: '/projects/demo?tab=work',
+      },
+    ]);
+  });
+
+  it.each([
+    'https://elsewhere.example/',
+    '//elsewhere.example/x',
+    '/\\elsewhere.example/x',
+    '/\t/elsewhere.example/x',
+    'javascript:alert(1)',
+    'projects',
+    '',
+  ])('returnTo go takes %j for the root', async (url) => {
+    const open = declare();
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigateByUrl');
+    await open.back.go(url);
+    expect(navigate).toHaveBeenCalledWith('/', undefined);
+    expect(records.map((record) => record.url)).toEqual(['/']);
+  });
+
+  it('external leave records, then leaves for the href', () => {
+    const open = declare();
+    open.idp.leave('https://idp.example/idp/authorize?state=s');
+    expect(assign).toHaveBeenCalledExactlyOnceWith('https://idp.example/idp/authorize?state=s');
+    expect(records).toEqual([
+      {
+        interaction: 'open-project',
+        outcome: 'idp',
+        kind: 'external',
+        to: 'idp',
+        url: 'https://idp.example/idp/authorize?state=s',
+      },
+    ]);
+  });
+
+  it('type their entries', () => {
+    const open = declare();
+    expectTypeOf(open.idp.to).toEqualTypeOf<'idp'>();
+    expectTypeOf(open.back.to).toEqualTypeOf<null>();
+    void (() => {
+      // @ts-expect-error -- a return takes the URL to go back to
+      void open.back.go();
+      // @ts-expect-error -- an external is left, not gone to
+      void open.idp.go('/');
+    });
+  });
+});
+
 describe('outcomeMark', () => {
   it('joins <interaction>:<outcome> with spaces, in the order given', () => {
     const create = setUp();
@@ -154,7 +269,9 @@ describe('the typing seam', () => {
     expectTypeOf<RoutePath>().toEqualTypeOf<
       '' | 'projects' | 'projects/:slug' | 'projects/:slug/work/detail/:id'
     >();
-    expectTypeOf<InteractionName>().toEqualTypeOf<'create-work-item' | 'open-project'>();
+    expectTypeOf<InteractionName>().toEqualTypeOf<
+      'create-work-item' | 'open-project' | 'sign-in' | 'sign-in-failed' | 'session-guard'
+    >();
   });
 
   it('parses the params of a path', () => {

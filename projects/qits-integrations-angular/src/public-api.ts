@@ -59,16 +59,22 @@ export type {
   SseMessage,
 } from './lib/sign-in/fetch-event-source';
 export { base64Url, randomToken, s256Challenge } from './lib/sign-in/pkce';
-export { exit, outcomes, stay } from './lib/outcomes/outcomes';
+export { exit, external, outcomes, returnTo, stay } from './lib/outcomes/outcomes';
 export type {
   ExitOutcome,
   ExitSpec,
+  ExternalOutcome,
+  ExternalSpec,
   GoArgs,
   InteractionName,
   Outcome,
   Outcomes,
+  OutcomeSpec,
+  OutcomesOptions,
   PathParams,
   QitsApp,
+  ReturnToOutcome,
+  ReturnToSpec,
   RoutePath,
   StayOutcome,
   StaySpec,

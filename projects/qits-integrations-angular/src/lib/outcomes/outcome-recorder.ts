@@ -5,14 +5,23 @@
  * by package name, so it reaches this very module instance.
  */
 
-/** One outcome an interaction reached: what `go()`, `reach()` or a handled `QitsExit` click note. */
+/**
+ * One outcome an interaction reached: what `go()`, `reach()`, `leave()` or a handled `QitsExit` click
+ * note.
+ */
 export interface OutcomeRecord {
   readonly interaction: string;
   readonly outcome: string;
-  readonly kind: 'exit' | 'stay';
-  /** The exit's path pattern, such as `projects/:slug`; `null` for a stay. */
+  readonly kind: 'exit' | 'stay' | 'returnTo' | 'external';
+  /**
+   * The exit's path pattern, such as `projects/:slug`; the external's site name (`idp`); `null` for
+   * a stay or a return.
+   */
   readonly to: string | null;
-  /** The exit's interpolated URL, as `url()` gives it (`/projects/demo`); absent for a stay. */
+  /**
+   * Where it led: the exit's interpolated URL, as `url()` gives it (`/projects/demo`), the URL a
+   * return navigated to, or the `href` an external left for; absent for a stay.
+   */
   readonly url?: string;
 }
 
