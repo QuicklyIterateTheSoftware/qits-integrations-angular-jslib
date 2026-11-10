@@ -4,7 +4,15 @@ import { provideRouter, Router } from '@angular/router';
 import type { InteractionName, RoutePath } from '@qits/angular';
 import { outcomeMark } from './outcome-mark';
 import { ɵsetOutcomeRecorder, type OutcomeRecord } from './outcome-recorder';
-import { exit, external, outcomes, returnTo, stay, type PathParams } from './outcomes';
+import {
+  exit,
+  external,
+  outcomes,
+  QITS_LEAVE_APP,
+  returnTo,
+  stay,
+  type PathParams,
+} from './outcomes';
 
 /*
  * The app's side of the typing seam, as a generated `route-paths.ts` and an app's interactions
@@ -154,11 +162,11 @@ describe('returnTo and external', () => {
 
   afterEach(() => ɵsetOutcomeRecorder(null));
 
-  /** The declarations, with a `DOCUMENT` whose location only notes where it was sent. */
+  /** The declarations, leaving the app through `assign` only. */
   function declare() {
     setUp();
     const injector = Injector.create({
-      providers: [{ provide: DOCUMENT, useValue: { location: { assign } } }],
+      providers: [{ provide: QITS_LEAVE_APP, useValue: assign }],
       parent: TestBed.inject(Injector),
     });
     return runInInjectionContext(injector, () =>
@@ -237,6 +245,36 @@ describe('returnTo and external', () => {
         kind: 'external',
         to: 'idp',
         url: 'https://idp.example/idp/authorize?state=s',
+      },
+    ]);
+  });
+
+  it('QITS_LEAVE_APP assigns the DOCUMENT location by default', () => {
+    TestBed.configureTestingModule({
+      providers: [{ provide: DOCUMENT, useValue: { location: { assign } } }],
+    });
+    TestBed.inject(QITS_LEAVE_APP)('https://idp.example/');
+    expect(assign).toHaveBeenCalledExactlyOnceWith('https://idp.example/');
+  });
+
+  it('external leave goes through a provided QITS_LEAVE_APP, and still records', () => {
+    const leave = vi.fn();
+    TestBed.configureTestingModule({
+      providers: [provideRouter([]), { provide: QITS_LEAVE_APP, useValue: leave }],
+    });
+    const open = TestBed.runInInjectionContext(() =>
+      outcomes('open-project', { idp: external('idp') }),
+    );
+    open.idp.leave('https://idp.example/idp/authorize');
+    expect(leave).toHaveBeenCalledExactlyOnceWith('https://idp.example/idp/authorize');
+    expect(assign).not.toHaveBeenCalled();
+    expect(records).toEqual([
+      {
+        interaction: 'open-project',
+        outcome: 'idp',
+        kind: 'external',
+        to: 'idp',
+        url: 'https://idp.example/idp/authorize',
       },
     ]);
   });

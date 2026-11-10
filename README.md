@@ -350,7 +350,11 @@ export class WorkCreatePage {
   return path: `go(url, behaviour?)` records it and returns `router.navigateByUrl`. Only a URL of
   the app is followed (one leading `/`, not `//host` or `/\host`); anything else goes to `/`.
 - **An external** (`external('idp')`) leaves the app for another site, named, not routed:
-  `leave(href)` records it with the `href`, then `location.assign(href)`.
+  `leave(href)` records it with the `href`, then calls `QITS_LEAVE_APP` (an injection token,
+  `providedIn: 'root'`, by default `DOCUMENT.location.assign(href)`). A routed browser test that
+  reaches an external (the session guard's `session-guard:signedOut`) provides its own, such as
+  `{ provide: QITS_LEAVE_APP, useValue: vi.fn() }`, so the test page is not navigated away;
+  overriding the `DOCUMENT` instead breaks rendering.
 - **Untriggered interactions.** `outcomes(interaction, declared, { triggered: false })` says no
   element triggers it (a guard, a callback page), so no screenshot is asked to show its trigger.
   The option is read from the source only, and it must be an object literal there.

@@ -130,13 +130,13 @@ Outcomes (`src/lib/outcomes/`, ticket qits-2001, epic qits-2000): where an inter
 declared once and checked by the compiler.
 
 - `outcomes.ts` — `outcomes(interaction, { key: exit('path/:p') | stay() | returnTo() | external('name') }, { triggered? })`
-  gives one frozen entry per key (`interaction`, `outcome`, `kind`, `to`). It `inject`s the `Router` and the `DOCUMENT`, so it runs in an injection context
+  gives one frozen entry per key (`interaction`, `outcome`, `kind`, `to`). It `inject`s the `Router` and `QITS_LEAVE_APP`, so it runs in an injection context
   (a field initializer). An exit's `url(params)` is **absolute** (`/` + the
   pattern with each `:param` `encodeURIComponent`ed; a missing one throws), so a `routerLink` built
   from it never resolves against the current route; `go(params, behaviour?)` records, then returns
   `navigateByUrl`'s Promise. A stay's `reach()` only records. A return's `go(url, behaviour?)`
   (ticket qits-2044) follows only an app URL (one leading `/`, tabs and line breaks dropped first as
-  a browser does; else `/`); an external's `leave(href)` records, then `location.assign`s. The third
+  a browser does; else `/`); an external's `leave(href)` records, then calls `QITS_LEAVE_APP` (root token, default `DOCUMENT.location.assign`; a routed browser test provides a spy, since overriding the `DOCUMENT` breaks rendering). The third
   argument does nothing at run time: the screenshot reader reads `triggered: false` (an interaction
   no element triggers) from the source. Typing seam: the empty `QitsApp`
   interface, which an app augments with `routePath` (the generated `route-paths.ts`, see

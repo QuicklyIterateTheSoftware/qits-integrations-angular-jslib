@@ -24,7 +24,7 @@
  * `RoutePath` union `qits/route-paths` generates from its route tables, `interaction` with its own
  * interaction slugs. An app that augments neither gets `string` for both.
  */
-import { DOCUMENT, inject } from '@angular/core';
+import { DOCUMENT, inject, InjectionToken } from '@angular/core';
 import { Router, type NavigationBehaviorOptions } from '@angular/router';
 import { recordOutcome } from './outcome-recorder';
 
@@ -149,7 +149,7 @@ export interface ExternalOutcome<W extends string = string> {
   readonly kind: 'external';
   /** The site's name as declared (`'idp'`), not a URL. */
   readonly to: W;
-  /** Records the outcome, then leaves for `href` (`location.assign`). */
+  /** Records the outcome, then leaves for `href` through {@link QITS_LEAVE_APP} (`location.assign`). */
   leave(href: string): void;
 }
 
@@ -186,6 +186,20 @@ export function stay(): StaySpec {
   return Object.freeze({ kind: 'stay' });
 }
 
+/**
+ * How an external outcome's `leave(href)` leaves the app, after it recorded: by default
+ * `DOCUMENT.location.assign(href)`. A routed browser test that reaches an external outcome provides
+ * its own (a spy), because the real one would navigate the test page away, and overriding the
+ * `DOCUMENT` itself breaks rendering.
+ */
+export const QITS_LEAVE_APP = new InjectionToken<(href: string) => void>('QITS_LEAVE_APP', {
+  providedIn: 'root',
+  factory: () => {
+    const document = inject(DOCUMENT);
+    return (href) => document.location.assign(href);
+  },
+});
+
 /** Declares that the interaction goes back to a URL it is handed, such as a sign-in's return path. */
 export function returnTo(): ReturnToSpec {
   return Object.freeze({ kind: 'returnTo' });
@@ -202,7 +216,7 @@ export function external<const W extends string>(what: W): ExternalSpec<W> {
 /**
  * The outcomes of `interaction`, one frozen entry per declared key. Runs in an injection context
  * (a field initializer), because the exits navigate with the `Router` and the externals leave
- * through the `DOCUMENT`'s location. `options` is read from the source by the screenshot check
+ * through {@link QITS_LEAVE_APP}. `options` is read from the source by the screenshot check
  * and changes nothing here.
  */
 export function outcomes<const O extends Record<string, OutcomeSpec>>(
@@ -211,7 +225,7 @@ export function outcomes<const O extends Record<string, OutcomeSpec>>(
   _options?: OutcomesOptions,
 ): Outcomes<O> {
   const router = inject(Router);
-  const document = inject(DOCUMENT);
+  const leaveApp = inject(QITS_LEAVE_APP);
   const entries: Record<string, Outcome> = {};
   for (const [outcome, spec] of Object.entries(declared) as [string, OutcomeSpec][]) {
     switch (spec.kind) {
@@ -222,7 +236,7 @@ export function outcomes<const O extends Record<string, OutcomeSpec>>(
         entries[outcome] = returnToEntry(router, interaction, outcome);
         break;
       case 'external':
-        entries[outcome] = externalEntry(document, interaction, outcome, spec.to);
+        entries[outcome] = externalEntry(leaveApp, interaction, outcome, spec.to);
         break;
       default:
         entries[outcome] = stayEntry(interaction, outcome);
@@ -283,7 +297,7 @@ function returnToEntry(
 }
 
 function externalEntry(
-  document: Document,
+  leaveApp: (href: string) => void,
   interaction: InteractionName,
   outcome: string,
   to: string,
@@ -295,7 +309,7 @@ function externalEntry(
     to,
     leave(href: string) {
       recordOutcome({ interaction, outcome, kind: 'external', to, url: href });
-      document.location.assign(href);
+      leaveApp(href);
     },
   });
 }
