@@ -84,13 +84,24 @@ export interface DeclaredOutcome {
   route: string | null;
   interaction: string;
   outcome: string;
-  kind: 'exit' | 'stay';
-  /** The exit's path pattern; `null` for a stay. */
+  kind: 'exit' | 'stay' | 'returnTo' | 'external';
+  /** The exit's path pattern, the external's site name; `null` for a stay or a return. */
   to: string | null;
   /** A layout's or an app-wide declaration: checked once, for its scope, not per page. */
   global: boolean;
-  /** The declaring file, relative to the root. */
+  /** `false` for an interaction no element triggers: no screenshot is asked to show it. */
+  triggered: boolean;
+  /**
+   * The declaring file, relative to the root; a library declaration's as
+   * `@qits/angular/src/lib/…`.
+   */
   file: string;
+}
+
+/** One of the library's own declarations, as `outcomes.json` ships it. */
+export interface LibraryOutcome extends DeclaredOutcome {
+  /** The exports whose import into an app brings the declaration in. */
+  provides: string[];
 }
 
 /** One outcome a browser test reached. */
@@ -101,19 +112,23 @@ export interface FiredOutcome {
   route: string | null;
   interaction: string;
   outcome: string;
-  kind: 'exit' | 'stay';
+  kind: 'exit' | 'stay' | 'returnTo' | 'external';
   /** The first freeze of the test whose shot came after it, or `null`. */
   freeze: string | null;
 }
 
 /**
  * Reads the app's `outcomes()` declarations with its own `typescript` (resolved from `root`; throws
- * naming the package when it is missing). `routes`: default `src/app/routes`.
+ * naming the package when it is missing). `routes`: default `src/app/routes`. The library's own
+ * declarations join them when the app imports an export that `provides` them.
  */
 export declare function declaredOutcomes(options: { root: string; routes?: string }): {
   declared: DeclaredOutcome[];
   unreadable: { file: string; line: number; why: string }[];
 };
+
+/** The library's own declarations, as this copy of the package ships them. */
+export declare function libraryOutcomes(): LibraryOutcome[];
 
 /** The outcome gaps `qits-angular screenshots --check` names, one message each. */
 export declare function outcomeGaps(input: {

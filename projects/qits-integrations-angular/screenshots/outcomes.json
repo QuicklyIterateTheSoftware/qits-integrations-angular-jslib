@@ -1,0 +1,46 @@
+[
+  {
+    "route": "auth/callback",
+    "interaction": "sign-in",
+    "outcome": "failed",
+    "kind": "stay",
+    "to": null,
+    "global": false,
+    "triggered": false,
+    "file": "@qits/angular/src/lib/sign-in/auth-callback.page.ts",
+    "provides": ["qitsAuthCallbackRoute", "provideQitsBearerSignIn"]
+  },
+  {
+    "route": "auth/callback",
+    "interaction": "sign-in",
+    "outcome": "succeeded",
+    "kind": "returnTo",
+    "to": null,
+    "global": false,
+    "triggered": false,
+    "file": "@qits/angular/src/lib/sign-in/auth-callback.page.ts",
+    "provides": ["qitsAuthCallbackRoute", "provideQitsBearerSignIn"]
+  },
+  {
+    "route": "auth/callback",
+    "interaction": "sign-in-failed",
+    "outcome": "restarted",
+    "kind": "exit",
+    "to": "",
+    "global": false,
+    "triggered": true,
+    "file": "@qits/angular/src/lib/sign-in/auth-callback.page.ts",
+    "provides": ["qitsAuthCallbackRoute", "provideQitsBearerSignIn"]
+  },
+  {
+    "route": null,
+    "interaction": "session-guard",
+    "outcome": "signedOut",
+    "kind": "external",
+    "to": "idp",
+    "global": true,
+    "triggered": false,
+    "file": "@qits/angular/src/lib/sign-in/qits-session.ts",
+    "provides": ["qitsSignedInGuard", "QitsSession"]
+  }
+]

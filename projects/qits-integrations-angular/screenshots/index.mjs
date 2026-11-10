@@ -17,5 +17,5 @@
 export { completeForFreezes, screenshotReferences } from './plugin.mjs';
 export { DEFAULT_FREEZE_DIRECTORY, DEFAULT_ROUTE_SPECS, freezeSlug } from './freezes.mjs';
 export { findOrphans, pruneOrphans } from './orphans.mjs';
-export { declaredOutcomes, outcomeGaps } from './outcomes.mjs';
+export { declaredOutcomes, libraryOutcomes, outcomeGaps } from './outcomes.mjs';
 export { DEFAULT_RECORD, readRecord } from './record.mjs';

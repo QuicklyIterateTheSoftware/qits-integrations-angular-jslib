@@ -3,6 +3,7 @@
 // real Vitest run is in vitest-run.test.mjs (pnpm test:browser, needs Chromium).
 import { after, describe, it } from 'node:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { strict as assert } from 'node:assert';
@@ -16,6 +17,12 @@ import {
   screenshotReferences,
 } from '../index.mjs';
 import { DEFAULT_RECORD, fileHash } from '../record.mjs';
+import { libraryOutcomes, outcomeGaps, readOutcomes } from '../outcomes.mjs';
+import {
+  LIBRARY_OUTCOMES,
+  REGENERATE,
+  libraryOutcomesText,
+} from '../../../../scripts/library-outcomes.mjs';
 
 mkdirSync('tmp', { recursive: true });
 const base = mkdtempSync(join(process.cwd(), 'tmp', 'screenshots-'));
@@ -706,6 +713,7 @@ describe('declaredOutcomes', () => {
         kind: 'stay',
         to: null,
         global: false,
+        triggered: true,
         file: ROOT_PAGE,
       },
       {
@@ -715,6 +723,7 @@ describe('declaredOutcomes', () => {
         kind: 'stay',
         to: null,
         global: false,
+        triggered: true,
         file: BROKEN,
       },
       {
@@ -724,6 +733,7 @@ describe('declaredOutcomes', () => {
         kind: 'exit',
         to: 'projects',
         global: true,
+        triggered: true,
         file: PROJECTS_LAYOUT,
       },
       {
@@ -733,6 +743,7 @@ describe('declaredOutcomes', () => {
         kind: 'exit',
         to: 'projects/:slug/work/detail/:id',
         global: false,
+        triggered: true,
         file: WORK_CREATE,
       },
       {
@@ -742,6 +753,7 @@ describe('declaredOutcomes', () => {
         kind: 'stay',
         to: null,
         global: false,
+        triggered: true,
         file: WORK_CREATE,
       },
       {
@@ -751,6 +763,7 @@ describe('declaredOutcomes', () => {
         kind: 'stay',
         to: null,
         global: true,
+        triggered: true,
         file: MENU,
       },
       {
@@ -760,6 +773,7 @@ describe('declaredOutcomes', () => {
         kind: 'stay',
         to: null,
         global: true,
+        triggered: true,
         file: SHELL,
       },
     ]);
@@ -767,7 +781,11 @@ describe('declaredOutcomes', () => {
       { file: BROKEN, line: 9, why: 'its interaction is not a string literal' },
       { file: BROKEN, line: 11, why: 'a spread' },
       { file: BROKEN, line: 12, why: 'a computed key' },
-      { file: BROKEN, line: 13, why: 'the entry c is not an exit() or stay() call' },
+      {
+        file: BROKEN,
+        line: 13,
+        why: 'the entry c is not an exit(), stay(), returnTo() or external() call',
+      },
       { file: BROKEN, line: 14, why: 'the exit d is not given a string literal' },
     ]);
   });
@@ -797,6 +815,210 @@ describe('declaredOutcomes', () => {
       () => declaredOutcomes({ root: outside }),
       /the package typescript does not resolve/,
     );
+  });
+});
+
+describe('declaredOutcomes, the other kinds and the triggered option', () => {
+  const KINDS_PAGE = 'src/app/routes/sign-in/sign-in.page.ts';
+
+  it('reads returnTo(), external() and { triggered }, and names what it cannot read', () => {
+    const root = app({
+      [KINDS_PAGE]: `import { exit, external, outcomes, returnTo, stay } from '@qits/angular';
+
+const site = 'idp';
+const options = { triggered: false };
+export class SignInPage {
+  readonly back = outcomes('back', { home: returnTo(), idp: external('idp') }, { triggered: false });
+  readonly link = outcomes('link', { open: exit('') }, { triggered: true });
+  readonly empty = outcomes('empty', { open: stay() }, {});
+  readonly a = outcomes('a', { x: stay() }, options);
+  readonly b = outcomes('b', { x: stay() }, { ...options });
+  readonly c = outcomes('c', { x: stay() }, { triggered: 0 });
+  readonly d = outcomes('d', { x: stay() }, { other: false });
+  readonly e = outcomes('e', { x: external(site) });
+}
+`,
+    });
+    const { declared, unreadable } = declaredOutcomes({ root });
+    const page = (interaction, outcome, kind, to, triggered) => ({
+      route: 'sign-in',
+      interaction,
+      outcome,
+      kind,
+      to,
+      global: false,
+      triggered,
+      file: KINDS_PAGE,
+    });
+    assert.deepEqual(declared, [
+      page('back', 'home', 'returnTo', null, false),
+      page('back', 'idp', 'external', 'idp', false),
+      page('empty', 'open', 'stay', null, true),
+      page('link', 'open', 'exit', '', true),
+    ]);
+    const why = 'its options are not an object literal of triggered: true or false';
+    assert.deepEqual(unreadable, [
+      { file: KINDS_PAGE, line: 9, why },
+      { file: KINDS_PAGE, line: 10, why },
+      { file: KINDS_PAGE, line: 11, why },
+      { file: KINDS_PAGE, line: 12, why },
+      { file: KINDS_PAGE, line: 13, why: 'the external x is not given a string literal' },
+    ]);
+  });
+
+  it('runs over any file list, with another module for the API', () => {
+    const ts = createRequire(import.meta.url)('typescript');
+    const read = readOutcomes({
+      ts,
+      files: [
+        {
+          file: 'src/lib/x.ts',
+          text: "import { outcomes, stay } from './api';\noutcomes('x', { y: stay() });\n",
+          scope: { route: 'x', global: false },
+        },
+        {
+          file: 'src/lib/z.ts',
+          text: "import { outcomes, stay } from '@qits/angular';\noutcomes('z', { y: stay() });\n",
+          scope: { route: null, global: true },
+        },
+      ],
+      from: (specifier) => specifier === './api',
+    });
+    assert.deepEqual(read, {
+      declared: [
+        {
+          route: 'x',
+          interaction: 'x',
+          outcome: 'y',
+          kind: 'stay',
+          to: null,
+          global: false,
+          triggered: true,
+          file: 'src/lib/x.ts',
+        },
+      ],
+      unreadable: [],
+    });
+  });
+});
+
+describe('the library’s own outcomes', () => {
+  const shipped = libraryOutcomes();
+  const strip = ({ provides: _provides, ...entry }) => entry;
+  const byInteraction = (...names) =>
+    shipped.filter((entry) => names.includes(entry.interaction)).map(strip);
+
+  it(`ships ${LIBRARY_OUTCOMES} as the library's source declares it now (else: ${REGENERATE})`, async () => {
+    const committed = readFileSync(new URL(`../../${LIBRARY_OUTCOMES}`, import.meta.url), 'utf8');
+    assert.equal(
+      committed,
+      await libraryOutcomesText(),
+      `${LIBRARY_OUTCOMES} is stale: run ${REGENERATE} and commit the file.`,
+    );
+  });
+
+  it('declares the sign-in callback page and the session guard', () => {
+    assert.deepEqual(
+      shipped.map((e) => [`${e.interaction}:${e.outcome}`, e.kind, e.to, e.triggered, e.route]),
+      [
+        ['sign-in:failed', 'stay', null, false, 'auth/callback'],
+        ['sign-in:succeeded', 'returnTo', null, false, 'auth/callback'],
+        ['sign-in-failed:restarted', 'exit', '', true, 'auth/callback'],
+        ['session-guard:signedOut', 'external', 'idp', false, null],
+      ],
+    );
+  });
+
+  it('joins an app that imports what brings them in, by name or through a namespace', () => {
+    const root = app({
+      'src/app/app.routes.ts': `import { qitsAuthCallbackRoute, qitsSignedInGuard as signedIn } from '@qits/angular';
+export const routes = [qitsAuthCallbackRoute, { path: '', canActivate: [signedIn], children: [] }];
+`,
+    });
+    assert.deepEqual(
+      declaredOutcomes({ root }).declared,
+      byInteraction('sign-in', 'sign-in-failed', 'session-guard'),
+    );
+    const namespaced = app({
+      'src/app/app.config.ts': `import * as qits from '@qits/angular';
+export const config = { providers: [qits.provideQitsBearerSignIn({ clientId: 'x' })] };
+`,
+    });
+    assert.deepEqual(
+      declaredOutcomes({ root: namespaced }).declared,
+      byInteraction('sign-in', 'sign-in-failed'),
+    );
+  });
+
+  it('stays out of an app that imports none of it, or only its types, or only in a spec', () => {
+    const root = app({
+      'src/app/app.config.ts': `import { provideQitsIntegration } from '@qits/angular';
+import type { QitsSession } from '@qits/angular';
+import { type qitsSignedInGuard } from '@qits/angular';
+export const config = { providers: [provideQitsIntegration()] };
+`,
+      'src/app/app.spec.ts': "import { qitsAuthCallbackRoute } from '@qits/angular';\n",
+    });
+    assert.deepEqual(declaredOutcomes({ root }), { declared: [], unreadable: [] });
+  });
+
+  it('sorts them among the app’s own', () => {
+    const root = app({
+      [MENU]: DECLARATIONS[MENU],
+      [ROOT_PAGE]: `import { outcomes, qitsSignedInGuard, stay } from '@qits/angular';
+export const guard = qitsSignedInGuard;
+export class HomePage {
+  readonly home = outcomes('home', { greeted: stay() });
+}
+`,
+    });
+    assert.deepEqual(
+      declaredOutcomes({ root }).declared.map((e) => `${e.route}|${e.interaction}:${e.outcome}`),
+      ['|home:greeted', 'null|menu:open', 'null|session-guard:signedOut'],
+    );
+  });
+
+  it('are gaps when no test reaches them, and ask no screenshot of an untriggered one', () => {
+    const declared = byInteraction('sign-in', 'sign-in-failed', 'session-guard');
+    assert.deepEqual(outcomeGaps({ declared, unreadable: [], manifest: undefined }), [
+      'sign-in:failed (auth/callback): no browser test reaches it.',
+      'sign-in:succeeded (auth/callback): no browser test reaches it.',
+      'sign-in-failed:restarted (auth/callback): no browser test reaches it.',
+      'sign-in-failed:restarted: no screenshot of auth/callback shows its trigger. Add a screenshot test where it is visible, with another provider state if needed (an open menu, a loaded list).',
+      'session-guard:signedOut (app-wide): no browser test reaches it.',
+    ]);
+    const fired = (interaction, outcome, kind, freeze = null) => ({
+      spec: 'src/app/routes/auth.page.browser.spec.ts',
+      test: 't',
+      route: interaction === 'session-guard' ? 'projects' : 'auth/callback',
+      interaction,
+      outcome,
+      kind,
+      freeze,
+    });
+    const manifest = {
+      freezes: [
+        {
+          file: 'f.html',
+          route: 'auth/callback',
+          triggers: ['sign-in-failed:restarted'],
+        },
+      ],
+      outcomes: {
+        fired: [
+          fired('sign-in', 'succeeded', 'returnTo'),
+          fired('sign-in', 'failed', 'stay', 'f.html'),
+          fired('sign-in-failed', 'restarted', 'exit'),
+          fired('session-guard', 'signedOut', 'external'),
+        ],
+      },
+    };
+    assert.deepEqual(outcomeGaps({ declared, unreadable: [], manifest }), []);
+    // A stay still needs its screenshot, untriggered or not.
+    manifest.outcomes.fired[1] = fired('sign-in', 'failed', 'stay');
+    assert.deepEqual(outcomeGaps({ declared, unreadable: [], manifest }), [
+      'sign-in:failed (auth/callback): a stay needs a screenshot after it is reached.',
+    ]);
   });
 });
 
@@ -1038,7 +1260,7 @@ describe('qits-angular screenshots --check, the outcome gaps', () => {
       `  ${BROKEN}:9: an outcomes() call that cannot be read statically (its interaction is not a string literal).`,
       `  ${BROKEN}:11: an outcomes() call that cannot be read statically (a spread).`,
       `  ${BROKEN}:12: an outcomes() call that cannot be read statically (a computed key).`,
-      `  ${BROKEN}:13: an outcomes() call that cannot be read statically (the entry c is not an exit() or stay() call).`,
+      `  ${BROKEN}:13: an outcomes() call that cannot be read statically (the entry c is not an exit(), stay(), returnTo() or external() call).`,
       `  ${BROKEN}:14: an outcomes() call that cannot be read statically (the exit d is not given a string literal).`,
     ]);
   });

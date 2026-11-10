@@ -18,6 +18,7 @@
     "test:browser": "ng run qits-integrations-angular:test-browser && node --test projects/qits-integrations-angular/screenshots/test/vitest-run.test.mjs",
     "lint": "prettier --check . && ng lint qits-integrations-angular",
     "check-exports": "node scripts/check-exports.mjs",
+    "outcomes:library": "node scripts/library-outcomes.mjs",
     "format": "prettier --write ."
   },
   "dependencies": {

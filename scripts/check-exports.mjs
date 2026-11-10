@@ -85,6 +85,12 @@ for (const [command, target] of Object.entries(dist.bin ?? {})) {
   }
 }
 
+// The library's own outcome declarations: screenshots/outcomes.mjs reads them next to itself, so a
+// package without them silently counts none (ticket qits-2044).
+if (!existsSync(join(DIST, 'screenshots/outcomes.json'))) {
+  fail(`${DIST}/screenshots/outcomes.json is missing — the screenshots assets glob must copy it`);
+}
+
 // The workspace builds and tests against its own node_modules while the consumer resolves what the
 // published manifest declares. Both directions of drift ship a package whose imports resolve for
 // nobody but us.

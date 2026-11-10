@@ -7,11 +7,13 @@
  * `@qits/angular`; every Angular app has it). A call counts when its callee is the `outcomes` import
  * from `@qits/angular`, renamed or not; each key of its object literal is one entry:
  *
- *   { route, interaction, outcome, kind, to, global, file }
+ *   { route, interaction, outcome, kind, to, global, triggered, file }
  *
- * `kind` and `to` come from the `exit('path')` / `stay()` call of the same import, `file` is
- * relative to the root. The scope comes from the declaring file's directory, under the routes
- * directory (default `src/app/routes`, the lint rules' `routes` option):
+ * `kind` and `to` come from the `exit('path')` / `stay()` / `returnTo()` / `external('name')` call
+ * of the same import (`to` is the exit's path, the external's name, `null` otherwise), `triggered`
+ * from the call's third argument (`{ triggered: false }` for an interaction no element triggers;
+ * default `true`), `file` is relative to the root. The scope comes from the declaring file's
+ * directory, under the routes directory (default `src/app/routes`, the lint rules' `routes` option):
  *
  * - a page: any file under it but a `*.layout.ts` declares for exactly the route its directory
  *   names (`[p]` is `:p`, no leading slash, the directory itself is `''`), as `segmentDirs` in
@@ -21,11 +23,19 @@
  *   declares for the whole app (`global: true`, `route: null`).
  *
  * A call the reader cannot read (a non-literal interaction, a spread, a computed key, an entry that
- * is no `exit()` / `stay()` call) is `unreadable`, by file and line: a gap of its own.
+ * is none of the four calls, options that are not `{ triggered: true | false }`) is `unreadable`, by
+ * file and line: a gap of its own.
+ *
+ * The library declares outcomes of its own (the sign-in callback page, the session guard; ticket
+ * qits-2044). `scripts/library-outcomes.mjs` reads them with the same reader ({@link readOutcomes})
+ * into `outcomes.json` beside this module, which ships in the package; each entry also names the
+ * exports that bring it into an app (`provides`). An app that imports one of those from
+ * `@qits/angular` (a value import, in any non-spec file under `src/app`) declares those outcomes
+ * too, with `file` naming the library's source (`@qits/angular/src/lib/…`).
  *
  * `outcomeGaps()` holds the declarations against `manifest.json` (`freezes.mjs`): an outcome no
  * fired record reaches, a stay no screenshot follows, an outcome whose trigger no screenshot in its
- * scope shows, and the unreadable calls.
+ * scope shows (not asked of a `triggered: false` one), and the unreadable calls.
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -82,57 +92,51 @@ const routeOf = (dir, routes) =>
     .map((s) => s.replace(/^\[(.+)\]$/, ':$1'))
     .join('/');
 
-/**
- * Reads the `outcomes()` declarations of the app at `root`. `routes` is the routes directory,
- * relative to the root. Returns `{ declared, unreadable }`, both sorted.
- *
- * @param {{ root: string, routes?: string }} options
- */
-export function declaredOutcomes({ root, routes = DEFAULT_ROUTES }) {
-  const base = routes.replace(/^\.\//, '').replace(/\/+$/, '');
-  const candidates = sourcesUnder(root, SOURCES)
-    .map((file) => ({ file, text: readFileSync(join(root, file), 'utf8') }))
-    .filter(({ text }) => text.includes('@qits/angular') && text.includes('outcomes'));
-  if (candidates.length === 0) return { declared: [], unreadable: [] };
+/** The order `declared` comes in: by route (app-wide last), interaction, outcome and file. */
+function sortDeclared(declared) {
+  return declared.sort(
+    (a, b) =>
+      compare(a.route === null, b.route === null) ||
+      compare(a.route ?? '', b.route ?? '') ||
+      compare(a.interaction, b.interaction) ||
+      compare(a.outcome, b.outcome) ||
+      compare(a.file, b.file),
+  );
+}
 
-  const ts = loadTypescript(root);
-  const aliasDir = layoutAliasDir(root);
-  const inLayouts = inside(aliasDir && toPosix(relative(root, aliasDir)));
-  const underBase = inside(base);
+/** An entry with its fields in the order the manifest and `outcomes.json` keep. */
+const entryOf = ({ route, interaction, outcome, kind, to, global, triggered, file }) => ({
+  route,
+  interaction,
+  outcome,
+  kind,
+  to,
+  global,
+  triggered,
+  file,
+});
+
+/**
+ * Reads the `outcomes()` calls of `files` (`{ file, text, scope }`, `scope` being `{ route, global }`)
+ * with the compiler `ts`. A call counts when its callee is the `outcomes` export of a module `from`
+ * accepts (`from(specifier, file)`; by default `@qits/angular` only), imported by name, renamed or
+ * not, or through a namespace. Returns `{ declared, unreadable }`, both sorted.
+ *
+ * @param {{ ts: object, files: { file: string, text: string, scope: { route: string | null, global: boolean } }[], from?: (specifier: string, file: string) => boolean }} input
+ */
+export function readOutcomes({ ts, files, from = (specifier) => specifier === '@qits/angular' }) {
   const declared = [];
   const unreadable = [];
 
-  for (const { file, text } of candidates) {
-    const dir = posix.dirname(file);
-    let scope;
-    if (isLayout(file) && inLayouts(dir)) scope = { route: null, global: true };
-    else if (underBase(dir)) scope = { route: routeOf(dir, base), global: isLayout(file) };
-    else scope = { route: null, global: true };
-
+  for (const { file, text, scope } of files) {
     const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
     const line = (node) => source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
     const unread = (node, why) => unreadable.push({ file, line: line(node), why });
 
-    /** Local name → imported name, of `@qits/angular`'s named imports; and its namespace imports. */
-    const named = new Map();
-    const namespaces = new Set();
-    for (const statement of source.statements) {
-      if (!ts.isImportDeclaration(statement)) continue;
-      if (statement.moduleSpecifier.text !== '@qits/angular') continue;
-      const clause = statement.importClause;
-      if (!clause || clause.isTypeOnly) continue;
-      const bindings = clause.namedBindings;
-      if (bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
-      else if (bindings) {
-        for (const element of bindings.elements) {
-          if (element.isTypeOnly) continue;
-          named.set(element.name.text, (element.propertyName ?? element.name).text);
-        }
-      }
-    }
+    const { named, namespaces } = importsOf(ts, source, (specifier) => from(specifier, file));
     if (named.size === 0 && namespaces.size === 0) continue;
 
-    /** The `@qits/angular` export a callee names, or undefined. */
+    /** The export a callee names, or undefined. */
     const imported = (callee) => {
       if (ts.isIdentifier(callee)) return named.get(callee.text);
       if (
@@ -149,12 +153,40 @@ export function declaredOutcomes({ root, routes = DEFAULT_ROUTES }) {
         ? node.text
         : undefined;
 
+    /** `triggered` from the options argument: `true` when absent, undefined when it cannot be read. */
+    const triggeredOf = (options) => {
+      if (options === undefined) return true;
+      if (!ts.isObjectLiteralExpression(options)) return undefined;
+      let triggered = true;
+      for (const property of options.properties) {
+        if (
+          !ts.isPropertyAssignment(property) ||
+          !(ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) ||
+          property.name.text !== 'triggered'
+        ) {
+          return undefined;
+        }
+        const value = property.initializer.kind;
+        if (value === ts.SyntaxKind.TrueKeyword) triggered = true;
+        else if (value === ts.SyntaxKind.FalseKeyword) triggered = false;
+        else return undefined;
+      }
+      return triggered;
+    };
+
     const readCall = (call) => {
       const interaction = literal(call.arguments[0]);
       if (interaction === undefined) return unread(call, 'its interaction is not a string literal');
       const object = call.arguments[1];
       if (!object || !ts.isObjectLiteralExpression(object)) {
         return unread(call, 'its outcomes are not an object literal');
+      }
+      const triggered = triggeredOf(call.arguments[2]);
+      if (triggered === undefined) {
+        return unread(
+          call.arguments[2],
+          'its options are not an object literal of triggered: true or false',
+        );
       }
       for (const property of object.properties) {
         if (ts.isSpreadAssignment(property)) {
@@ -174,19 +206,22 @@ export function declaredOutcomes({ root, routes = DEFAULT_ROUTES }) {
             : undefined;
         const value = ts.isPropertyAssignment(property) ? property.initializer : undefined;
         const kind = value && ts.isCallExpression(value) ? imported(value.expression) : undefined;
-        if (outcome === undefined || (kind !== 'exit' && kind !== 'stay')) {
-          unread(property, `the entry ${outcome ?? '?'} is not an exit() or stay() call`);
+        if (outcome === undefined || !KINDS.has(kind)) {
+          unread(
+            property,
+            `the entry ${outcome ?? '?'} is not an exit(), stay(), returnTo() or external() call`,
+          );
           continue;
         }
         let to = null;
-        if (kind === 'exit') {
+        if (kind === 'exit' || kind === 'external') {
           to = literal(value.arguments[0]) ?? null;
           if (to === null) {
-            unread(property, `the exit ${outcome} is not given a string literal`);
+            unread(property, `the ${kind} ${outcome} is not given a string literal`);
             continue;
           }
         }
-        declared.push({ ...scope, interaction, outcome, kind, to, file });
+        declared.push({ ...scope, interaction, outcome, kind, to, triggered, file });
       }
     };
 
@@ -197,27 +232,111 @@ export function declaredOutcomes({ root, routes = DEFAULT_ROUTES }) {
     visit(source);
   }
 
-  declared.sort(
-    (a, b) =>
-      compare(a.route === null, b.route === null) ||
-      compare(a.route ?? '', b.route ?? '') ||
-      compare(a.interaction, b.interaction) ||
-      compare(a.outcome, b.outcome) ||
-      compare(a.file, b.file),
-  );
   unreadable.sort((a, b) => compare(a.file, b.file) || a.line - b.line);
-  return {
-    declared: declared.map(({ route, interaction, outcome, kind, to, global, file }) => ({
-      route,
-      interaction,
-      outcome,
-      kind,
-      to,
-      global,
-      file,
-    })),
-    unreadable,
+  return { declared: sortDeclared(declared).map(entryOf), unreadable };
+}
+
+/** The calls an entry of an `outcomes()` declaration can be. */
+const KINDS = new Set(['exit', 'stay', 'returnTo', 'external']);
+
+/**
+ * The value imports of `source` from the modules `accepts` takes: local name → exported name, and
+ * the namespace names.
+ */
+function importsOf(ts, source, accepts) {
+  const named = new Map();
+  const namespaces = new Set();
+  for (const statement of source.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    if (!accepts(statement.moduleSpecifier.text)) continue;
+    const clause = statement.importClause;
+    if (!clause || clause.isTypeOnly) continue;
+    const bindings = clause.namedBindings;
+    if (bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
+    else if (bindings) {
+      for (const element of bindings.elements) {
+        if (element.isTypeOnly) continue;
+        named.set(element.name.text, (element.propertyName ?? element.name).text);
+      }
+    }
+  }
+  return { named, namespaces };
+}
+
+/** The `@qits/angular` exports `source` brings in: its named value imports, and `ns.x` of a namespace. */
+function exportsUsed(ts, source) {
+  const { named, namespaces } = importsOf(ts, source, (specifier) => specifier === '@qits/angular');
+  const used = new Set(named.values());
+  if (namespaces.size > 0) {
+    const visit = (node) => {
+      if (
+        ts.isPropertyAccessExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        namespaces.has(node.expression.text)
+      ) {
+        used.add(node.name.text);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
+  return used;
+}
+
+/**
+ * The library's own declarations, as this copy of `@qits/angular` ships them (`outcomes.json`,
+ * written by `pnpm outcomes:library`): resolved next to this module, so the version the app has
+ * installed is the one counted.
+ */
+export function libraryOutcomes() {
+  return JSON.parse(readFileSync(new URL('./outcomes.json', import.meta.url), 'utf8'));
+}
+
+/**
+ * Reads the `outcomes()` declarations of the app at `root`. `routes` is the routes directory,
+ * relative to the root. The library's own declarations ({@link libraryOutcomes}) join them when the
+ * app imports an export that brings them in (`provides`). Returns `{ declared, unreadable }`, both
+ * sorted.
+ *
+ * @param {{ root: string, routes?: string }} options
+ */
+export function declaredOutcomes({ root, routes = DEFAULT_ROUTES }) {
+  const base = routes.replace(/^\.\//, '').replace(/\/+$/, '');
+  const candidates = sourcesUnder(root, SOURCES)
+    .map((file) => ({ file, text: readFileSync(join(root, file), 'utf8') }))
+    .filter(({ text }) => text.includes('@qits/angular'));
+  if (candidates.length === 0) return { declared: [], unreadable: [] };
+
+  const library = libraryOutcomes();
+  const provides = new Set(library.flatMap((entry) => entry.provides));
+  const mentions = ({ text }) =>
+    text.includes('outcomes') || [...provides].some((name) => text.includes(name));
+  if (!candidates.some(mentions)) return { declared: [], unreadable: [] };
+
+  const ts = loadTypescript(root);
+  const aliasDir = layoutAliasDir(root);
+  const inLayouts = inside(aliasDir && toPosix(relative(root, aliasDir)));
+  const underBase = inside(base);
+  const scopeOf = (file) => {
+    const dir = posix.dirname(file);
+    if (isLayout(file) && inLayouts(dir)) return { route: null, global: true };
+    if (underBase(dir)) return { route: routeOf(dir, base), global: isLayout(file) };
+    return { route: null, global: true };
   };
+
+  const read = readOutcomes({
+    ts,
+    files: candidates.map(({ file, text }) => ({ file, text, scope: scopeOf(file) })),
+  });
+  const used = new Set();
+  for (const { file, text } of candidates) {
+    const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    for (const name of exportsUsed(ts, source)) used.add(name);
+  }
+  const shipped = library
+    .filter((entry) => entry.provides.some((name) => used.has(name)))
+    .map(entryOf);
+  return { declared: sortDeclared([...read.declared, ...shipped]), unreadable: read.unreadable };
 }
 
 /**
@@ -271,6 +390,8 @@ export function outcomeGaps({ declared, unreadable, manifest }) {
     } else if (entry.kind === 'stay' && !reached.some((record) => record.freeze)) {
       gaps.push(`${name} (${where(entry)}): a stay needs a screenshot after it is reached.`);
     }
+    // No element triggers it (a guard, a callback page): there is no trigger to show.
+    if (entry.triggered === false) continue;
     const shown = freezes.some(
       (freeze) =>
         Array.isArray(freeze.triggers) &&

@@ -13,7 +13,7 @@
       "ignore": ["test/**"]
     },
     {
-      "glob": "**/*.{mjs,d.mts}",
+      "glob": "**/*.{mjs,d.mts,json}",
       "input": "screenshots",
       "output": "screenshots",
       "ignore": ["test/**"]
