@@ -77,7 +77,9 @@ interface TokenAnswer {
  *
  * - `login(path)` starts the authorization-code flow with PKCE: the verifier goes into
  *   `sessionStorage` under the flow's `state`, and the tab navigates to the idp's authorize page.
- *   It starts at most one flow per page.
+ *   It starts at most one flow per page. `authorizeUrl(path)` is its first half: it starts the flow
+ *   and answers the authorize page's URL, leaving the navigation to the caller (`QitsSession`
+ *   leaves through its declared outcome).
  * - `complete(query)` (the `/auth/callback` page) checks the `state`, swaps the code for tokens and
  *   answers the path to go back to. A `state` this tab did not start is refused. Every failure
  *   throws a {@link QitsSignInError} naming the {@link QitsSignInFailure} reason.
@@ -117,7 +119,17 @@ export class QitsTokens {
 
   /** Starts a sign-in that comes back to `returnPath`. Once per page: later calls do nothing. */
   async login(returnPath: string): Promise<void> {
-    if (!this.browser || this.redirecting || !this.idp) return;
+    const url = await this.authorizeUrl(returnPath);
+    if (url) this.location.assign(url);
+  }
+
+  /**
+   * Starts a sign-in that comes back to `returnPath` and answers the idp's authorize URL for the
+   * caller to leave for. Null outside a browser, without an idp, and once a sign-in has started on
+   * this page (once per page, as {@link login}).
+   */
+  async authorizeUrl(returnPath: string): Promise<string | null> {
+    if (!this.browser || this.redirecting || !this.idp) return null;
     this.redirecting = true;
     const state = randomToken(16);
     const verifier = randomToken();
@@ -130,7 +142,7 @@ export class QitsTokens {
       code_challenge_method: 'S256',
       state,
     });
-    this.location.assign(`${this.idp}/idp/authorize?${query}`);
+    return `${this.idp}/idp/authorize?${query}`;
   }
 
   /**

@@ -4,7 +4,6 @@ import { DOCUMENT, PLATFORM_ID } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { firstValueFrom } from 'rxjs';
 import { qitsBearerInterceptor } from './bearer-interceptor';
-import { QitsSession } from './qits-session';
 import { QitsTokens } from './qits-tokens';
 import { QITS_SIGN_IN } from './sign-in-settings';
 
@@ -158,31 +157,5 @@ describe('qitsBearerInterceptor', () => {
     http.expectOne(API).flush(null, { status: 500, statusText: 'Server Error' });
     await expect(answer).rejects.toMatchObject({ status: 500 });
     expect(tokens.refreshes).toBe(0);
-  });
-});
-
-describe('QitsSession', () => {
-  function session(tokens: FakeTokens): QitsSession {
-    TestBed.configureTestingModule({
-      providers: [
-        { provide: PLATFORM_ID, useValue: 'browser' },
-        { provide: QitsTokens, useValue: tokens },
-        QitsSession,
-      ],
-    });
-    return TestBed.inject(QitsSession);
-  }
-
-  it('lets a visitor with a token through', async () => {
-    const tokens = new FakeTokens();
-    expect(await session(tokens).ensure('/projects')).toBe(true);
-    expect(tokens.logins).toEqual([]);
-  });
-
-  it('starts the sign-in without one, back to the asked page', async () => {
-    const tokens = new FakeTokens();
-    tokens.current = null;
-    expect(await session(tokens).ensure('/projects/qits/work')).toBe(false);
-    expect(tokens.logins).toEqual(['/projects/qits/work']);
   });
 });

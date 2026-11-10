@@ -1,5 +1,7 @@
+import { APP_BASE_HREF } from '@angular/common';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter, Router } from '@angular/router';
+import { ɵsetOutcomeRecorder, type OutcomeRecord } from '../outcomes/outcome-recorder';
 import { QitsAuthCallbackPage } from './auth-callback.page';
 import { QitsSignInError, QitsSignInFailure, QitsTokens } from './qits-tokens';
 
@@ -9,12 +11,15 @@ const settle = () => new Promise((resolve) => setTimeout(resolve));
 describe('QitsAuthCallbackPage', () => {
   let navigate: ReturnType<typeof vi.spyOn>;
   let error: ReturnType<typeof vi.spyOn>;
+  let records: OutcomeRecord[];
 
   function open(callback?: Pick<QitsTokens, 'complete'>): ComponentFixture<QitsAuthCallbackPage> {
     history.replaceState({}, '', '/auth/callback?code=C&state=S');
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
+        // An app's `<base href="/">`.
+        { provide: APP_BASE_HREF, useValue: '/' },
         ...(callback ? [{ provide: QitsTokens, useValue: callback }] : []),
       ],
     });
@@ -24,9 +29,12 @@ describe('QitsAuthCallbackPage', () => {
 
   beforeEach(() => {
     error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    records = [];
+    ɵsetOutcomeRecorder((record) => records.push(record));
   });
 
   afterEach(() => {
+    ɵsetOutcomeRecorder(null);
     history.replaceState({}, '', '/');
     error.mockRestore();
   });
@@ -37,6 +45,21 @@ describe('QitsAuthCallbackPage', () => {
     await settle();
     expect(complete.mock.calls[0][0].toString()).toBe('code=C&state=S');
     expect(navigate).toHaveBeenCalledWith('/projects/qits', { replaceUrl: true });
+    expect(records).toEqual([
+      {
+        interaction: 'sign-in',
+        outcome: 'succeeded',
+        kind: 'returnTo',
+        to: null,
+        url: '/projects/qits',
+      },
+    ]);
+  });
+
+  it('goes on to the root when the return path leads off the site', async () => {
+    open({ complete: async () => '//elsewhere.example/' });
+    await settle();
+    expect(navigate).toHaveBeenCalledWith('/', { replaceUrl: true });
   });
 
   it('shows the signing-in state while complete is pending', async () => {
@@ -61,6 +84,27 @@ describe('QitsAuthCallbackPage', () => {
     expect(fixture.nativeElement.querySelector('a[href="/"]')?.textContent).toContain(
       'Start again',
     );
+    expect(records).toEqual([
+      { interaction: 'sign-in', outcome: 'failed', kind: 'stay', to: null },
+    ]);
+  });
+
+  it('starts again through the declared exit to the root', async () => {
+    const fixture = open({ complete: async () => Promise.reject(new Error('refused')) });
+    await settle();
+    fixture.detectChanges();
+    const link = fixture.nativeElement.querySelector('a') as HTMLAnchorElement;
+    expect(link.getAttribute('href')).toBe('/');
+    expect(link.getAttribute('data-qits-outcome')).toBe('sign-in-failed:restarted');
+    link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+    expect(navigate).toHaveBeenCalledExactlyOnceWith('/', undefined);
+    expect(records.at(-1)).toEqual({
+      interaction: 'sign-in-failed',
+      outcome: 'restarted',
+      kind: 'exit',
+      to: '',
+      url: '/',
+    });
   });
 
   it('goes on to the root where nothing signs in this way', async () => {

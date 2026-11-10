@@ -109,6 +109,23 @@ describe('QitsTokens', () => {
     expect(assign).toHaveBeenCalledTimes(1);
   });
 
+  it('answers the authorize URL without leaving, once per page, and login then has nothing to start', async () => {
+    const service = tokens();
+    const url = await service.authorizeUrl('/projects/qits');
+    expect(assign).not.toHaveBeenCalled();
+    const authorize = new URL(url ?? '');
+    expect(`${authorize.origin}${authorize.pathname}`).toBe(
+      'https://idp.qits.example/idp/authorize',
+    );
+    const pending = JSON.parse(
+      sessionStorage.getItem(PENDING_PREFIX + authorize.searchParams.get('state')) ?? '{}',
+    );
+    expect(pending.returnPath).toBe('/projects/qits');
+    expect(await service.authorizeUrl('/b')).toBeNull();
+    await service.login('/c');
+    expect(assign).not.toHaveBeenCalled();
+  });
+
   it('swaps the code with the verifier, keeps the tokens and answers the path to go back to', async () => {
     const service = tokens();
     const authorize = await login(service, '/projects/qits');

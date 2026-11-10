@@ -1,12 +1,23 @@
 import { isPlatformServer } from '@angular/common';
 import { inject, Injectable, PLATFORM_ID } from '@angular/core';
 import type { CanActivateFn } from '@angular/router';
+import { external, outcomes } from '../outcomes/outcomes';
 import { QitsTokens } from './qits-tokens';
 
-/** Signed in means holding a valid (or refreshable) token. `provideQitsBearerSignIn` provides it. */
+/**
+ * Signed in means holding a valid (or refreshable) token. `provideQitsBearerSignIn` provides it.
+ *
+ * A visitor who is not signed in leaves for the idp through the declared outcome
+ * `session-guard:signedOut`. No element triggers it, so it is `triggered: false`.
+ */
 @Injectable()
 export class QitsSession {
   private readonly tokens = inject(QitsTokens);
+  private readonly guard = outcomes(
+    'session-guard',
+    { signedOut: external('idp') },
+    { triggered: false },
+  );
 
   /**
    * True when the visitor is signed in. Otherwise starts the sign-in, which comes back to `url`
@@ -14,7 +25,9 @@ export class QitsSession {
    */
   async ensure(url: string): Promise<boolean> {
     if (await this.tokens.accessToken()) return true;
-    void this.tokens.login(url);
+    void this.tokens.authorizeUrl(url).then((href) => {
+      if (href) this.guard.signedOut.leave(href);
+    });
     return false;
   }
 }

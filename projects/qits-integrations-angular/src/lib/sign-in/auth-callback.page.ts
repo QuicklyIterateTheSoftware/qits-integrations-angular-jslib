@@ -8,7 +8,9 @@ import {
   PLATFORM_ID,
   signal,
 } from '@angular/core';
-import { Router, type Route } from '@angular/router';
+import type { Route } from '@angular/router';
+import { exit, outcomes, returnTo, stay } from '../outcomes/outcomes';
+import { QitsExit } from '../outcomes/qits-exit.directive';
 import { QitsSignInError, QitsTokens, type QitsSignInFailure } from './qits-tokens';
 
 /** What the page shows for each failure reason; `null` is an error that is not a {@link QitsSignInError}. */
@@ -34,9 +36,13 @@ type State =
  * next sign-in, and a refusal would loop — while still logging the technical reason to the
  * console. Without `provideQitsBearerSignIn` nothing signs in this way, and the page goes on to
  * the root.
+ *
+ * Both ends are declared outcomes: `sign-in` (`succeeded`, the return; `failed`, the stay) has no
+ * trigger on the page, so it is `triggered: false`; `sign-in-failed:restarted` is the link.
  */
 @Component({
   selector: 'qits-auth-callback',
+  imports: [QitsExit],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @switch (state().kind) {
@@ -50,7 +56,7 @@ type State =
         <div>
           <h1>Sign-in failed</h1>
           <p>{{ message() }}</p>
-          <a href="/">Start again</a>
+          <a [qitsExit]="failure.restarted">Start again</a>
         </div>
       }
     }
@@ -93,6 +99,12 @@ type State =
   `,
 })
 export class QitsAuthCallbackPage {
+  private readonly signIn = outcomes(
+    'sign-in',
+    { succeeded: returnTo(), failed: stay() },
+    { triggered: false },
+  );
+  protected readonly failure = outcomes('sign-in-failed', { restarted: exit('') });
   protected readonly state = signal<State>({ kind: 'signing-in' });
   protected readonly message = computed(() => {
     const state = this.state();
@@ -101,13 +113,13 @@ export class QitsAuthCallbackPage {
 
   constructor() {
     if (!isPlatformBrowser(inject(PLATFORM_ID))) return;
-    const router = inject(Router);
     const tokens = inject(QitsTokens, { optional: true });
     const query = new URLSearchParams(inject(DOCUMENT).location.search);
     (tokens ? tokens.complete(query) : Promise.resolve('/')).then(
-      (path) => router.navigateByUrl(path, { replaceUrl: true }),
+      (path) => this.signIn.succeeded.go(path, { replaceUrl: true }),
       (error: unknown) => {
         console.error('Sign-in failed; open / to try again.', error);
+        this.signIn.failed.reach();
         this.state.set({
           kind: 'failed',
           reason: error instanceof QitsSignInError ? error.reason : null,
