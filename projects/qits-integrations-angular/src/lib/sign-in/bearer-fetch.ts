@@ -1,4 +1,4 @@
-import { DOCUMENT, inject, Injectable } from '@angular/core';
+import { DOCUMENT, inject, Injectable, Injector } from '@angular/core';
 import { QITS_SIGN_IN_FETCH, QitsTokens } from './qits-tokens';
 import { QitsSessionExpiry } from './session-expiry';
 import { isPlatformUrl, QITS_SIGN_IN } from './sign-in-settings';
@@ -17,7 +17,7 @@ export class QitsBearerFetch {
   private readonly document = inject(DOCUMENT);
   private readonly location = this.document.location;
   private readonly settings = inject(QITS_SIGN_IN);
-  private readonly expiry = inject(QitsSessionExpiry);
+  private readonly injector = inject(Injector);
 
   /** `fetch(url, init)`, with `Authorization: Bearer` when `url` is a platform URL. */
   async fetch(url: string, init: RequestInit = {}): Promise<Response> {
@@ -29,7 +29,8 @@ export class QitsBearerFetch {
     if (response.status !== 401) return response;
     const fresh = await this.tokens.retryToken(used);
     if (!fresh) {
-      this.expiry.signIn();
+      // Resolved here: its outcomes() inject the Router, which only this path needs.
+      this.injector.get(QitsSessionExpiry).signIn();
       return response;
     }
     return this.fetchFn(url, withBearer(init, fresh));
