@@ -157,18 +157,25 @@ declared once and checked by the compiler.
   `@ts-expect-error`; the vitest builder type-checks, so an unused directive fails the run. The
   augmentation is global to the spec program; specs are excluded from the library build, so it
   never ships. The other outcomes specs keep to its names, and so do the library's own declarations
-  (`sign-in`, `sign-in-failed`, `session-guard` are in its `interaction` union), because the
-  sign-in sources are compiled into the same spec program.
+  (`sign-in`, `sign-in-failed`, `session-guard`, `session-expired` are in its `interaction`
+  union), because the sign-in sources are compiled into the same spec program.
 - The library declares its own outcomes (ticket qits-2044): `QitsAuthCallbackPage` (`sign-in`:
   `succeeded` returnTo, `failed` stay, `triggered: false`; `sign-in-failed:restarted`, the Start
   again `QitsExit` to `''`) and `QitsSession` (`session-guard:signedOut`, external `idp`,
   `triggered: false`; `ensure()` takes `QitsTokens.authorizeUrl()`, the first half of `login()`, and
-  leaves through it). `scripts/library-outcomes.mjs` (`pnpm outcomes:library`) reads them with the
-  screenshot reader's `readOutcomes()` into `screenshots/outcomes.json`, which ships (the screenshots
-  assets glob takes `json`; `check-exports` checks it); its `SCOPES` table gives each declaring
-  file's `route` / `global` and `provides` (the exports whose import brings the entries into an
-  app), and a declaring file missing there fails the run. A screenshots test fails when the
-  committed file is stale.
+  leaves through it); and `QitsSessionExpiry` (ticket qits-2052, not exported, provided by
+  `provideQitsBearerSignIn`: `session-expired:signedOut`, external `idp`, `triggered: false`),
+  which `qitsBearerInterceptor` (resolved lazily through its `Injector`, because `outcomes()`
+  injects the `Router` only that path needs) and `QitsBearerFetch` call on a 401 that no refresh
+  helps, in place of `login()`; its `provides` are `qitsBearerInterceptor` and `QitsBearerFetch`.
+  Their specs provide `provideRouter([])`, `QitsSessionExpiry` and a `QITS_LEAVE_APP` spy, as any
+  test reaching an external does. These slugs are the library's; an app must not reuse them.
+  `scripts/library-outcomes.mjs` (`pnpm outcomes:library`) reads them with the screenshot reader's
+  `readOutcomes()` into `screenshots/outcomes.json`, which ships (the screenshots assets glob takes
+  `json`; `check-exports` checks it); its `SCOPES` table gives each declaring file's `route` /
+  `global` and `provides` (the exports whose import brings the entries into an app), and a
+  declaring file missing there fails the run. A screenshots test fails when the committed file is
+  stale.
 
 The library is **zoneless-first**: no `zone.js`, no `@opentelemetry/context-zone` — the default
 stack context manager is correct. The `instrumentation-user-interaction` `zone.js` peer is

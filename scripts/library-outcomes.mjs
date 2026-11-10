@@ -47,6 +47,11 @@ const SCOPES = {
     global: true,
     provides: ['qitsSignedInGuard', 'QitsSession'],
   },
+  'src/lib/sign-in/session-expiry.ts': {
+    route: null,
+    global: true,
+    provides: ['qitsBearerInterceptor', 'QitsBearerFetch'],
+  },
 };
 
 const isSource = (name) => name.endsWith('.ts') && !name.endsWith('.d.ts');

@@ -352,7 +352,8 @@ export class WorkCreatePage {
 - **An external** (`external('idp')`) leaves the app for another site, named, not routed:
   `leave(href)` records it with the `href`, then calls `QITS_LEAVE_APP` (an injection token,
   `providedIn: 'root'`, by default `DOCUMENT.location.assign(href)`). A routed browser test that
-  reaches an external (the session guard's `session-guard:signedOut`) provides its own, such as
+  reaches an external (the session guard's `session-guard:signedOut`, or the session expiry's
+  `session-expired:signedOut` when a platform call answers 401) provides its own, such as
   `{ provide: QITS_LEAVE_APP, useValue: vi.fn() }`, so the test page is not navigated away;
   overriding the `DOCUMENT` instead breaks rendering.
 - **Untriggered interactions.** `outcomes(interaction, declared, { triggered: false })` says no
@@ -457,12 +458,17 @@ the routes directory for the whole app (`route: null`). Layout and app-wide decl
 **The library's own outcomes count too** (ticket qits-2044). The sign-in callback page declares
 `sign-in` (`succeeded`, a return; `failed`, a stay; both `triggered: false`) and `sign-in-failed`
 (`restarted`, its Start again link, an exit to `''`) on `auth/callback`; the session guard declares
-`session-guard:signedOut` (an external to `idp`, `triggered: false`) app-wide. They ship in the
+`session-guard:signedOut` (an external to `idp`, `triggered: false`) app-wide; and the bearer
+interceptor and `QitsBearerFetch`, when a platform call answers 401 and no refresh helps, leave
+through `session-expired:signedOut` (the same, app-wide, ticket qits-2052). They ship in the
 package (`screenshots/outcomes.json`) and join the app's declarations when the app imports
 `qitsAuthCallbackRoute` or `provideQitsBearerSignIn` (the sign-in ones), `qitsSignedInGuard` or
-`QitsSession` (the guard's) from `@qits/angular` in a non-spec file under `src/app`. Their `file` is
-the library's source, `@qits/angular/src/lib/…`. So an app that signs in this way needs browser
-tests that reach them, as it does for its own.
+`QitsSession` (the guard's), `qitsBearerInterceptor` or `QitsBearerFetch` (the expiry's) from
+`@qits/angular` in a non-spec file under `src/app`. Their `file` is the library's source,
+`@qits/angular/src/lib/…`. So an app that signs in this way needs browser tests that reach them,
+as it does for its own; a test that reaches an external one stubs `QITS_LEAVE_APP`. Their slugs
+(`sign-in`, `sign-in-failed`, `session-guard`, `session-expired`) are the library's: an app does
+not declare an interaction of its own under any of them.
 
 The rollout is opt-in: the outcome gaps are **report-only** (printed to stderr under a heading
 that says so, the exit code untouched) until the app adds `--enforce-outcomes`, which makes any gap

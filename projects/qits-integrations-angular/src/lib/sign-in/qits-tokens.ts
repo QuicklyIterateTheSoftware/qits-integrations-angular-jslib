@@ -78,8 +78,8 @@ interface TokenAnswer {
  * - `login(path)` starts the authorization-code flow with PKCE: the verifier goes into
  *   `sessionStorage` under the flow's `state`, and the tab navigates to the idp's authorize page.
  *   It starts at most one flow per page. `authorizeUrl(path)` is its first half: it starts the flow
- *   and answers the authorize page's URL, leaving the navigation to the caller (`QitsSession`
- *   leaves through its declared outcome).
+ *   and answers the authorize page's URL, leaving the navigation to the caller (`QitsSession` and
+ *   `QitsSessionExpiry` leave through their declared outcomes).
  * - `complete(query)` (the `/auth/callback` page) checks the `state`, swaps the code for tokens and
  *   answers the path to go back to. A `state` this tab did not start is refused. Every failure
  *   throws a {@link QitsSignInError} naming the {@link QitsSignInFailure} reason.

@@ -12,6 +12,7 @@ import { BearerWebSocket, QITS_WEB_SOCKET, type WebSocketLike } from './bearer-w
 import { FetchEventSource, QITS_EVENT_SOURCE } from './fetch-event-source';
 import { QitsSession } from './qits-session';
 import { QitsTokens } from './qits-tokens';
+import { QitsSessionExpiry } from './session-expiry';
 import {
   QITS_SIGN_IN,
   resolveSignInSettings,
@@ -26,6 +27,9 @@ import {
  * - {@link QitsTokens}: the flow, the token store (`sessionStorage`, this tab), the refresh ahead
  *   of expiry, one refresh in flight.
  * - {@link QitsSession} (and `qitsSignedInGuard`): signed in means holding a usable token.
+ * - {@link QitsSessionExpiry}: a platform call answered 401 and no refresh helps, so the visitor
+ *   signs in again (`session-expired:signedOut`), for `qitsBearerInterceptor` and
+ *   {@link QitsBearerFetch}.
  * - `auth/callback` ({@link QitsAuthCallbackPage}) in front of the app's routes, unless
  *   `callbackRoute: false`. The redirect URI is `<page origin>/auth/callback`.
  * - {@link QITS_EVENT_SOURCE} opens a {@link FetchEventSource} (onopen, reconnect after a drop,
@@ -40,6 +44,7 @@ export function provideQitsBearerSignIn(options: QitsBearerSignInOptions): Envir
     { provide: QITS_SIGN_IN, useFactory: () => resolveSignInSettings(options) },
     QitsTokens,
     QitsSession,
+    QitsSessionExpiry,
     QitsBearerFetch,
     {
       provide: QITS_EVENT_SOURCE,

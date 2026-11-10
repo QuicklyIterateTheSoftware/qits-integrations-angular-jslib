@@ -1,12 +1,14 @@
 import { DOCUMENT, inject, Injectable } from '@angular/core';
 import { QITS_SIGN_IN_FETCH, QitsTokens } from './qits-tokens';
+import { QitsSessionExpiry } from './session-expiry';
 import { isPlatformUrl, QITS_SIGN_IN } from './sign-in-settings';
 
 /**
  * `fetch()` with the bearer, for what cannot go through `HttpClient` or cannot send a header at
  * all: an `<img>` of a role-guarded route, a download behind a plain link, HTML for an iframe's
  * `srcdoc`. Same rules as `qitsBearerInterceptor`: the bearer only to a platform URL, one refresh
- * and one retry on a 401, then the sign-in. `provideQitsBearerSignIn` provides it.
+ * and one retry on a 401, then the sign-in, through the declared outcome `session-expired:signedOut`
+ * ({@link QitsSessionExpiry}). `provideQitsBearerSignIn` provides it.
  */
 @Injectable()
 export class QitsBearerFetch {
@@ -15,6 +17,7 @@ export class QitsBearerFetch {
   private readonly document = inject(DOCUMENT);
   private readonly location = this.document.location;
   private readonly settings = inject(QITS_SIGN_IN);
+  private readonly expiry = inject(QitsSessionExpiry);
 
   /** `fetch(url, init)`, with `Authorization: Bearer` when `url` is a platform URL. */
   async fetch(url: string, init: RequestInit = {}): Promise<Response> {
@@ -26,7 +29,7 @@ export class QitsBearerFetch {
     if (response.status !== 401) return response;
     const fresh = await this.tokens.retryToken(used);
     if (!fresh) {
-      void this.tokens.login(`${this.location.pathname}${this.location.search}`);
+      this.expiry.signIn();
       return response;
     }
     return this.fetchFn(url, withBearer(init, fresh));

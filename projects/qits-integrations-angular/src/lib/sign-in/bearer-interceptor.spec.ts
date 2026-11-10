@@ -2,9 +2,13 @@ import { HttpClient, provideHttpClient, withInterceptors } from '@angular/common
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { DOCUMENT } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
+import { ɵsetOutcomeRecorder, type OutcomeRecord } from '../outcomes/outcome-recorder';
+import { QITS_LEAVE_APP } from '../outcomes/outcomes';
 import { qitsBearerInterceptor } from './bearer-interceptor';
 import { QitsTokens } from './qits-tokens';
+import { QitsSessionExpiry } from './session-expiry';
 import { QITS_SIGN_IN } from './sign-in-settings';
 
 const SETTINGS = {
@@ -15,12 +19,17 @@ const SETTINGS = {
 
 const API = 'https://projects.qits.example/projects/api/projects';
 
-/** A stand-in for {@link QitsTokens}: a current token, and what a refresh brings. */
+const AUTHORIZE = 'https://idp.example.test/idp/authorize?x';
+
+/**
+ * A stand-in for {@link QitsTokens}: a current token, what a refresh brings, and the authorize URL
+ * once per page, as the real one answers it.
+ */
 class FakeTokens {
   current: string | null = 'A1';
   next: string | null = 'A2';
   refreshes = 0;
-  logins: string[] = [];
+  signIns: string[] = [];
   async accessToken() {
     return this.current;
   }
@@ -29,8 +38,9 @@ class FakeTokens {
     this.current = this.next;
     return this.next;
   }
-  async login(path: string) {
-    this.logins.push(path);
+  async authorizeUrl(path: string) {
+    this.signIns.push(path);
+    return this.signIns.length === 1 ? AUTHORIZE : null;
   }
 }
 
@@ -41,9 +51,14 @@ describe('qitsBearerInterceptor', () => {
   let tokens: FakeTokens;
   let http: HttpTestingController;
   let client: HttpClient;
+  let leave: ReturnType<typeof vi.fn>;
+  let records: OutcomeRecord[];
 
   beforeEach(() => {
     tokens = new FakeTokens();
+    leave = vi.fn();
+    records = [];
+    ɵsetOutcomeRecorder((record) => records.push(record));
     TestBed.configureTestingModule({
       providers: [
         {
@@ -58,6 +73,9 @@ describe('qitsBearerInterceptor', () => {
         },
         { provide: QITS_SIGN_IN, useValue: SETTINGS },
         { provide: QitsTokens, useValue: tokens },
+        { provide: QITS_LEAVE_APP, useValue: leave },
+        provideRouter([]),
+        QitsSessionExpiry,
         provideHttpClient(withInterceptors([qitsBearerInterceptor])),
         provideHttpClientTesting(),
       ],
@@ -66,7 +84,10 @@ describe('qitsBearerInterceptor', () => {
     client = TestBed.inject(HttpClient);
   });
 
-  afterEach(() => http.verify());
+  afterEach(() => {
+    http.verify();
+    ɵsetOutcomeRecorder(null);
+  });
 
   it('puts the bearer on calls to a platform host', async () => {
     const answer = firstValueFrom(client.get(API));
@@ -129,16 +150,46 @@ describe('qitsBearerInterceptor', () => {
     retry.flush(['ok']);
     expect(await answer).toEqual(['ok']);
     expect(tokens.refreshes).toBe(1);
-    expect(tokens.logins).toEqual([]);
+    await settle();
+    expect(tokens.signIns).toEqual([]);
+    expect(leave).not.toHaveBeenCalled();
+    expect(records).toEqual([]);
   });
 
-  it('sends the visitor to sign in when the refresh brings nothing', async () => {
+  it('leaves for the idp through session-expired:signedOut when the refresh brings nothing', async () => {
     tokens.next = null;
     const answer = firstValueFrom(client.get(API));
     await settle();
     http.expectOne(API).flush(null, { status: 401, statusText: 'Unauthorized' });
     await expect(answer).rejects.toMatchObject({ status: 401 });
-    expect(tokens.logins).toEqual(['/projects/qits?x=1']);
+    await vi.waitFor(() => expect(leave).toHaveBeenCalled());
+    expect(tokens.signIns).toEqual(['/projects/qits?x=1']);
+    expect(leave).toHaveBeenCalledTimes(1);
+    expect(leave).toHaveBeenCalledWith(AUTHORIZE);
+    expect(records).toEqual([
+      {
+        interaction: 'session-expired',
+        outcome: 'signedOut',
+        kind: 'external',
+        to: 'idp',
+        url: AUTHORIZE,
+      },
+    ]);
+  });
+
+  it('leaves once when two calls answer 401 together', async () => {
+    tokens.next = null;
+    const first = firstValueFrom(client.get(API));
+    const second = firstValueFrom(client.get(`${API}/2`));
+    await settle();
+    http.expectOne(API).flush(null, { status: 401, statusText: 'Unauthorized' });
+    http.expectOne(`${API}/2`).flush(null, { status: 401, statusText: 'Unauthorized' });
+    await expect(first).rejects.toMatchObject({ status: 401 });
+    await expect(second).rejects.toMatchObject({ status: 401 });
+    await vi.waitFor(() => expect(leave).toHaveBeenCalled());
+    await settle();
+    expect(leave).toHaveBeenCalledTimes(1);
+    expect(records).toHaveLength(1);
   });
 
   it('does not refresh twice when the retry is refused too', async () => {

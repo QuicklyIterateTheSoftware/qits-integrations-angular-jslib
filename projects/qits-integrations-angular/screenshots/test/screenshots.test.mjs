@@ -917,16 +917,55 @@ describe('the library’s own outcomes', () => {
     );
   });
 
-  it('declares the sign-in callback page and the session guard', () => {
+  it('declares the sign-in callback page, the session expiry and the session guard', () => {
     assert.deepEqual(
-      shipped.map((e) => [`${e.interaction}:${e.outcome}`, e.kind, e.to, e.triggered, e.route]),
+      shipped.map((e) => [
+        `${e.interaction}:${e.outcome}`,
+        e.kind,
+        e.to,
+        e.triggered,
+        e.route,
+        e.global,
+      ]),
       [
-        ['sign-in:failed', 'stay', null, false, 'auth/callback'],
-        ['sign-in:succeeded', 'returnTo', null, false, 'auth/callback'],
-        ['sign-in-failed:restarted', 'exit', '', true, 'auth/callback'],
-        ['session-guard:signedOut', 'external', 'idp', false, null],
+        ['sign-in:failed', 'stay', null, false, 'auth/callback', false],
+        ['sign-in:succeeded', 'returnTo', null, false, 'auth/callback', false],
+        ['sign-in-failed:restarted', 'exit', '', true, 'auth/callback', false],
+        ['session-expired:signedOut', 'external', 'idp', false, null, true],
+        ['session-guard:signedOut', 'external', 'idp', false, null, true],
       ],
     );
+  });
+
+  it('joins the session expiry to an app that sends platform calls with the bearer', () => {
+    const intercepted = app({
+      'src/app/app.config.ts': `import { provideHttpClient, withInterceptors } from '@angular/common/http';
+import { qitsBearerInterceptor } from '@qits/angular';
+export const config = { providers: [provideHttpClient(withInterceptors([qitsBearerInterceptor]))] };
+`,
+    });
+    assert.deepEqual(
+      declaredOutcomes({ root: intercepted }).declared,
+      byInteraction('session-expired'),
+    );
+    const fetching = app({
+      'src/app/ui/asset.ts': `import { inject } from '@angular/core';
+import { QitsBearerFetch } from '@qits/angular';
+export class Asset {
+  private readonly fetcher = inject(QitsBearerFetch);
+}
+`,
+    });
+    assert.deepEqual(
+      declaredOutcomes({ root: fetching }).declared,
+      byInteraction('session-expired'),
+    );
+    const neither = app({
+      'src/app/app.config.ts': `import { qitsSignedInGuard } from '@qits/angular';
+export const guard = qitsSignedInGuard;
+`,
+    });
+    assert.deepEqual(declaredOutcomes({ root: neither }).declared, byInteraction('session-guard'));
   });
 
   it('joins an app that imports what brings them in, by name or through a namespace', () => {

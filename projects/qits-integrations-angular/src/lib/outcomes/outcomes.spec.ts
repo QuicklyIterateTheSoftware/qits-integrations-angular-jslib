@@ -18,14 +18,19 @@ import {
  * The app's side of the typing seam, as a generated `route-paths.ts` and an app's interactions
  * write it. A module augmentation is global to the program, so every spec compiled with this one
  * sees these names (the outcomes browser specs keep to them); the library build excludes specs.
- * The library's own interactions (`sign-in`, `sign-in-failed`, `session-guard`) are in the list
- * because its sign-in sources are compiled into the same program.
+ * The library's own interactions (`sign-in`, `sign-in-failed`, `session-guard`, `session-expired`)
+ * are in the list because its sign-in sources are compiled into the same program.
  */
 declare module '@qits/angular' {
   interface QitsApp {
     routePath: '' | 'projects' | 'projects/:slug' | 'projects/:slug/work/detail/:id';
     interaction:
-      'create-work-item' | 'open-project' | 'sign-in' | 'sign-in-failed' | 'session-guard';
+      | 'create-work-item'
+      | 'open-project'
+      | 'sign-in'
+      | 'sign-in-failed'
+      | 'session-guard'
+      | 'session-expired';
   }
 }
 
@@ -308,7 +313,12 @@ describe('the typing seam', () => {
       '' | 'projects' | 'projects/:slug' | 'projects/:slug/work/detail/:id'
     >();
     expectTypeOf<InteractionName>().toEqualTypeOf<
-      'create-work-item' | 'open-project' | 'sign-in' | 'sign-in-failed' | 'session-guard'
+      | 'create-work-item'
+      | 'open-project'
+      | 'sign-in'
+      | 'sign-in-failed'
+      | 'session-guard'
+      | 'session-expired'
     >();
   });
 
