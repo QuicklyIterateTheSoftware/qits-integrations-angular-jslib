@@ -1412,7 +1412,7 @@ describe('route-paths generated file', () => {
   });
 });
 
-// navigation-through-outcomes: an external template, and a package that is the library itself.
+// navigation-through-outcomes: an external template, and the library holding itself to the rule.
 touch(
   'src/app/routes/linked/linked.html',
   '<nav>\n  <a routerLink="/projects">Projects</a>\n</nav>\n',
@@ -1426,6 +1426,8 @@ const ROUTER =
 const FIELD = `${ROUTER}export class P {\n  private readonly router = inject(Router);\n  open() {\n    void this.router.navigate(['/projects']);\n  }\n}`;
 const component = (template, extra = '') =>
   `import { Component } from '@angular/core';\n@Component({\n  selector: 'app-x',${extra}\n  template: \`${template}\`,\n})\nexport class X {}`;
+/** The options the library's own lint config gives the rule. */
+const LIBRARY_OPTIONS = { include: ['src/lib/**'], exclude: ['src/lib/outcomes/**'] };
 const NAVIGATE_MESSAGE =
   "Navigate through a declared outcome, not Router.navigate: declare it with outcomes('<interaction>', { <name>: exit('<route path>') }) from @qits/angular and call .go(params).";
 
@@ -1491,8 +1493,13 @@ tester.run('navigation-through-outcomes', rules['navigation-through-outcomes'], 
     { filename: at('src/app/routes/work/work.page.browser.spec.ts'), code: FIELD },
     { filename: at('src/testing/harness.ts'), code: FIELD },
     { filename: at('src/app/api/projects/sdk.gen.ts'), code: FIELD },
-    { filename: inLibrary('src/app/qits-exit.directive.ts'), code: FIELD },
-    { filename: inLibrary('src/lib/outcomes/outcomes.ts'), code: FIELD },
+    // The library's own options: its outcome API navigates by design.
+    {
+      filename: inLibrary('src/lib/outcomes/outcomes.ts'),
+      code: FIELD,
+      options: [LIBRARY_OPTIONS],
+    },
+    { filename: inLibrary('src/lib/outcomes/x.ts'), code: FIELD, options: [LIBRARY_OPTIONS] },
     // Other scopes.
     {
       filename: at('src/app/routes/work/work.page.ts'),
@@ -1514,6 +1521,13 @@ tester.run('navigation-through-outcomes', rules['navigation-through-outcomes'], 
     {
       filename: at('src/app/routes/root.page.ts'),
       code: `${ROUTER}export class RootPage {\n  constructor() {\n    void inject(Router).navigateByUrl('/projects', { replaceUrl: true });\n  }\n}`,
+      errors: [{ messageId: 'navigate', data: { method: 'navigateByUrl' }, line: 5 }],
+    },
+    // The library's own code outside its outcome API, under the library's options.
+    {
+      filename: inLibrary('src/lib/sign-in/x.ts'),
+      code: `${ROUTER}export class Callback {\n  constructor() {\n    void inject(Router).navigateByUrl('/', { replaceUrl: true });\n  }\n}`,
+      options: [LIBRARY_OPTIONS],
       errors: [{ messageId: 'navigate', data: { method: 'navigateByUrl' }, line: 5 }],
     },
     // Aliased imports.

@@ -16,9 +16,6 @@ export const DEFAULT_INCLUDE = ['src/app/**'];
 /** The generated clients: they navigate nowhere, and they are not ours to edit. */
 export const DEFAULT_EXCLUDE = ['src/app/api/**'];
 
-/** The library itself: its `QitsExit` and `go()` navigate by design. */
-const LIBRARY = '@qits/angular';
-
 const NAVIGATE = new Set(['navigate', 'navigateByUrl']);
 
 /** `x!`, `x as T`, `x satisfies T`: the expression inside. */
@@ -86,8 +83,10 @@ function templateLinks(text, url) {
  * then `.go(params)` or `<a [qitsExit]>`), never past them: a `Router.navigate` /
  * `Router.navigateByUrl` call or a raw `routerLink` in a component template is an outcome no one
  * lists or tests. The app's code (option `include`, default `src/app/**`, minus `exclude`, default
- * `src/app/api/**`, both relative to the nearest `package.json`) is read; specs and the library
- * itself are not. There is no type information, so the `Router` is found syntactically: the
+ * `src/app/api/**`, both relative to the nearest `package.json`) is read; specs are not. The
+ * library holds its own code to the rule too (`include: ['src/lib/**']`): only the outcome API's
+ * implementation, whose `QitsExit` and `go()` navigate by design, is left out, by the library's own
+ * `exclude: ['src/lib/outcomes/**']`. There is no type information, so the `Router` is found syntactically: the
  * names it is imported under from `@angular/router`, then `inject(Router)` (from `@angular/core`),
  * a `this.<name>` whose class property is `inject(Router)` or typed `Router` (a constructor
  * parameter property included), and a parameter or variable typed `Router` or initialised with
@@ -126,7 +125,6 @@ export default {
     const absolute = context.physicalFilename ?? context.filename;
     if (isSpec(absolute)) return {};
     const pkg = nearestPackage(absolute);
-    if (pkg?.name === LIBRARY) return {};
     const root = pkg?.dir ?? context.cwd;
     const file = relative(root, absolute).split(sep).join('/');
     const include = (options.include ?? DEFAULT_INCLUDE).map(globRegex);

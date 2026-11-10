@@ -1,6 +1,6 @@
 import { HttpClient, provideHttpClient, withInterceptors } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { DOCUMENT, PLATFORM_ID } from '@angular/core';
+import { DOCUMENT } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { firstValueFrom } from 'rxjs';
 import { qitsBearerInterceptor } from './bearer-interceptor';
