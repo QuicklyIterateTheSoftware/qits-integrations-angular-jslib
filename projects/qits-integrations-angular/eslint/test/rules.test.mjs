@@ -964,6 +964,191 @@ describe('page-screenshots-through-routes opt-out', () => {
   });
 });
 
+// What a page screenshot shows (ticket qits-2074): the whole page, not a part of it.
+/** A spec that opens the route, then screenshots `subject` (after `before`, inside the test). */
+const shotOf = (subject, before = '') => `${OPEN_ROUTE_HEAD}
+it('shows', async () => {
+  const opened = await openRoute('/projects');
+${before}  await expect.element(${subject}).toMatchScreenshot('list', { kind: 'DATA' });
+});`;
+const OPEN_ROUTE_HEAD = "import { openRoute } from '../../../testing/browser/app-route';";
+const partOfPage = (spec = 'projects.page.browser.spec.ts') => [
+  { messageId: 'partOfPage', data: { spec } },
+];
+
+tester.run('page-screenshot-whole-page', rules['page-screenshot-whole-page'], {
+  valid: [
+    { filename: ROUTED_SPEC, code: shotOf('page.elementLocator(opened.frame)') },
+    { filename: ROUTED_SPEC, code: shotOf('opened.frame') },
+    // Bound to the whole page first, awaited or not.
+    {
+      filename: ROUTED_SPEC,
+      code: shotOf('frame', '  const frame = page.elementLocator(opened.frame);\n'),
+    },
+    {
+      filename: ROUTED_SPEC,
+      code: shotOf('frame', '  let frame = await page.elementLocator(opened.frame);\n'),
+    },
+    // Destructured under a wholePage key, trusted by name: `{ frame }`, `{ frame: f }`.
+    {
+      filename: ROUTED_SPEC,
+      code: `async function shown() {\n  const opened = await openRoute('/projects');\n  return { opened, frame: page.elementLocator(opened.frame) };\n}\nit('shows', async () => {\n  const { frame } = await shown();\n  await expect.element(frame).toMatchScreenshot('list', { kind: 'DATA' });\n});`,
+    },
+    { filename: ROUTED_SPEC, code: shotOf('f', '  const { frame: f } = await shown();\n') },
+    // A function of this file whose every return is the whole page; its arguments are not read.
+    {
+      filename: at('src/app/routes/auth-callback.page.browser.spec.ts'),
+      code: `function view(harness: RouterTestingHarness) {\n  return page.elementLocator(harness.routeNativeElement as HTMLElement);\n}\nit('signs in', async () => {\n  const harness = await RouterTestingHarness.create();\n  await expect.element(view(harness)).toMatchScreenshot('done', { kind: 'DATA' });\n});`,
+    },
+    {
+      filename: ROUTED_SPEC,
+      code: shotOf(
+        'whole(opened)',
+        '  const whole = (o: Opened) => page.elementLocator(o.frame);\n',
+      ),
+    },
+    // `!`, `as`, `satisfies` around the subject or inside it.
+    { filename: ROUTED_SPEC, code: shotOf('page.elementLocator(opened.frame!)') },
+    {
+      filename: ROUTED_SPEC,
+      code: shotOf('frame!', '  const frame = page.elementLocator(opened.frame as HTMLElement);\n'),
+    },
+    // `.not` / `.soft` between, and expect(...) itself.
+    {
+      filename: ROUTED_SPEC,
+      code: `it('a', async () => {\n  await expect(opened.frame).not.toMatchScreenshot('a', { kind: 'DATA' });\n  await expect.soft(page.elementLocator(opened.frame)).toMatchScreenshot('b', { kind: 'DATA' });\n});`,
+    },
+    // Another matcher is not a screenshot.
+    { filename: ROUTED_SPEC, code: shotOf('x').replace('toMatchScreenshot', 'toHaveText') },
+    // A spec outside the routes directory, and a non-page browser spec, take crops freely.
+    {
+      filename: at('src/app/layout/shell/shell.layout.browser.spec.ts'),
+      code: shotOf("page.getByRole('banner')"),
+    },
+    {
+      filename: at('src/app/patterns/list/list.browser.spec.ts'),
+      code: shotOf("page.getByRole('list')"),
+    },
+    {
+      filename: at('src/app/routes/projects/project-card.browser.spec.ts'),
+      code: shotOf("page.getByRole('article')"),
+    },
+    // Another wholePage member, and another routes directory.
+    {
+      filename: at('src/pages/home/home.page.browser.spec.ts'),
+      code: shotOf('page.elementLocator(opened.root)'),
+      options: [{ routes: 'src/pages', wholePage: ['root'] }],
+    },
+  ],
+  invalid: [
+    // A helper returning a part of the page: work-item's actions bar.
+    {
+      filename: ROUTED_SPEC,
+      code: shotOf(
+        'actionsOf(element)',
+        "  const element = page.elementLocator(opened.page);\n  const actionsOf = (e: Locator) =>\n    page.elementLocator(e.element().querySelector('[data-page-actions]') as HTMLElement);\n",
+      ),
+      errors: [{ ...partOfPage()[0], line: 7, column: 24 }],
+    },
+    // A locator chain off the whole page.
+    {
+      filename: ROUTED_SPEC,
+      code: shotOf(
+        "frame.getByRole('region', { name: 'Features' })",
+        '  const frame = page.elementLocator(opened.frame);\n',
+      ),
+      errors: partOfPage(),
+    },
+    // Chained further: a node inside the frame.
+    {
+      filename: ROUTED_SPEC,
+      code: shotOf("page.elementLocator(opened.frame.querySelector('x')!)"),
+      errors: partOfPage(),
+    },
+    {
+      filename: ROUTED_SPEC,
+      code: shotOf("page.elementLocator(opened.frame.querySelector('p')!.closest('div')!)"),
+      errors: partOfPage(),
+    },
+    // The innermost routed component, without the shell.
+    {
+      filename: ROUTED_SPEC,
+      code: shotOf('page.elementLocator(opened.page)'),
+      errors: partOfPage(),
+    },
+    // A function parameter, and a name the rule cannot resolve.
+    {
+      filename: ROUTED_SPEC,
+      code: `async function shoot(target: Locator) {\n  await expect.element(target).toMatchScreenshot('x', { kind: 'DATA' });\n}`,
+      errors: partOfPage(),
+    },
+    { filename: ROUTED_SPEC, code: shotOf('somewhere'), errors: partOfPage() },
+    // A helper with one return that is not the whole page.
+    {
+      filename: ROUTED_SPEC,
+      code: `function view(o: Opened, part: boolean) {\n  if (part) return page.elementLocator(o.page);\n  return page.elementLocator(o.frame);\n}\n${shotOf('view(opened, true)')}`,
+      errors: partOfPage(),
+    },
+    // Destructured under a key that is not wholePage.
+    {
+      filename: ROUTED_SPEC,
+      code: shotOf('element', '  const { element } = await shown();\n'),
+      errors: partOfPage(),
+    },
+    // A layout spec under the routes directory taking a crop; one report per screenshot.
+    {
+      filename: ROUTED_LAYOUT_SPEC,
+      code: shotOf(
+        "page.getByRole('navigation')",
+        "  await expect.element(page.getByRole('tab')).not.toMatchScreenshot('b', { kind: 'DATA' });\n",
+      ),
+      errors: [
+        ...partOfPage('work.layout.browser.spec.ts'),
+        ...partOfPage('work.layout.browser.spec.ts'),
+      ],
+    },
+    // The wholePage option replaces the default.
+    {
+      filename: ROUTED_SPEC,
+      code: shotOf('page.elementLocator(opened.frame)'),
+      options: [{ wholePage: ['root'] }],
+      errors: partOfPage(),
+    },
+  ],
+});
+
+describe('page-screenshot-whole-page in recommended', () => {
+  const lint = (code) =>
+    new Linter()
+      .verify(
+        code,
+        [
+          {
+            files: ['**/*.ts'],
+            languageOptions: { parser: tseslint.parser },
+            ...qits.configs.recommended[0],
+          },
+        ],
+        ROUTED_SPEC,
+      )
+      .filter((m) => m.ruleId === 'qits/page-screenshot-whole-page');
+  const crop = shotOf("page.getByRole('main')");
+  it('warns, with the message the brief gives', () => {
+    const [report, ...rest] = lint(crop);
+    assert.deepEqual(rest, []);
+    assert.equal(report.severity, 1);
+    assert.equal(
+      report.message,
+      "projects.page.browser.spec.ts screenshots part of the page: screenshot the whole page (`opened.frame`). For a part of the page, put the screenshot in that component's own browser spec under `patterns/` or `ui/`, or give the page a provider state that shows it.",
+    );
+  });
+  it('a disable comment above the screenshot silences it', () => {
+    const reason =
+      '  // eslint-disable-next-line qits/page-screenshot-whole-page -- the bar is the state';
+    assert.deepEqual(lint(crop.replace('  await expect', `${reason}\n  await expect`)), []);
+  });
+});
+
 const PAGE_SPEC = at('src/app/routes/projects/project-list.page.browser.spec.ts');
 const LAYOUT_SPEC = at('src/app/routes/shell.layout.browser.spec.ts');
 tester.run(
@@ -1841,7 +2026,7 @@ tester.run('navigation-through-outcomes', rules['navigation-through-outcomes'], 
   ],
 });
 
-describe('navigation-through-outcomes and screenshot-kind in recommended', () => {
+describe('navigation-through-outcomes, screenshot-kind and page-screenshot-whole-page in recommended', () => {
   const config = [
     {
       files: ['**/*.ts'],
@@ -1853,9 +2038,14 @@ describe('navigation-through-outcomes and screenshot-kind in recommended', () =>
     const levels = qits.configs.recommended[0].rules;
     assert.equal(levels['qits/navigation-through-outcomes'], 'warn');
     assert.equal(levels['qits/screenshot-kind'], 'warn');
+    assert.equal(levels['qits/page-screenshot-whole-page'], 'warn');
     assert.deepEqual(
       Object.keys(levels).filter((r) => levels[r] === 'warn'),
-      ['qits/navigation-through-outcomes', 'qits/screenshot-kind'],
+      [
+        'qits/page-screenshot-whole-page',
+        'qits/navigation-through-outcomes',
+        'qits/screenshot-kind',
+      ],
     );
   });
   it('warns, and an eslint-disable pair round an inline template silences it', () => {

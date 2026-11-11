@@ -358,8 +358,8 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   with `parseTemplate` from `@angular/compiler`, a **required peer** for that (every Angular app
   has it; the root devDepends on it, which `check-exports` demands). Inline reports land on the
   attribute (literal start + `sourceSpan` offset), or on the `template` property when the literal
-  has escapes; an external one on `templateUrl`, naming `<file>.html:line:col`. It is the one rule
-  `recommended` sets to **`warn`**, because it reports what every unmigrated app has and no fix
+  has escapes; an external one on `templateUrl`, naming `<file>.html:line:col`. It is the first
+  rule `recommended` set to **`warn`**, because it reports what every unmigrated app has and no fix
   clears (the qits-2010 rule below): it stays `warn` here until qits-2005 turns it to `error` in
   the app once the app navigates through outcomes.
   `screenshot-kind` (ticket qits-2046) is the second `warn` rule, for the same reason: in every
@@ -373,6 +373,15 @@ viewportSpecs })`, both off by default so a bump changes nothing until the app o
   from a `*.page.ts` / `*.layout.ts`, a router provider given anything but an identifier imported
   from a route-table file, and (only when neither was reported) a spec calling none of `helpers`
   (default `openRoute`, landing's own helper). The runtime half is in `freezeScreenshots()`.
+  `page-screenshot-whole-page` (ticket qits-2074) is the third `warn` rule, in the same scope
+  (`PAGE_SPEC` and `routeLayout().under()`, the same `routes` options; `unwrap` / `memberName` are
+  shared in `project.mjs`): the subject of each `expect.element(<subject>).toMatchScreenshot(...)`
+  (or `expect(<subject>)`, `.not` / `.soft` between) is the whole page — a member named in
+  `wholePage` (default `frame`, `routeNativeElement`) not chained further, `x.elementLocator(<that>)`,
+  a `const` / `let` bound to one (awaited too) or destructured under a `wholePage` key (trusted by
+  name), or a call to a function of the same file whose every return is one (arguments not read).
+  Anything else is reported once, on the subject. It stays `warn` until qits-landing-app fixes its
+  crops, in its own ticket, and turns it to `error` there.
   **A rule added to `configs.recommended` must pass on a consumer that has not adopted it yet**: it
   is `error` on every consumer's whole codebase the moment the library bumps, so it may only report
   on something a consumer opts into by a file existing (as `route-paths` now does) or something

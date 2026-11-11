@@ -252,6 +252,23 @@ export function literalText(node) {
   return undefined;
 }
 
+/** `x!`, `x as T`, `x satisfies T`: the expression inside. */
+export function unwrap(node) {
+  while (
+    node &&
+    ['TSNonNullExpression', 'TSAsExpression', 'TSSatisfiesExpression'].includes(node.type)
+  ) {
+    node = node.expression;
+  }
+  return node;
+}
+
+/** A member's name when it is plain (`.x`, `['x']`); otherwise undefined. */
+export function memberName(node) {
+  if (!node.computed) return node.property.name;
+  return literalText(node.property);
+}
+
 /** `x as Routes`, `x satisfies Routes`, `x!`: the expression inside. */
 function unwrapParent(node) {
   let parent = node.parent;

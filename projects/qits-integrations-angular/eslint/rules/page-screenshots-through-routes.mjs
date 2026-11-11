@@ -3,9 +3,10 @@ import {
   DEFAULT_ROUTE_TABLES,
   ROUTES_SCHEMA,
   globRegex,
-  literalText,
+  memberName,
   pageKind,
   routeLayout,
+  unwrap,
 } from '../project.mjs';
 
 /** The helpers that open a page through the app's routes, unless the rule is told otherwise. */
@@ -19,23 +20,6 @@ const ROUTER_PROVIDERS = {
   '@angular/router': { provideRouter: '', RouterModule: 'forRoot' },
   '@angular/router/testing': { RouterTestingModule: 'withRoutes' },
 };
-
-/** `x!`, `x as T`, `x satisfies T`: the expression inside. */
-function unwrap(node) {
-  while (
-    node &&
-    ['TSNonNullExpression', 'TSAsExpression', 'TSSatisfiesExpression'].includes(node.type)
-  ) {
-    node = node.expression;
-  }
-  return node;
-}
-
-/** A member's name when it is plain (`.x`, `['x']`); otherwise undefined. */
-function memberName(node) {
-  if (!node.computed) return node.property.name;
-  return literalText(node.property);
-}
 
 /**
  * A page or layout screenshot spec under the routes directory shows the page where the app shows
