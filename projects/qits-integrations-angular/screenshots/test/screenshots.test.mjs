@@ -12,6 +12,7 @@ import {
   completeForFreezes,
   declaredOutcomes,
   findOrphans,
+  freezeFile,
   freezeSlug,
   pruneOrphans,
   screenshotReferences,
@@ -471,6 +472,8 @@ describe('screenshot freezes', () => {
           spec: PAGE,
           test: 't list',
           name: 'list',
+          kind: null,
+          viewport: null,
           route: 'projects',
           records,
           triggers: [],
@@ -480,6 +483,8 @@ describe('screenshot freezes', () => {
           spec: PAGE,
           test: 't menu/open',
           name: 'menu/open',
+          kind: null,
+          viewport: null,
           route: 'projects',
           records,
           triggers: [],
@@ -490,6 +495,8 @@ describe('screenshot freezes', () => {
           spec: CARD,
           test: 't card',
           name: 'card',
+          kind: null,
+          viewport: null,
           route: null,
           records,
           triggers: [],
@@ -503,6 +510,8 @@ describe('screenshot freezes', () => {
       'spec',
       'test',
       'name',
+      'kind',
+      'viewport',
       'route',
       'records',
       'triggers',
@@ -607,6 +616,110 @@ describe('screenshot freezes', () => {
       'containsOnly wins over the source',
     );
     assert.equal(completeForFreezes(module(root, PAGE), { filtered: true }), false);
+  });
+
+  // Ticket qits-2046: what each shot says it shows, and the preset width it was taken at.
+  /** Sends `payloads` (beside name and test: kind, viewport) for CARD and ends the run. */
+  function send(root, payloads, modules) {
+    const vitest = { config: { reporters: [] } };
+    const project = { config: { root, browser: { enabled: true } } };
+    screenshotReferences({ freezes: true }).configureVitest({ vitest, project });
+    const [reporter] = vitest.config.reporters;
+    reporter.onTestRunStart([]);
+    for (const payload of payloads) {
+      project.config.browser.commands.qitsFreeze(
+        { testPath: join(root, CARD) },
+        { test: 't', html: `<p>${payload.name}</p>`, route: null, records: [], ...payload },
+      );
+    }
+    reporter.onTestRunEnd(modules ?? [module(root, CARD)]);
+  }
+
+  it('records the kind each shot gave, and null for none or one outside the enum', () => {
+    const root = app({ [CARD]: 'spec' });
+    send(root, [
+      { name: 'data', kind: 'DATA' },
+      { name: 'empty', kind: 'NO_DATA' },
+      { name: 'waiting', kind: 'PENDING' },
+      { name: 'refused', kind: 'ERROR' },
+      { name: 'unsaid' },
+      { name: 'odd', kind: 'data' },
+    ]);
+    assert.deepEqual(
+      manifest(root).freezes.map((f) => [f.name, f.kind, f.viewport]),
+      [
+        ['data', 'DATA', null],
+        ['empty', 'NO_DATA', null],
+        ['odd', null, null],
+        ['refused', 'ERROR', null],
+        ['unsaid', null, null],
+        ['waiting', 'PENDING', null],
+      ],
+    );
+  });
+
+  it('names the freeze of a shot at a preset width <name>-<viewport>.html, the name unchanged', () => {
+    const root = app({ [CARD]: 'spec' });
+    send(root, [
+      ...['PHONE', 'TABLET', 'DESKTOP'].map((viewport) => ({
+        name: 'menu/open',
+        kind: 'DATA',
+        viewport,
+      })),
+      { name: 'hover', kind: 'DATA', viewport: 'DESKTOP' },
+      // A width outside the enum is a shot at the test's own viewport.
+      { name: 'own', kind: 'DATA', viewport: 'WATCH' },
+    ]);
+    assert.deepEqual(
+      manifest(root).freezes.map((f) => [f.file, f.name, f.viewport]),
+      [
+        [`${CARD}/hover-desktop.html`, 'hover', 'DESKTOP'],
+        [`${CARD}/menu/open-desktop.html`, 'menu/open', 'DESKTOP'],
+        [`${CARD}/menu/open-phone.html`, 'menu/open', 'PHONE'],
+        [`${CARD}/menu/open-tablet.html`, 'menu/open', 'TABLET'],
+        [`${CARD}/own.html`, 'own', null],
+      ],
+    );
+    assert.equal(read(root, `${CARD}/menu/open-tablet.html`), '<p>menu/open</p>');
+    assert.equal(freezeFile(CARD, 'detail: an epic', 'PHONE'), `${CARD}/detail-an-epic-phone.html`);
+    assert.equal(freezeFile(CARD, 'detail: an epic'), `${CARD}/detail-an-epic.html`);
+  });
+
+  it('reads a manifest written before kind and viewport, and writes its kept entries back with null', () => {
+    const root = app({ [PAGE]: 'spec', [CARD]: 'spec' });
+    const old = {
+      file: `${PAGE}/list.html`,
+      spec: PAGE,
+      test: 't list',
+      name: 'list',
+      route: 'projects',
+      records: [],
+      triggers: ['projects:open'],
+    };
+    mkdirSync(join(root, DIR, PAGE), { recursive: true });
+    writeFileSync(join(root, DIR, PAGE, 'list.html'), '<p>old</p>');
+    writeFileSync(
+      join(root, DIR, 'manifest.json'),
+      `${JSON.stringify({ routes: [], freezes: [old], byRoute: { projects: [old.file] } })}\n`,
+    );
+    // PAGE did not run: its entry is kept as it was, and reads with the new fields as null.
+    send(root, [{ name: 'card', kind: 'DATA' }]);
+    assert.deepEqual(manifest(root).freezes, [
+      { ...old, kind: null, viewport: null },
+      {
+        file: `${CARD}/card.html`,
+        spec: CARD,
+        test: 't',
+        name: 'card',
+        kind: 'DATA',
+        viewport: null,
+        route: null,
+        records: [],
+        triggers: [],
+      },
+    ]);
+    assert.equal(read(root, `${PAGE}/list.html`), '<p>old</p>');
+    assert.deepEqual(manifest(root).byRoute, { projects: [old.file] });
   });
 
   it('takes another directory and other route specs', () => {
@@ -1081,7 +1194,7 @@ describe('outcomes in the freeze manifest', () => {
     route,
   });
   /**
-   * A run: `steps` per spec, in order, each `['shot', test, name, outcomes, triggers]` or
+   * A run: `steps` per spec, in order, each `['shot', test, name, outcomes, triggers, viewport?]` or
    * `['fired', test, ...outcome names]`; `modules` the outcome of each spec (default passed).
    */
   function run(root, steps, modules) {
@@ -1100,7 +1213,7 @@ describe('outcomes in the freeze manifest', () => {
             rest.map((outcome) => fire(test, outcome)),
           );
         } else {
-          const [name, outcomes, triggers] = rest;
+          const [name, outcomes, triggers, viewport] = rest;
           qitsFreeze(context, {
             name,
             test,
@@ -1110,6 +1223,8 @@ describe('outcomes in the freeze manifest', () => {
             assets: [],
             outcomes,
             triggers,
+            kind: 'DATA',
+            viewport,
           });
         }
       }
@@ -1200,6 +1315,26 @@ describe('outcomes in the freeze manifest', () => {
         [other, 'lists', 'refused'],
         [CARD, 'opens', 'refused'],
       ],
+    );
+  });
+
+  // Ticket qits-2046: a shot at the preset widths is three freezes, PHONE first; the link a
+  // reader follows is the DESKTOP one, and the first freeze when the shot has no DESKTOP.
+  it("links a fire to the DESKTOP freeze of the first shot after it, else to that shot's first", () => {
+    const root = app({ [PAGE]: 'spec' });
+    const widths = (test, name, outcomes, viewports = ['PHONE', 'TABLET', 'DESKTOP']) =>
+      viewports.map((viewport) => ['shot', test, name, outcomes, [], viewport]);
+    run(root, {
+      [PAGE]: [
+        ...widths('refuses', 'before', 0),
+        ...widths('refuses', 'refused', 1),
+        ...widths('refuses', 'later', 2, ['PHONE', 'TABLET']),
+        ['fired', 'refuses', 'refused', 'refused'],
+      ],
+    });
+    assert.deepEqual(
+      manifest(root).outcomes.fired.map((f) => f.freeze),
+      [`${PAGE}/refused-desktop.html`, `${PAGE}/later-phone.html`],
     );
   });
 

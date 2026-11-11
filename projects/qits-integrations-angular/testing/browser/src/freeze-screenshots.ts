@@ -13,10 +13,17 @@
  * A page or layout spec under the routes directory ({@link DEFAULT_ROUTE_SPECS}, ticket qits-1998)
  * must show the page through the app's own routes: a shot it takes on a TestBed without the app's
  * router, or on a stand-in route table, fails the test, and nothing is frozen for it.
+ *
+ * A shot says what state it shows (ticket qits-2046): `toMatchScreenshot(name, { kind: 'DATA' })`,
+ * recorded as the freeze's `kind` (`null` without one; {@link FreezeScreenshotsOptions.requireKind}
+ * refuses that). A shot in a spec {@link FreezeScreenshotsOptions.viewportSpecs} matches is taken at
+ * each preset width ({@link SCREENSHOT_VIEWPORTS}): one PNG and one freeze per width, named
+ * `<name>-phone`, `-tablet`, `-desktop`, after which the test's own viewport is restored.
  */
-import { TestBed } from '@angular/core/testing';
+import { ApplicationRef } from '@angular/core';
+import { TestBed, getTestBed } from '@angular/core/testing';
 import { ROUTES, Router, type Route, type Routes } from '@angular/router';
-import { beforeAll, beforeEach, chai, expect } from 'vitest';
+import { beforeAll, beforeEach, chai, expect, vi } from 'vitest';
 import { describeRoutes, type RouteDescription } from './describe-routes';
 import {
   DEFAULT_DROPPED_INLINE_STYLES,
@@ -31,6 +38,16 @@ import {
   type TestRecord,
 } from './golden-master-guard';
 import { outcomeRecords } from './record-outcomes';
+import {
+  SCREENSHOT_KINDS,
+  type ScreenshotKind,
+  type ScreenshotViewport,
+  shotRequest,
+  shotViewports,
+  viewportName,
+  viewportSize,
+  vitestArgs,
+} from './screenshot-options';
 import { visibleTriggers } from './visible-triggers';
 
 /** The browser command each freeze is sent to; `screenshotReferences({ freezes })` registers it. */
@@ -67,6 +84,14 @@ export interface ScreenshotFreezePayload {
   readonly outcomes: number;
   /** The `<interaction>:<outcome>` trigger marks visible in the shot, sorted (`visibleTriggers`). */
   readonly triggers: string[];
+  /** The state the shot shows, as the spec gave it (`toMatchScreenshot(…, { kind })`), or `null`. */
+  readonly kind: ScreenshotKind | null;
+  /**
+   * The preset width the shot was taken at, in a spec `viewportSpecs` matches; `null` for a shot at
+   * the test's own viewport. `name` stays the name the spec gave: the Node side names the freeze
+   * `<name>-<viewport>.html`, as Vitest names the PNG `<name>-<viewport>-<browser>-<platform>.png`.
+   */
+  readonly viewport: ScreenshotViewport | null;
 }
 
 /** Options for {@link freezeScreenshots}. */
@@ -96,6 +121,22 @@ export interface FreezeScreenshotsOptions {
    * matched a route pattern at all. Any other shot fails its test, and nothing is frozen for it.
    */
   readonly routeSpecs?: RegExp;
+  /**
+   * Refuse a shot without a kind (ticket qits-2046): `toMatchScreenshot` without
+   * `{ kind: 'DATA' | 'NO_DATA' | 'PENDING' | 'ERROR' }` fails its test before Vitest's matcher
+   * runs, and nothing is frozen for it. Default `false`: the freeze records `kind: null`, so an app
+   * that has not given its shots kinds yet is not red; it turns this on with the lint rule
+   * `qits/screenshot-kind` at `error`.
+   */
+  readonly requireKind?: boolean;
+  /**
+   * The specs whose shots are taken at every preset width ({@link SCREENSHOT_VIEWPORTS}, PHONE,
+   * TABLET, DESKTOP), matched against the test file's path. Default none: every shot is one shot
+   * at the test's own viewport, as before. The recommended value is {@link DEFAULT_ROUTE_SPECS}
+   * (the page and layout specs), widened as the app needs (the shell's spec). The spec path
+   * decides, not the element: every page shot is an element shot of the shell's frame.
+   */
+  readonly viewportSpecs?: RegExp;
 }
 
 /** The key Angular gives a named outlet's componentless route (`standardizeConfig`). */
@@ -224,6 +265,7 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
   const renameClasses = options.renameClasses ?? DEFAULT_RENAMED_CLASSES;
   const dropInlineStyles = options.dropInlineStyles ?? DEFAULT_DROPPED_INLINE_STYLES;
   const routeSpecs = options.routeSpecs ?? DEFAULT_ROUTE_SPECS;
+  const viewportSpecs = options.viewportSpecs;
   beforeEach(() => clearTestRecords());
   if (options.routes) {
     const routes: RouteDescription[] = describeRoutes(options.routes);
@@ -251,38 +293,159 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
     (original: (...args: unknown[]) => unknown) =>
       async function (this: Chai.AssertionStatic, ...args: unknown[]) {
         const test = expect.getState().currentTestName ?? '';
-        const name = typeof args[0] === 'string' ? args[0] : `${test} ${count(this)}`;
-        await original.apply(this, args);
+        const request = shotRequest(args);
+        // Counted for every call, named or not, as Vitest counts them for its default name.
+        const number = count(this);
+        const name = request.name ?? `${test} ${number}`;
         const testPath = (expect.getState().testPath ?? '').split('\\').join('/');
-        const why = routeSpecs.test(testPath) ? notThroughRoutes(options.routes) : undefined;
-        if (why) {
-          throw new Error(
+        const refuse = async (what: string, fix: string) =>
+          new Error(
             `freezeScreenshots: ${await specName(testPath)} took the screenshot '${name}' in ` +
-              `'${test}' without the app's routes: ${why}. A page or layout spec under the ` +
-              "routes directory shows the page where the app shows it: open the page through the app's " +
-              'routes (openRoute(), or provideRouter(routes) with the routes from app.routes.ts) and ' +
-              'navigate to its URL before the shot. Nothing was frozen for it.',
+              `'${test}' ${what}. ${fix} Nothing was frozen for it.`,
+          );
+        if (request.problem) {
+          throw await refuse(
+            `with malformed options: ${request.problem}`,
+            `Give a kind from ${SCREENSHOT_KINDS.join(', ')}, and leave widths out only with ` +
+              "{ viewports: ['DESKTOP'], reason: '…' } (PHONE, TABLET, DESKTOP).",
           );
         }
-        const target = shotTarget(chai.util.flag(this, 'object'));
-        // On the live DOM, before the serializer: the HTML cannot tell a hidden mark from a shown one.
-        const triggers = visibleTriggers(target, document);
-        const freeze = freezeShot(target, document, { renameClasses, dropInlineStyles });
-        const payload: ScreenshotFreezePayload = {
-          name,
-          test,
-          html: freeze.html,
-          route: currentRoutePattern(),
-          records: currentTestRecords(),
-          assets: freeze.assets,
-          outcomes: outcomeRecords().length,
-          triggers,
+        if (options.requireKind && request.kind === null) {
+          throw await refuse(
+            'without a kind',
+            "Say what state it shows: toMatchScreenshot(name, { kind: 'DATA' }), one of " +
+              `${SCREENSHOT_KINDS.join(', ')} (a refused write is ERROR).`,
+          );
+        }
+        const viewports = shotViewports(request, viewportSpecs?.test(testPath) ?? false);
+
+        /** Vitest's matcher on the shot `as` names, then the route check, then the freeze. */
+        const shoot = async (as: string | undefined, viewport: ScreenshotViewport | null) => {
+          await original.apply(this, vitestArgs(as, request.options));
+          const why = routeSpecs.test(testPath) ? notThroughRoutes(options.routes) : undefined;
+          if (why) {
+            throw await refuse(
+              `without the app's routes: ${why}`,
+              'A page or layout spec under the routes directory shows the page where the app ' +
+                "shows it: open the page through the app's routes (openRoute(), or " +
+                'provideRouter(routes) with the routes from app.routes.ts) and navigate to its URL ' +
+                'before the shot.',
+            );
+          }
+          const target = shotTarget(chai.util.flag(this, 'object'));
+          // On the live DOM, before the serializer: the HTML cannot tell a hidden mark from a shown one.
+          const triggers = visibleTriggers(target, document);
+          const freeze = freezeShot(target, document, { renameClasses, dropInlineStyles });
+          const payload: ScreenshotFreezePayload = {
+            name,
+            test,
+            html: freeze.html,
+            route: currentRoutePattern(),
+            records: currentTestRecords(),
+            assets: freeze.assets,
+            outcomes: outcomeRecords().length,
+            triggers,
+            kind: request.kind,
+            viewport,
+          };
+          await (
+            await command(FREEZE_COMMAND)
+          )(payload);
         };
-        await (
-          await command(FREEZE_COMMAND)
-        )(payload);
+
+        if (!viewports) {
+          await shoot(request.name, null);
+          return;
+        }
+        const { page } = await import('vitest/browser');
+        const own = { width: window.innerWidth, height: window.innerHeight };
+        try {
+          for (const viewport of viewports) {
+            const size = viewportSize(viewport, own);
+            await page.viewport(size.width, size.height);
+            await settle();
+            try {
+              await shoot(viewportName(name, viewport), viewport);
+            } catch (error) {
+              throw atWidth(error, viewport, size);
+            }
+          }
+        } finally {
+          await page.viewport(own.width, own.height);
+          await settle();
+        }
       },
   );
+}
+
+/** The error a failure at one preset width throws: the same error, its message naming the width. */
+function atWidth(
+  error: unknown,
+  viewport: ScreenshotViewport,
+  size: { width: number; height: number },
+): unknown {
+  const prefix = `at ${viewport} (${size.width}x${size.height}): `;
+  if (error instanceof Error) {
+    try {
+      error.message = prefix + error.message;
+      return error;
+    } catch {
+      // a read-only message: wrap it instead
+    }
+  }
+  return new Error(prefix + String(error), { cause: error });
+}
+
+/**
+ * The page's own `requestAnimationFrame` and `setTimeout`, taken when this module loads (in the
+ * setup file, before any test): `vi.useFakeTimers()` fakes both by default in Vitest 4 and 5
+ * (every timer but `nextTick` and `queueMicrotask`), and a frame asked of the fake clock never
+ * comes unless the test advances it. The page keeps drawing real frames all the same.
+ */
+const nativeFrame: (callback: () => void) => unknown =
+  typeof requestAnimationFrame === 'function'
+    ? requestAnimationFrame.bind(globalThis)
+    : (callback) => setTimeout(callback, 16);
+const nativeTimeout = setTimeout.bind(globalThis);
+
+/** How long a shot waits for the app to be stable after a resize before it is taken anyway. */
+const STABLE_WAIT_MS = 250;
+
+/**
+ * Lets the layout settle after a resize: two real animation frames (style, layout and the resize
+ * observers run between them), then the TestBed app's `ApplicationRef.whenStable()`, when a test
+ * module exists, so change detection a breakpoint signal scheduled has run.
+ *
+ * - The stability wait is bounded ({@link STABLE_WAIT_MS}): a `PENDING` shot keeps the app
+ *   unstable on purpose (an unflushed request is a pending task), so stability is waited for, not
+ *   required.
+ * - Under fake timers it is skipped: zoneless change detection is scheduled on `setTimeout` and
+ *   `requestAnimationFrame`, both fake then, so the app is stable only when the test's clock runs.
+ *   The frames are the native ones, so the CSS (media queries need no change detection) follows the
+ *   width all the same.
+ * - The test module is looked up without creating one (`TestBed.inject` would compile an empty
+ *   module and lock the TestBed's configuration for the rest of the test).
+ */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 2; i++) await new Promise<void>((resolve) => nativeFrame(resolve));
+  if (vi.isFakeTimers()) return;
+  const app = testBedApplication();
+  if (!app) return;
+  await Promise.race([
+    app.whenStable(),
+    new Promise<void>((resolve) => nativeTimeout(resolve, STABLE_WAIT_MS)),
+  ]);
+}
+
+/** The TestBed's `ApplicationRef` when a test module exists, else undefined (never creates one). */
+function testBedApplication(): ApplicationRef | undefined {
+  try {
+    const testBed = getTestBed() as unknown as { _testModuleRef?: unknown };
+    if (!testBed._testModuleRef) return undefined;
+    return TestBed.inject(ApplicationRef, null) ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** The shot's number in its test, counted as Vitest counts it for the default name. */

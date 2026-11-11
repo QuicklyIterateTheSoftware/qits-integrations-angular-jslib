@@ -132,34 +132,11 @@ describe('screenshotReferences in a Vitest browser run', { timeout: 180_000 }, (
   });
 });
 
-// The screenshot freezes (ticket qits-1947): freezeScreenshots() and recordOutcomes() in the setup
-// file (the library's source, with @qits/angular pointed at the two modules they use),
-// screenshotReferences({ freezes }) in the config.
-describe('screenshot freezes in a Vitest browser run', { timeout: 300_000 }, () => {
-  const LIBRARY = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-  const app = mkdtempSync(join(process.cwd(), 'tmp', 'freezes-run-'));
-  after(() => rmSync(app, { recursive: true, force: true }));
-  const put = (path, content) => {
-    mkdirSync(dirname(join(app, path)), { recursive: true });
-    writeFileSync(join(app, path), content);
-  };
-  const FORM = 'src/form/form.browser.spec.ts';
-  const FREEZES = join(app, 'src/testing/browser/freezes');
-  const freeze = (name) => join(FREEZES, FORM, `${name}.html`);
-  const manifest = () => JSON.parse(readFileSync(join(FREEZES, 'manifest.json'), 'utf8'));
-  /** Every file under the freeze directory, path → content. */
-  const tree = () =>
-    Object.fromEntries(
-      readdirSync(FREEZES, { recursive: true, withFileTypes: true })
-        .filter((entry) => entry.isFile())
-        .map((entry) => join(entry.parentPath, entry.name))
-        .sort()
-        .map((path) => [path.slice(FREEZES.length + 1), readFileSync(path, 'utf8')]),
-    );
-
-  put(
-    'vitest.config.mjs',
-    `import { playwright } from '@vitest/browser-playwright';
+/**
+ * The Vitest config of a throwaway app with freezes on: `@qits/angular` points at `src/qits-angular.ts`
+ * there (the two modules of the library the setup uses), the setup file is `src/setup.ts`.
+ */
+const freezesConfig = (app) => `import { playwright } from '@vitest/browser-playwright';
 import { defineConfig } from 'vitest/config';
 import { screenshotReferences } from ${JSON.stringify(INDEX)};
 
@@ -194,8 +171,34 @@ export default defineConfig({
     },
   },
 });
-`,
-  );
+`;
+
+// The screenshot freezes (ticket qits-1947): freezeScreenshots() and recordOutcomes() in the setup
+// file (the library's source, with @qits/angular pointed at the two modules they use),
+// screenshotReferences({ freezes }) in the config.
+describe('screenshot freezes in a Vitest browser run', { timeout: 300_000 }, () => {
+  const LIBRARY = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const app = mkdtempSync(join(process.cwd(), 'tmp', 'freezes-run-'));
+  after(() => rmSync(app, { recursive: true, force: true }));
+  const put = (path, content) => {
+    mkdirSync(dirname(join(app, path)), { recursive: true });
+    writeFileSync(join(app, path), content);
+  };
+  const FORM = 'src/form/form.browser.spec.ts';
+  const FREEZES = join(app, 'src/testing/browser/freezes');
+  const freeze = (name) => join(FREEZES, FORM, `${name}.html`);
+  const manifest = () => JSON.parse(readFileSync(join(FREEZES, 'manifest.json'), 'utf8'));
+  /** Every file under the freeze directory, path → content. */
+  const tree = () =>
+    Object.fromEntries(
+      readdirSync(FREEZES, { recursive: true, withFileTypes: true })
+        .filter((entry) => entry.isFile())
+        .map((entry) => join(entry.parentPath, entry.name))
+        .sort()
+        .map((path) => [path.slice(FREEZES.length + 1), readFileSync(path, 'utf8')]),
+    );
+
+  put('vitest.config.mjs', freezesConfig(app));
   put(
     'src/qits-angular.ts',
     `export * from ${JSON.stringify(join(LIBRARY, 'src/lib/route-telemetry.ts'))};
@@ -343,6 +346,8 @@ it('a shown box', async () => {
           spec: FORM,
           test: 'a filled form',
           name: 'filled',
+          kind: null,
+          viewport: null,
           route: null,
           records: [],
           triggers: [],
@@ -352,6 +357,8 @@ it('a shown box', async () => {
           spec: FORM,
           test: 'an open menu',
           name: 'menu/open',
+          kind: null,
+          viewport: null,
           route: null,
           records: [],
           // The hidden button's mark is in the HTML, but not visible in the shot.
@@ -362,6 +369,8 @@ it('a shown box', async () => {
           spec: HELD,
           test: 'a shown box',
           name: 'shown',
+          kind: null,
+          viewport: null,
           route: null,
           records: [],
           triggers: [],
@@ -463,5 +472,279 @@ it('a bare page', async () => {
       [HELD],
     );
     rmSync(join(app, 'src/app'), { recursive: true, force: true });
+  });
+});
+
+// Kinds and preset widths (ticket qits-2046): freezeScreenshots({ requireKind, viewportSpecs }) in a
+// real run. The specs under src/pages/ are the viewport specs; the others take one shot.
+describe('screenshot kinds and preset widths in a Vitest browser run', { timeout: 300_000 }, () => {
+  const LIBRARY = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const app = mkdtempSync(join(process.cwd(), 'tmp', 'kinds-run-'));
+  after(() => rmSync(app, { recursive: true, force: true }));
+  const put = (path, content) => {
+    mkdirSync(dirname(join(app, path)), { recursive: true });
+    writeFileSync(join(app, path), content);
+  };
+  const FREEZES = join(app, 'src/testing/browser/freezes');
+  const manifest = () => JSON.parse(readFileSync(join(FREEZES, 'manifest.json'), 'utf8'));
+  const KINDS = 'src/kinds/kinds.browser.spec.ts';
+  const REFUSALS = 'src/refusals/refusals.browser.spec.ts';
+  const PAGE = 'src/pages/box.page.browser.spec.ts';
+  const png = (spec, name) =>
+    join(
+      app,
+      dirname(spec),
+      '__screenshots__',
+      spec.slice(spec.lastIndexOf('/') + 1),
+      `${name}-chromium-${platform()}.png`,
+    );
+  const freeze = (spec, name) => readFileSync(join(FREEZES, spec, `${name}.html`), 'utf8');
+
+  put('vitest.config.mjs', freezesConfig(app));
+  put(
+    'src/qits-angular.ts',
+    `export * from ${JSON.stringify(join(LIBRARY, 'src/lib/route-telemetry.ts'))};
+export * from ${JSON.stringify(join(LIBRARY, 'src/lib/outcomes/outcome-recorder.ts'))};
+`,
+  );
+  put(
+    'src/setup.ts',
+    `import '@angular/compiler';
+import { freezeScreenshots } from ${JSON.stringify(join(LIBRARY, 'testing/browser/src/freeze-screenshots.ts'))};
+import { recordOutcomes } from ${JSON.stringify(join(LIBRARY, 'testing/browser/src/record-outcomes.ts'))};
+
+recordOutcomes();
+freezeScreenshots({ requireKind: true, viewportSpecs: /\\/src\\/pages\\/.*\\.page\\.browser\\.spec\\.ts$/ });
+`,
+  );
+  // The box shows the viewport it was laid out at, so each freeze tells its width.
+  const BOX = `const box = () => {
+  document.body.innerHTML = '<div data-testid="box" style="width:60px;height:20px;background:teal"></div>';
+  const el = document.querySelector('[data-testid="box"]')!;
+  const show = () => (el.textContent = innerWidth + 'x' + innerHeight);
+  show();
+  addEventListener('resize', show);
+  return page.getByTestId('box');
+};
+`;
+  put(
+    KINDS,
+    `import { expect, it } from 'vitest';
+import { page } from 'vitest/browser';
+
+${BOX}
+for (const kind of ['DATA', 'NO_DATA', 'PENDING', 'ERROR']) {
+  it('a ' + kind + ' shot', async () => {
+    await expect.element(box()).toMatchScreenshot(kind.toLowerCase(), { kind });
+  });
+}
+
+it('counts every shot', async () => {
+  // Vitest numbers an unnamed shot by every call in the test, named or not: this one is "2".
+  await expect.element(box()).toMatchScreenshot('first', { kind: 'DATA' });
+  await expect.element(box()).toMatchScreenshot({ kind: 'DATA' });
+});
+`,
+  );
+  put(
+    REFUSALS,
+    `import { expect, it } from 'vitest';
+import { page } from 'vitest/browser';
+
+${BOX}
+it('no kind', async () => {
+  await expect.element(box()).toMatchScreenshot('bare');
+});
+
+it('no reason', async () => {
+  await expect.element(box()).toMatchScreenshot('hover', { kind: 'DATA', viewports: ['DESKTOP'] });
+});
+
+it('an unknown width', async () => {
+  await expect.element(box()).toMatchScreenshot('watch', { kind: 'DATA', viewports: ['WATCH'], reason: 'r' } as never);
+});
+`,
+  );
+  put(
+    PAGE,
+    `import { Component, signal } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
+import { BrowserTestingModule, platformBrowserTesting } from '@angular/platform-browser/testing';
+import { expect, it, vi } from 'vitest';
+import { page } from 'vitest/browser';
+import { recordOutcome } from '@qits/angular';
+
+TestBed.initTestEnvironment(BrowserTestingModule, platformBrowserTesting());
+
+${BOX}
+const size = () => [innerWidth, innerHeight];
+
+it('three widths', async () => {
+  const before = size();
+  recordOutcome({ interaction: 'box', outcome: 'open', kind: 'stay', to: null });
+  await expect.element(box()).toMatchScreenshot('three', { kind: 'DATA' });
+  expect(size()).toEqual(before);
+});
+
+it('a tall page', async () => {
+  await page.viewport(800, 3400);
+  await expect.element(box()).toMatchScreenshot('tall', { kind: 'NO_DATA' });
+  expect(size()).toEqual([800, 3400]);
+});
+
+it('an opt-out', async () => {
+  await expect.element(box()).toMatchScreenshot('hover', {
+    kind: 'DATA',
+    viewports: ['DESKTOP'],
+    reason: 'needs a fine pointer',
+  });
+});
+
+it('under fake timers', async () => {
+  vi.useFakeTimers();
+  try {
+    await expect.element(box()).toMatchScreenshot('faked', { kind: 'PENDING' });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// Change detection a resize schedules has run before each shot: the settle waits for the app.
+const Width = Component({
+  selector: 'app-width',
+  template: '<p data-testid="width" style="width:60px">{{ width() }}</p>',
+  // $event.target: a bare innerWidth in a template is the component's (undefined), not the window's.
+  host: { '(window:resize)': 'width.set($any($event.target).innerWidth)' },
+})(
+  class Width {
+    readonly width = signal(innerWidth);
+  },
+);
+
+it('an Angular view', async () => {
+  TestBed.createComponent(Width).detectChanges();
+  await expect.element(page.getByTestId('width')).toMatchScreenshot('view', { kind: 'DATA' });
+});
+`,
+  );
+
+  /** One update run's failure messages, per spec (relative to the app). */
+  async function failuresOf({ update = true } = {}) {
+    const vitest = await startVitest('test', [], {
+      root: app,
+      watch: false,
+      update,
+      reporters: ['dot'],
+    });
+    const failures = {};
+    const collect = (task, spec) => {
+      for (const error of task.result?.errors ?? []) {
+        (failures[spec] ??= []).push(`${task.name}: ${error.message}`);
+      }
+      for (const child of task.tasks ?? []) collect(child, spec);
+    };
+    for (const file of vitest.state.getFiles()) collect(file, file.filepath.slice(app.length + 1));
+    await vitest.close();
+    process.exitCode = 0;
+    return failures;
+  }
+
+  let failures;
+  before(async () => {
+    failures = await failuresOf();
+  });
+
+  it('records the kind of each shot, with one shot outside the viewport specs', () => {
+    assert.deepEqual(Object.keys(failures), [REFUSALS]);
+    assert.deepEqual(
+      manifest()
+        .freezes.filter((f) => f.spec === KINDS)
+        .map((f) => [f.file, f.name, f.kind, f.viewport]),
+      [
+        [`${KINDS}/counts-every-shot-2.html`, 'counts every shot 2', 'DATA', null],
+        [`${KINDS}/data.html`, 'data', 'DATA', null],
+        [`${KINDS}/error.html`, 'error', 'ERROR', null],
+        [`${KINDS}/first.html`, 'first', 'DATA', null],
+        [`${KINDS}/no_data.html`, 'no_data', 'NO_DATA', null],
+        [`${KINDS}/pending.html`, 'pending', 'PENDING', null],
+      ],
+    );
+    assert.ok(existsSync(png(KINDS, 'data')));
+    // The PNG and the freeze of the unnamed shot carry the same number (Vitest slugs the PNG's).
+    assert.ok(existsSync(png(KINDS, 'counts-every-shot-2')));
+  });
+
+  it('refuses a shot without a kind, and an opt-out without a reason or with an unknown width', () => {
+    const [noKind, noReason, unknownWidth] = failures[REFUSALS];
+    assert.match(
+      noKind,
+      /^no kind: freezeScreenshots: src\/refusals\/refusals\.browser\.spec\.ts took the screenshot 'bare' in 'no kind' without a kind\. /,
+    );
+    assert.match(
+      noKind,
+      /toMatchScreenshot\(name, \{ kind: 'DATA' \}\).*Nothing was frozen for it\.$/,
+    );
+    assert.match(noReason, /'hover' in 'no reason' with malformed options: .*without a reason/);
+    assert.match(
+      unknownWidth,
+      /its viewports name "WATCH", not one of 'PHONE', 'TABLET', 'DESKTOP'/,
+    );
+    // Refused before Vitest's matcher ran: no reference, no freeze.
+    for (const name of ['bare', 'hover', 'watch'])
+      assert.ok(!existsSync(png(REFUSALS, name)), name);
+    assert.ok(!existsSync(join(FREEZES, REFUSALS)));
+  });
+
+  it('takes a viewport spec’s shot at each preset width: three PNGs, three freezes', () => {
+    const three = manifest().freezes.filter((f) => f.name === 'three');
+    assert.deepEqual(
+      three.map((f) => [f.file, f.kind, f.viewport]),
+      [
+        [`${PAGE}/three-desktop.html`, 'DATA', 'DESKTOP'],
+        [`${PAGE}/three-phone.html`, 'DATA', 'PHONE'],
+        [`${PAGE}/three-tablet.html`, 'DATA', 'TABLET'],
+      ],
+    );
+    for (const width of ['phone', 'tablet', 'desktop']) {
+      assert.ok(existsSync(png(PAGE, `three-${width}`)), width);
+    }
+    assert.ok(!existsSync(png(PAGE, 'three')));
+    // Laid out at the preset sizes; Vitest's default viewport is 414x896, taller than TABLET's.
+    assert.match(freeze(PAGE, 'three-phone'), />390x896</);
+    assert.match(freeze(PAGE, 'three-tablet'), />1024x896</);
+    assert.match(freeze(PAGE, 'three-desktop'), />1440x900</);
+    // The test asserted its own viewport back after the shot (no failure in PAGE).
+  });
+
+  it("keeps a tall test viewport's height, and takes an opt-out at its widths only", () => {
+    assert.match(freeze(PAGE, 'tall-phone'), />390x3400</);
+    assert.match(freeze(PAGE, 'tall-desktop'), />1440x3400</);
+    const hover = manifest().freezes.filter((f) => f.name === 'hover');
+    assert.deepEqual(
+      hover.map((f) => [f.file, f.viewport]),
+      [[`${PAGE}/hover-desktop.html`, 'DESKTOP']],
+    );
+    assert.ok(existsSync(png(PAGE, 'hover-desktop')));
+    assert.ok(!existsSync(png(PAGE, 'hover-phone')));
+  });
+
+  it('settles under fake timers, and waits for an Angular view to follow the width', () => {
+    for (const width of ['phone', 'tablet', 'desktop']) {
+      assert.ok(existsSync(join(FREEZES, PAGE, `faked-${width}.html`)), width);
+    }
+    assert.match(freeze(PAGE, 'view-phone'), />390</);
+    assert.match(freeze(PAGE, 'view-desktop'), />1440</);
+  });
+
+  it('links the outcome to the DESKTOP freeze of the shot after it', () => {
+    assert.deepEqual(
+      manifest().outcomes.fired.map((f) => [f.test, f.freeze]),
+      [['three widths', `${PAGE}/three-desktop.html`]],
+    );
+  });
+
+  it('passes against its own references on the next run', async () => {
+    const again = await failuresOf({ update: false });
+    assert.deepEqual(Object.keys(again), [REFUSALS]);
   });
 });

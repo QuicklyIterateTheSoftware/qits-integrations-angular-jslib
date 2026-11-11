@@ -939,7 +939,8 @@ describe('page-screenshots-through-routes opt-out', () => {
         ],
         file,
       )
-      .filter((m) => m.ruleId?.startsWith('qits/'));
+      // SHOT has no kind, so screenshot-kind also fires here; this suite is about the other rule.
+      .filter((m) => m.ruleId === 'qits/page-screenshots-through-routes');
   const NO_ROUTE = `it('a', async () => {\n${SHOT}\n});`;
   it('is an error in recommended', () => {
     assert.equal(
@@ -1237,6 +1238,172 @@ describe('browser-spec-data-from-golden-masters messages', () => {
       assert.match(messages[id], /Feed the data through HTTP from a golden master instead/, id);
     }
     assert.match(messages.recorder, /wrap the goldenMaster command there/);
+  });
+});
+
+const KIND_SPEC = at('src/app/routes/projects/project-list.page.browser.spec.ts');
+tester.run('screenshot-kind', rules['screenshot-kind'], {
+  valid: [
+    // Each allowed kind, as toMatchScreenshot(name, { kind }).
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('loaded', { kind: 'DATA' });",
+    },
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('empty', { kind: 'NO_DATA' });",
+    },
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('wait', { kind: 'PENDING' });",
+    },
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('refused', { kind: 'ERROR' });",
+    },
+    // Options as the sole argument: toMatchScreenshot({ kind }).
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot({ kind: 'DATA' });",
+    },
+    // A no-expression template literal is a string literal.
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('loaded', { kind: `DATA` });",
+    },
+    // A valid opt-out: a non-empty array of enum literals, with a non-empty reason.
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('hover', { kind: 'DATA', viewports: ['DESKTOP'], reason: 'needs a fine pointer' });",
+    },
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('hover', { kind: 'DATA', viewports: ['PHONE', 'TABLET'], reason: 'needs a fine pointer' });",
+    },
+    // A kind given literally beside a spread is still checkable.
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('loaded', { ...base, kind: 'DATA' });",
+    },
+    // A call to a different matcher is not a shot at all.
+    { filename: KIND_SPEC, code: "await expect.element(view).toHaveText('x');" },
+    // A non-browser spec is not checked at all.
+    {
+      filename: at('src/app/routes/projects/project-list.page.spec.ts'),
+      code: "await expect.element(view).toMatchScreenshot('loaded');",
+    },
+  ],
+  invalid: [
+    // No options object at all.
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('loaded');",
+      errors: [{ messageId: 'noOptions' }],
+    },
+    {
+      filename: KIND_SPEC,
+      code: 'await expect.element(view).toMatchScreenshot();',
+      errors: [{ messageId: 'noOptions' }],
+    },
+    // An options object with no kind. viewports is otherwise valid, so only reason is also missing.
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('loaded', { viewports: ['PHONE'] });",
+      errors: [{ messageId: 'missingKind' }, { messageId: 'missingReason' }],
+    },
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot({ name: 'x' });",
+      errors: [{ messageId: 'missingKind' }],
+    },
+    // kind is not a string literal from the enum.
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('loaded', { kind: 'LOADING' });",
+      errors: [{ messageId: 'invalidKind' }],
+    },
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('loaded', { kind: `DATA-${x}` });",
+      errors: [{ messageId: 'invalidKind' }],
+    },
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('loaded', { kind: KIND });",
+      errors: [{ messageId: 'invalidKind' }],
+    },
+    // viewports present but not a non-empty array literal of enum literals.
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('hover', { kind: 'DATA', viewports: 'DESKTOP', reason: 'x' });",
+      errors: [{ messageId: 'invalidViewports' }],
+    },
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('hover', { kind: 'DATA', viewports: [], reason: 'x' });",
+      errors: [{ messageId: 'invalidViewports' }],
+    },
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('hover', { kind: 'DATA', viewports: ['MOBILE'], reason: 'x' });",
+      errors: [{ messageId: 'invalidViewports' }],
+    },
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('hover', { kind: 'DATA', viewports: [size], reason: 'x' });",
+      errors: [{ messageId: 'invalidViewports' }],
+    },
+    // viewports present without a non-empty string-literal reason.
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('hover', { kind: 'DATA', viewports: ['DESKTOP'] });",
+      errors: [{ messageId: 'missingReason' }],
+    },
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('hover', { kind: 'DATA', viewports: ['DESKTOP'], reason: '' });",
+      errors: [{ messageId: 'missingReason' }],
+    },
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('hover', { kind: 'DATA', viewports: ['DESKTOP'], reason: reasonVar });",
+      errors: [{ messageId: 'missingReason' }],
+    },
+    // Both a bad viewports and a missing reason are reported together (sorted by position: the
+    // 'viewports' property starts before its value, so missingReason's node comes first).
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('hover', { kind: 'DATA', viewports: ['MOBILE'] });",
+      errors: [{ messageId: 'missingReason' }, { messageId: 'invalidViewports' }],
+    },
+    // A spread with no literal kind is reported as missing, not as unreadable.
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('loaded', { ...base });",
+      errors: [{ messageId: 'missingKind' }],
+    },
+    // A spread with a bad literal kind is still checked for kind; viewports stay unreadable.
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('loaded', { ...base, kind: 'LOADING', viewports: ['MOBILE'] });",
+      errors: [{ messageId: 'invalidKind' }],
+    },
+    // An empty options object has no kind either.
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('loaded', {});",
+      errors: [{ messageId: 'missingKind' }],
+    },
+  ],
+});
+
+describe('screenshot-kind messages', () => {
+  const { messages } = rules['screenshot-kind'].meta;
+  it('names the allowed kinds and viewports', () => {
+    assert.match(messages.noOptions, /DATA, NO_DATA, PENDING, ERROR/);
+    assert.match(messages.missingKind, /DATA, NO_DATA, PENDING, ERROR/);
+    assert.match(messages.invalidKind, /DATA, NO_DATA, PENDING, ERROR/);
+    assert.match(messages.invalidViewports, /PHONE, TABLET, DESKTOP/);
   });
 });
 
@@ -1621,7 +1788,7 @@ tester.run('navigation-through-outcomes', rules['navigation-through-outcomes'], 
   ],
 });
 
-describe('navigation-through-outcomes in recommended', () => {
+describe('navigation-through-outcomes and screenshot-kind in recommended', () => {
   const config = [
     {
       files: ['**/*.ts'],
@@ -1629,12 +1796,13 @@ describe('navigation-through-outcomes in recommended', () => {
       ...qits.configs.recommended[0],
     },
   ];
-  it('is the one rule set to warn', () => {
+  it('are the only rules set to warn', () => {
     const levels = qits.configs.recommended[0].rules;
     assert.equal(levels['qits/navigation-through-outcomes'], 'warn');
+    assert.equal(levels['qits/screenshot-kind'], 'warn');
     assert.deepEqual(
       Object.keys(levels).filter((r) => levels[r] === 'warn'),
-      ['qits/navigation-through-outcomes'],
+      ['qits/navigation-through-outcomes', 'qits/screenshot-kind'],
     );
   });
   it('warns, and an eslint-disable pair round an inline template silences it', () => {

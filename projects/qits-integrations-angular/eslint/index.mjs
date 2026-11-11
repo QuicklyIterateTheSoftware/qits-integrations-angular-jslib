@@ -18,6 +18,7 @@ import pageScreenshotsThroughRoutes from './rules/page-screenshots-through-route
 import pageSuffix from './rules/page-suffix.mjs';
 import routeMatchesDirectory from './rules/route-matches-directory.mjs';
 import routePaths from './rules/route-paths.mjs';
+import screenshotKind from './rules/screenshot-kind.mjs';
 import storeHasPact from './rules/store-has-pact.mjs';
 
 const plugin = {
@@ -35,6 +36,7 @@ const plugin = {
     'route-paths': routePaths,
     'navigation-through-outcomes': navigationThroughOutcomes,
     'browser-spec-data-from-golden-masters': browserSpecDataFromGoldenMasters,
+    'screenshot-kind': screenshotKind,
   },
   configs: {},
 };
@@ -58,6 +60,8 @@ plugin.configs.recommended = [
       // warn until the apps navigate through outcomes (qits-2005 turns it to error in the app)
       'qits/navigation-through-outcomes': 'warn',
       'qits/browser-spec-data-from-golden-masters': 'error',
+      // warn until a consumer categorises its existing shots (qits-2047 turns it to error there)
+      'qits/screenshot-kind': 'warn',
     },
   },
 ];

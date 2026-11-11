@@ -329,6 +329,12 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   `recommended` sets to **`warn`**, because it reports what every unmigrated app has and no fix
   clears (the qits-2010 rule below): it stays `warn` here until qits-2005 turns it to `error` in
   the app once the app navigates through outcomes.
+  `screenshot-kind` (ticket qits-2046) is the second `warn` rule, for the same reason: in every
+  `*.browser.spec.*` each `toMatchScreenshot(...)` names its `kind` (`DATA`, `NO_DATA`, `PENDING`,
+  `ERROR`) as a literal, and an opt-out `viewports` (`PHONE`, `TABLET`, `DESKTOP`) a literal
+  `reason`; the enums are spelled in the rule and in `screenshot-options.ts`, keep them in step.
+  qits-2047 turns it to `error` in landing. The runtime half is `freezeScreenshots({ requireKind,
+viewportSpecs })`, both off by default so a bump changes nothing until the app opts in.
   `page-screenshots-through-routes` (ticket qits-1998) reads only `*.page.browser.spec.ts` /
   `*.layout.browser.spec.ts` under the routes directory: a `TestBed.createComponent` of an import
   from a `*.page.ts` / `*.layout.ts`, a router provider given anything but an identifier imported

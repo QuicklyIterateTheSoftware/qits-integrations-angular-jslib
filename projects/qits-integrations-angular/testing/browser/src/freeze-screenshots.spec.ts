@@ -3,6 +3,15 @@ import { TestBed } from '@angular/core/testing';
 import { provideRouter, Router, RouterOutlet, type Routes } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { DEFAULT_ROUTE_SPECS, renderedThroughRoutes } from './freeze-screenshots';
+import {
+  SCREENSHOT_KINDS,
+  SCREENSHOT_VIEWPORTS,
+  shotRequest,
+  shotViewports,
+  viewportName,
+  viewportSize,
+  vitestArgs,
+} from './screenshot-options';
 
 @Component({ selector: 'qits-stub-page', template: '<p>page</p>' })
 class StubPage {}
@@ -91,5 +100,90 @@ describe('DEFAULT_ROUTE_SPECS', () => {
     expect(matches('src/app/layout/shell/shell.layout.browser.spec.ts')).toBe(false);
     expect(matches('src/app/routes/projects/project-card.browser.spec.ts')).toBe(false);
     expect(matches('src/app/patterns/list/list.page.browser.spec.ts')).toBe(false);
+  });
+});
+
+// Ticket qits-2046: the kind and the preset widths a toMatchScreenshot call gives. The matcher
+// itself needs a browser run: vitest-run.test.mjs (screenshots/test) takes the shots.
+describe('the screenshot options', () => {
+  it('names the kinds and the preset sizes', () => {
+    expect(SCREENSHOT_KINDS).toEqual(['DATA', 'NO_DATA', 'PENDING', 'ERROR']);
+    expect(SCREENSHOT_VIEWPORTS).toEqual({
+      PHONE: { width: 390, height: 844 },
+      TABLET: { width: 1024, height: 768 },
+      DESKTOP: { width: 1440, height: 900 },
+    });
+    // Against stock Tailwind v4: PHONE below sm, TABLET between md and xl, DESKTOP above xl.
+    expect(SCREENSHOT_VIEWPORTS.PHONE.width).toBeLessThan(640);
+    expect(SCREENSHOT_VIEWPORTS.TABLET.width).toBeGreaterThan(768);
+    expect(SCREENSHOT_VIEWPORTS.TABLET.width).toBeLessThan(1280);
+    expect(SCREENSHOT_VIEWPORTS.DESKTOP.width).toBeGreaterThan(1280);
+    expect(Object.isFrozen(SCREENSHOT_VIEWPORTS.PHONE)).toBe(true);
+  });
+
+  it('reads the kind after a name or as the only argument, and strips its keys for Vitest', () => {
+    for (const kind of SCREENSHOT_KINDS) {
+      expect(shotRequest(['list', { kind, timeout: 9 }])).toEqual({
+        name: 'list',
+        options: { timeout: 9 },
+        kind,
+        viewports: undefined,
+        reason: undefined,
+        problem: undefined,
+      });
+    }
+    const alone = shotRequest([{ kind: 'ERROR' }]);
+    expect([alone.name, alone.options, alone.kind]).toEqual([undefined, {}, 'ERROR']);
+    expect(vitestArgs(alone.name, alone.options)).toEqual([{}]);
+    const none = shotRequest([]);
+    expect([none.kind, none.options, none.problem]).toEqual([null, undefined, undefined]);
+    expect(vitestArgs(none.name, none.options)).toEqual([]);
+    expect(vitestArgs('list', undefined)).toEqual(['list']);
+    const named = shotRequest(['list']);
+    expect([named.name, named.kind, named.options]).toEqual(['list', null, undefined]);
+  });
+
+  it('names a kind outside the enum as a problem', () => {
+    expect(shotRequest(['x', { kind: 'data' }]).problem).toBe(
+      "its kind \"data\" is not one of 'DATA', 'NO_DATA', 'PENDING', 'ERROR'",
+    );
+    expect(shotRequest(['x', { kind: 'data' }]).kind).toBeNull();
+  });
+
+  it('takes an opt-out with a reason, in preset order, and refuses one without or with an unknown width', () => {
+    const optOut = shotRequest([
+      'hover',
+      { kind: 'DATA', viewports: ['DESKTOP', 'TABLET'], reason: 'needs a fine pointer' },
+    ]);
+    expect(optOut.problem).toBeUndefined();
+    expect(optOut.viewports).toEqual(['TABLET', 'DESKTOP']);
+    expect(optOut.options).toEqual({});
+    expect(shotRequest(['x', { kind: 'DATA', viewports: ['DESKTOP'] }]).problem).toMatch(
+      /without a reason/,
+    );
+    expect(
+      shotRequest(['x', { kind: 'DATA', viewports: ['DESKTOP'], reason: '  ' }]).problem,
+    ).toMatch(/without a reason/);
+    expect(shotRequest(['x', { kind: 'DATA', viewports: ['WATCH'], reason: 'r' }]).problem).toMatch(
+      /its viewports name "WATCH", not one of 'PHONE', 'TABLET', 'DESKTOP'/,
+    );
+    expect(shotRequest(['x', { kind: 'DATA', viewports: [], reason: 'r' }]).problem).toMatch(
+      /non-empty list/,
+    );
+    expect(shotRequest(['x', { kind: 'DATA', viewports: 'PHONE', reason: 'r' }]).problem).toMatch(
+      /non-empty list/,
+    );
+  });
+
+  it('takes every preset width in a viewport spec only, and keeps a tall test viewport', () => {
+    expect(shotViewports({ viewports: undefined }, true)).toEqual(['PHONE', 'TABLET', 'DESKTOP']);
+    expect(shotViewports({ viewports: ['DESKTOP'] }, true)).toEqual(['DESKTOP']);
+    expect(shotViewports({ viewports: undefined }, false)).toBeUndefined();
+    // Outside the viewport specs, an opt-out is ignored: one shot at the test's own viewport.
+    expect(shotViewports({ viewports: ['DESKTOP'] }, false)).toBeUndefined();
+    expect(viewportSize('PHONE', { height: 600 })).toEqual({ width: 390, height: 844 });
+    expect(viewportSize('TABLET', { height: 3400 })).toEqual({ width: 1024, height: 3400 });
+    expect(viewportName('menu/open', 'PHONE')).toBe('menu/open-phone');
+    expect(viewportName('list', 'DESKTOP')).toBe('list-desktop');
   });
 });

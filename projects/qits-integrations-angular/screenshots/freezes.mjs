@@ -5,6 +5,7 @@
  * run ends and then writes, under the freeze directory (default `src/testing/browser/freezes`):
  *
  *   <spec path relative to the root>/<screenshot name>.html   one file per screenshot
+ *   <spec path relative to the root>/<name>-<viewport>.html   one per preset width (viewportSpecs)
  *   assets/<file name>                                        same-origin files the HTML uses
  *   manifest.json                                             what is where (below)
  *
@@ -15,6 +16,8 @@
  *       "spec": "src/app/routes/projects/projects.page.browser.spec.ts",
  *       "test": "projects page > lists the projects",
  *       "name": "list",
+ *       "kind": "DATA",                   // DATA | NO_DATA | PENDING | ERROR, null when the shot gave none
+ *       "viewport": null,                 // PHONE | TABLET | DESKTOP for a shot at a preset width
  *       "route": "projects",              // null unless a page or layout spec under routes/ (routeSpecs)
  *       "records": [{ "provider": "qits-projects-service", "state": "…", "operationId": "…" }],
  *       "triggers": ["projects:open"]     // the visible outcome marks, `<interaction>:<outcome>`
@@ -39,6 +42,16 @@
  * `qitsOutcomes` after each test, kept per spec by the freezes' rules. A fired record's `freeze` is
  * the first freeze of its test whose shot came after it (the freeze's `outcomes` count, the test's
  * records at shot time, is greater than the record's index in the test), `null` when no shot did.
+ *
+ * Kinds and preset widths (ticket qits-2046): `kind` is the state the shot says it shows
+ * (`toMatchScreenshot(name, { kind })`), `null` when it gave none. A shot in a spec the browser
+ * side's `viewportSpecs` matches is taken once per preset width, PHONE, TABLET and DESKTOP in that
+ * order: each is its own freeze, `<name>-phone.html` and so on, with the record's `name` the name
+ * the spec gave and `viewport` the width; a shot at the test's own viewport has `viewport: null` and
+ * keeps `<name>.html`. A fired record's `freeze` prefers the DESKTOP freeze of the first shot after
+ * it, and falls back to that shot's first freeze. Both fields are optional for a reader: a manifest
+ * written before them (and entries kept from specs a run skipped) reads as `null`, and is written
+ * back with `null`.
  */
 import {
   copyFileSync,
@@ -73,6 +86,27 @@ export const OUTCOMES_COMMAND = 'qitsOutcomes';
 const ASSET = /qits-freeze-asset:(\/[^"'\s),?#]*)/g;
 
 export const MANIFEST = 'manifest.json';
+
+/** The kinds a shot may say it shows (`ScreenshotKind` in `@qits/angular/testing/browser`). */
+export const SCREENSHOT_KINDS = Object.freeze(['DATA', 'NO_DATA', 'PENDING', 'ERROR']);
+
+/** The preset widths, in the order a shot is taken at them (`ScreenshotViewport` there). */
+export const SCREENSHOT_VIEWPORTS = Object.freeze(['PHONE', 'TABLET', 'DESKTOP']);
+
+/** The width an outcome links to first: the one a reader shows by default. */
+const LINKED_VIEWPORT = 'DESKTOP';
+
+const oneOf = (values, value) => (values.includes(value) ? value : null);
+
+/**
+ * The freeze file of a shot, relative to the freeze directory: `<spec>/<slug>.html`, or
+ * `<spec>/<slug>-<viewport>.html` for a shot at a preset width, as Vitest names its PNG
+ * `<name>-<viewport>-<browser>-<platform>.png` (the browser side suffixes the name it compares).
+ */
+export function freezeFile(spec, name, viewport = null) {
+  const suffix = viewport ? `-${viewport.toLowerCase()}` : '';
+  return `${spec}/${freezeSlug(name)}${suffix}.html`;
+}
 const ASSETS = 'assets';
 
 /**
@@ -152,9 +186,10 @@ export function freezeWriter({
     },
 
     /** The `qitsFreeze` command, for the spec at `testPath`. */
-    add(testPath, { name, test, html, route, records, outcomes, triggers }) {
+    add(testPath, { name, test, html, route, records, outcomes, triggers, kind, viewport }) {
       const spec = toPosix(relative(root, testPath));
-      const file = `${spec}/${freezeSlug(name)}.html`;
+      const width = oneOf(SCREENSHOT_VIEWPORTS, viewport);
+      const file = freezeFile(spec, name, width);
       const toAssets = toPosix(relative(dirname(join(base, file)), join(base, ASSETS)));
       const assets = new Map();
       const rewritten = html.replace(ASSET, (_, path) => {
@@ -173,6 +208,8 @@ export function freezeWriter({
         spec,
         test,
         name,
+        kind: oneOf(SCREENSHOT_KINDS, kind),
+        viewport: width,
         route: routeSpecs.test(spec) ? (route ?? null) : null,
         records: (records ?? []).map(({ provider, state, operationId }) => ({
           provider,
@@ -247,7 +284,18 @@ export function freezeWriter({
             const after = shotsInOrder.find(
               (shot) => shot.entry.test === test && shot.outcomes > index,
             );
-            fired.push({ ...record, freeze: after?.entry.file ?? null });
+            // The widths of one shot share its test, name and outcome count; DESKTOP first.
+            const linked =
+              after &&
+              (shotsInOrder.find(
+                (shot) =>
+                  shot.entry.test === test &&
+                  shot.entry.name === after.entry.name &&
+                  shot.outcomes === after.outcomes &&
+                  shot.entry.viewport === LINKED_VIEWPORT,
+              ) ??
+                after);
+            fired.push({ ...record, freeze: linked?.entry.file ?? null });
           });
         }
         const directory = join(base, spec);
@@ -276,15 +324,19 @@ export function freezeWriter({
       fired.sort((a, b) => compare(a.spec, b.spec) || compare(a.test, b.test));
       const manifest = {
         routes: routes ?? old.routes,
-        freezes: freezes.map(({ file, spec, test, name, route, records, triggers }) => ({
-          file,
-          spec,
-          test,
-          name,
-          route,
-          records,
-          triggers: triggers ?? [],
-        })),
+        freezes: freezes.map(
+          ({ file, spec, test, name, kind, viewport, route, records, triggers }) => ({
+            file,
+            spec,
+            test,
+            name,
+            kind: oneOf(SCREENSHOT_KINDS, kind),
+            viewport: oneOf(SCREENSHOT_VIEWPORTS, viewport),
+            route,
+            records,
+            triggers: triggers ?? [],
+          }),
+        ),
         byRoute,
         outcomes: {
           declared,

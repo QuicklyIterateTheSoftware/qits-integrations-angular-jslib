@@ -52,17 +52,53 @@ export declare const DEFAULT_ROUTE_SPECS: RegExp;
 /** A screenshot's name as its freeze's file name (without `.html`), as Vitest slugs it. */
 export declare function freezeSlug(name: string): string;
 
+/** The state a shot says it shows (`ScreenshotKind` in `@qits/angular/testing/browser`). */
+export type FreezeKind = 'DATA' | 'NO_DATA' | 'PENDING' | 'ERROR';
+
+/** A preset width a shot was taken at (`ScreenshotViewport` there). */
+export type FreezeViewport = 'PHONE' | 'TABLET' | 'DESKTOP';
+
+/** `['DATA', 'NO_DATA', 'PENDING', 'ERROR']`. */
+export declare const SCREENSHOT_KINDS: readonly FreezeKind[];
+
+/** `['PHONE', 'TABLET', 'DESKTOP']`, the order a shot is taken at them. */
+export declare const SCREENSHOT_VIEWPORTS: readonly FreezeViewport[];
+
+/**
+ * A shot's freeze file, relative to the freeze directory: `<spec>/<slug>.html`, or
+ * `<spec>/<slug>-<viewport>.html` (lower case) for a shot at a preset width.
+ */
+export declare function freezeFile(
+  spec: string,
+  name: string,
+  viewport?: FreezeViewport | null,
+): string;
+
 /** `<dir>/manifest.json`. */
 export interface FreezeManifest {
   /** The app's route tree, as `describeRoutes()` gives it. */
   routes: FreezeRoute[];
   freezes: {
-    /** Relative to the freeze directory: `<spec>/<name>.html`. */
+    /**
+     * Relative to the freeze directory: `<spec>/<name>.html`, or `<spec>/<name>-<viewport>.html`
+     * for a shot at a preset width.
+     */
     file: string;
     /** Relative to the root. */
     spec: string;
     test: string;
+    /** The name the spec gave (without the `-<viewport>` suffix), or Vitest's default. */
     name: string;
+    /**
+     * The state the shot said it shows (ticket qits-2046), `null` when it gave none. Optional for a
+     * reader: a manifest written before the field has none.
+     */
+    kind?: FreezeKind | null;
+    /**
+     * The preset width the shot was taken at (a spec `viewportSpecs` matches), `null` at the test's
+     * own viewport. Optional for a reader, as `kind`.
+     */
+    viewport?: FreezeViewport | null;
     route: string | null;
     records: { provider: string; state: string; operationId: string }[];
     /** The `<interaction>:<outcome>` marks visible in the shot, sorted. */
@@ -113,7 +149,10 @@ export interface FiredOutcome {
   interaction: string;
   outcome: string;
   kind: 'exit' | 'stay' | 'returnTo' | 'external';
-  /** The first freeze of the test whose shot came after it, or `null`. */
+  /**
+   * The first freeze of the test whose shot came after it (its DESKTOP freeze when the shot was
+   * taken at the preset widths), or `null`.
+   */
   freeze: string | null;
 }
 

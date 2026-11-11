@@ -46,10 +46,11 @@ More entry points, all documented in the repository README:
 
 - `@qits/angular/testing`: golden masters and Pact V4 consumer pacts for specs (Node only; needs
   `@pact-foundation/pact`).
-- `@qits/angular/testing/browser`: the golden-master guard, the screenshot freezes and
-  `recordOutcomes()` for browser specs.
+- `@qits/angular/testing/browser`: the golden-master guard, the screenshot freezes (each shot's
+  `kind`, `toMatchScreenshot(name, { kind: 'DATA' })`, and the PHONE / TABLET / DESKTOP widths of
+  `freezeScreenshots({ viewportSpecs })`) and `recordOutcomes()` for browser specs.
 - `@qits/angular/eslint`: lint rules (`client-only-in-stores`, `store-has-pact`, `pact-names`, the route rules,
-  `page-has-screenshots`, `page-screenshots-through-routes`, and `route-paths`, which generates `src/app/route-paths.ts`) as
+  `page-has-screenshots`, `page-screenshots-through-routes`, `screenshot-kind`, and `route-paths`, which generates `src/app/route-paths.ts`) as
   a flat-config plugin: `export default [...yourConfig, ...qits.configs.recommended];`
 
 The rest of the consumer contract — the backend endpoints, the capture and state-snapshot APIs,
