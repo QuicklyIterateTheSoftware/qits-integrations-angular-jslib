@@ -283,10 +283,13 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   the guard is the guarantee. `pactedGoldenMasters()` (in `@qits/angular/testing`, Node-side) refuses
   a body no interaction in the committed pact uses. Every error ends in the same fix: a new provider
   state plus a pact interaction for it. The guard also notes the route each recording is shown on
-  (ticket qits-1946; `takeRouteRecords()`), and `route-ledger.ts` in `@qits/angular/testing` keeps
+  (ticket qits-1946; `takeRouteRecords()`), stamped with the spec file that noted it (the files
+  share one page: `guardGoldenMasters()` registers a `beforeAll` that clears them, and
+  `takeRouteRecords()` drops, with a `console.warn`, any noted in another file, qits-2056), and `route-ledger.ts` in `@qits/angular/testing` keeps
   those in a committed ledger (`goldenMasterRoutes`, a browser command that only stages; the
   reporter its `.plugin` adds writes the sections of files that ran completely at `onTestRunEnd`,
-  qits-1966, the same `complete()` rule as the freezes) that `addGoldenInteraction`
+  qits-1966, the same `complete()` rule as the freezes; a complete file that never sent keeps its
+  section with a warning, one that sent `[]` loses it, qits-2056) that `addGoldenInteraction`
   reads through `useRouteLookup(routeLedger(...))` into `qits-trigger.route`. The route pattern is
   `matchedRoutePath` from the main entry, imported by package name (`tsconfig.spec.json` maps
   `@qits/angular` to `src/public-api.ts` for the specs; ng-packagr resolves it to the built entry).

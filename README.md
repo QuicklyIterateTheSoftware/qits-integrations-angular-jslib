@@ -658,8 +658,12 @@ The guard notes it, and a committed ledger carries it to the pact specs.
   `app.route.path` in telemetry). Nothing is noted without a router or a matched route, for a body
   that is not a recording, or for an answer without a body: **a status-only answer
   (`flush(null, { status: 204 })`) is not recorded**, so a 204 operation's interaction gets its
-  routes only from `routes`. `takeRouteRecords()` returns what was noted, sorted and without
-  duplicates, and forgets it; `clearRouteRecords()` only forgets.
+  routes only from `routes`. `takeRouteRecords()` returns what the running spec file noted, sorted
+  and without duplicates, and forgets it; `clearRouteRecords()` only forgets. Every spec file runs
+  in the same page, so each route is stamped with the file that noted it: `guardGoldenMasters()`
+  clears them in a `beforeAll`, so a file starts with none, and `takeRouteRecords()` drops, with a
+  `console.warn` naming the file and the record, any route noted in another file (or outside one).
+  The setup file needs nothing more than the two lines below.
 - **The ledger keeps it.** `goldenMasterRoutes(ledgerPath, root?)` (from `@qits/angular/testing`)
   is the Vitest browser command the setup file sends the records to after each spec file, and
   `.plugin` on it is the Vite plugin that adds its reporter to the run: put the command in
@@ -668,7 +672,8 @@ The guard notes it, and a committed ledger carries it to the pact specs.
   file that ran completely (it passed, and so did every test in it) and nothing else:
   `{ "<spec path relative to root>": [records] }`, records sorted and without duplicates, keys
   sorted, two-space JSON with a trailing newline, written only when the text changed. A spec file
-  that ran completely and recorded nothing loses its section; a file that failed (in a test or in
+  that ran completely and sent an empty list loses its section; one that ran completely but never
+  sent its records keeps its section as it was, and the reporter warns, naming the spec; a file that failed (in a test or in
   a hook such as `beforeAll`), was skipped or ran in part (`-t`, `.only`) keeps its section as it
   was, so a broken run never empties the ledger. The sections of spec files that no longer exist
   are dropped. `root` defaults to the cwd. Keep it at `src/testing/browser/routes.json` and commit

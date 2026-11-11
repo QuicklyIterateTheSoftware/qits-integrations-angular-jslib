@@ -294,39 +294,41 @@ describe('guardGoldenMasters by default', () => {
   });
 });
 
+@Component({ template: '' })
+class Page {}
+
+const projects = fromGoldenMasters(read, (state?: string, operationId?: string) => ({
+  provider: 'qits-projects-service',
+  state,
+  operationId,
+}));
+
+const routed = async (url: string) => {
+  TestBed.configureTestingModule({
+    providers: [
+      provideHttpClient(),
+      provideHttpClientTesting(),
+      provideRouter([
+        {
+          path: 'projects/:slug',
+          children: [{ path: 'repositories', component: Page }],
+        },
+        { path: '', component: Page },
+      ]),
+    ],
+  });
+  await (await RouterTestingHarness.create()).navigateByUrl(url);
+};
+
+const answer = (body: object | null, opts?: { status?: number; statusText?: string }) => {
+  TestBed.inject(HttpClient)
+    .get('/api/x')
+    .subscribe({ error: () => undefined });
+  TestBed.inject(HttpTestingController).expectOne('/api/x').flush(body, opts);
+};
+
 describe('route records', () => {
-  @Component({ template: '' })
-  class Page {}
-
-  const projects = fromGoldenMasters(read, (state?: string, operationId?: string) => ({
-    provider: 'qits-projects-service',
-    state,
-    operationId,
-  }));
   let unguard: () => void;
-
-  const routed = async (url: string) => {
-    TestBed.configureTestingModule({
-      providers: [
-        provideHttpClient(),
-        provideHttpClientTesting(),
-        provideRouter([
-          {
-            path: 'projects/:slug',
-            children: [{ path: 'repositories', component: Page }],
-          },
-          { path: '', component: Page },
-        ]),
-      ],
-    });
-    await (await RouterTestingHarness.create()).navigateByUrl(url);
-  };
-  const answer = (body: object | null, opts?: { status?: number; statusText?: string }) => {
-    TestBed.inject(HttpClient)
-      .get('/api/x')
-      .subscribe({ error: () => undefined });
-    TestBed.inject(HttpTestingController).expectOne('/api/x').flush(body, opts);
-  };
 
   beforeEach(() => {
     clearRouteRecords();
@@ -399,21 +401,59 @@ describe('route records', () => {
     clearRouteRecords();
     expect(takeRouteRecords()).toEqual([]);
   });
+
+  it('drops, with a warning, the routes noted in another spec file or outside one', async () => {
+    await routed('/projects/demo/repositories');
+    const state = expect.getState();
+    const getState = vi.spyOn(expect, 'getState');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      getState.mockReturnValue({ ...state, testPath: '/w/app/src/app/other.page.browser.spec.ts' });
+      answer(await projects<List>('a state', 'listProjects'));
+      getState.mockReturnValue({ ...state, testPath: undefined });
+      answer(await projects<List>('b state', 'listProjects'));
+      getState.mockRestore();
+      answer(await projects<List>('c state', 'listProjects'));
+      expect(takeRouteRecords().map((r) => r.state)).toEqual(['c state']);
+      expect(warn.mock.calls.map(([message]) => message)).toEqual([
+        expect.stringContaining(
+          'noted in /w/app/src/app/other.page.browser.spec.ts, not in ' +
+            `${state.testPath}: qits-projects-service 'a state' / listProjects on ` +
+            'projects/:slug/repositories.',
+        ),
+        expect.stringContaining('noted in no spec file, not in '),
+      ]);
+      expect(takeRouteRecords()).toEqual([]); // the dropped ones are forgotten too
+    } finally {
+      getState.mockRestore();
+      warn.mockRestore();
+    }
+  });
+});
+
+describe('route records when a spec file starts', () => {
+  let unguard: () => void = () => undefined;
+  afterAll(() => unguard());
+
+  it('are left behind by the file before, untaken', async () => {
+    unguard = guardGoldenMasters({ when: () => true });
+    await routed('/projects/demo/repositories');
+    answer(await projects<List>('a project exists', 'listProjects'));
+  });
+
+  describe('the next file', () => {
+    // As a setup file installs it: while the file is collected, so its beforeAll runs first.
+    const unguardNext = guardGoldenMasters({ when: () => true });
+    afterAll(() => unguardNext());
+
+    it('starts with none', () => {
+      expect(takeRouteRecords()).toEqual([]);
+    });
+  });
 });
 
 describe('test records', () => {
-  const projects = fromGoldenMasters(read, (state?: string, operationId?: string) => ({
-    provider: 'qits-projects-service',
-    state,
-    operationId,
-  }));
   let unguard: () => void;
-  const answer = (body: object | null, opts?: { status?: number; statusText?: string }) => {
-    TestBed.inject(HttpClient)
-      .get('/api/x')
-      .subscribe({ error: () => undefined });
-    TestBed.inject(HttpTestingController).expectOne('/api/x').flush(body, opts);
-  };
 
   beforeEach(() => {
     clearTestRecords();

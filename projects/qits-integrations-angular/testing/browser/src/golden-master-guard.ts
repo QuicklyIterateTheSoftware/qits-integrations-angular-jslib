@@ -21,7 +21,9 @@
  * a recording whose source names provider, state and operation, while the TestBed's router has
  * matched a route, is a {@link RouteRecord}. {@link takeRouteRecords} hands them to the Node side
  * (`goldenMasterRoutes` in `@qits/angular/testing`), which keeps them in a ledger the pact specs
- * read, so each interaction names the routes it happens on.
+ * read, so each interaction names the routes it happens on. A route belongs to the spec file that
+ * noted it (ticket qits-2056): the guard forgets them when a file starts, and a file sends only its
+ * own.
  *
  * Beside those, it keeps the recorded answers of the current test, router or not (ticket
  * qits-1947): {@link currentTestRecords}, which a screenshot freeze names as what the shot shows.
@@ -31,6 +33,7 @@ import { TestRequest } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { ROUTES, Router } from '@angular/router';
 import { matchedRoutePath } from '@qits/angular';
+import { beforeAll, expect } from 'vitest';
 
 /** Where a recording came from, as far as the reader knows; it makes error messages exact. */
 export interface RecordingSource {
@@ -220,7 +223,10 @@ let uninstall: (() => void) | undefined;
 
 /**
  * Makes `TestRequest.flush` and `TestRequest.event` refuse backend data that is not a recording.
- * Call it once in the browser specs' setup file. Returns a function that removes the guard.
+ * Call it once in the browser specs' setup file. Returns a function that removes the guard. It also
+ * forgets the routes noted so far in a `beforeAll` ({@link clearRouteRecords}), so every spec file
+ * starts with none (ticket qits-2056): the spec files share one page, and a route an earlier file
+ * left behind must not reach this one's ledger section.
  *
  * - A 2xx answer must carry a recording (or a part of one).
  * - A 2xx answer with no body (`null`, `undefined`, `''`) fails too: an empty list is a recorded
@@ -238,6 +244,7 @@ export function guardGoldenMasters(options: GoldenMasterGuardOptions = {}): () =
   const proto = TestRequest.prototype;
   const flush = proto.flush;
   const event = proto.event;
+  beforeAll(() => clearRouteRecords());
 
   proto.flush = function (this: TestRequest, body, opts = {}) {
     if (when()) checkAnswer(this, body, opts.status);
@@ -270,9 +277,24 @@ export interface RouteRecord {
   readonly route: string;
 }
 
-const routeRecords = new Map<string, RouteRecord>();
+/** A noted route and the spec file it was noted in (ticket qits-2056); undefined outside one. */
+interface NotedRoute {
+  readonly record: RouteRecord;
+  readonly testPath: string | undefined;
+}
+
+/** By spec file and record, so one noted in two files is two entries. */
+const routeRecords = new Map<string, NotedRoute>();
 
 const recordKey = (r: RouteRecord) => [r.provider, r.state, r.operationId, r.route].join('\u0000');
+
+/**
+ * The running spec file, from the `expect` Vitest exports, so it is known with globals off too;
+ * undefined outside one.
+ */
+function runningFile(): string | undefined {
+  return expect.getState().testPath;
+}
 
 /**
  * Notes the route a 2xx answer carrying a recording is shown on. Whether the guard checks the test
@@ -299,7 +321,8 @@ function noteRoute(body: unknown, status: number | undefined): void {
     operationId: source.operationId,
     route,
   };
-  routeRecords.set(recordKey(record), record);
+  const testPath = runningFile();
+  routeRecords.set(`${testPath ?? ''}\u0000${recordKey(record)}`, { record, testPath });
 }
 
 /**
@@ -358,22 +381,42 @@ function currentRoute(): string | undefined {
 }
 
 /**
- * The routes noted since the last call (or {@link clearRouteRecords}), sorted and without
- * duplicates, and forgets them. Call it in the browser specs' setup file, after each spec file,
- * and send the list to the Node side: `afterAll(() => commands.goldenMasterRoutes(takeRouteRecords()))`.
- * The command only stages the list; the ledger is written at the end of the run, and only for the
- * spec files that ran completely, by the reporter `goldenMasterRoutes(...).plugin` adds, so put
- * that plugin in the Vitest config's `plugins`.
+ * The routes the running spec file noted since the last call (or {@link clearRouteRecords}),
+ * sorted and without duplicates, and forgets them. Call it in the browser specs' setup file, after
+ * each spec file, and send the list to the Node side:
+ * `afterAll(() => commands.goldenMasterRoutes(takeRouteRecords()))`. The command only stages the
+ * list; the ledger is written at the end of the run, and only for the spec files that ran
+ * completely, by the reporter `goldenMasterRoutes(...).plugin` adds, so put that plugin in the
+ * Vitest config's `plugins`.
+ *
+ * Every route is stamped with the spec file it was noted in (ticket qits-2056). One noted in
+ * another file, or outside any, is not this file's to send: it is dropped, and a `console.warn`
+ * names the file it was noted in and the record.
  */
 export function takeRouteRecords(): RouteRecord[] {
-  const out = [...routeRecords.entries()]
+  const file = runningFile();
+  const out = new Map<string, RouteRecord>();
+  for (const { record, testPath } of routeRecords.values()) {
+    if (testPath !== undefined && testPath === file) {
+      out.set(recordKey(record), record);
+      continue;
+    }
+    console.warn(
+      `golden-master guard: dropped a route noted in ${testPath ?? 'no spec file'}, not in ` +
+        `${file ?? 'a spec file'}: ${record.provider} '${record.state}' / ${record.operationId} ` +
+        `on ${record.route}. Only the spec file that noted a route sends it to the route ledger.`,
+    );
+  }
+  routeRecords.clear();
+  return [...out.entries()]
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([, record]) => record);
-  routeRecords.clear();
-  return out;
 }
 
-/** Forgets the routes noted so far. */
+/**
+ * Forgets the routes noted so far. {@link guardGoldenMasters} calls it in a `beforeAll`, so each
+ * spec file starts with none.
+ */
 export function clearRouteRecords(): void {
   routeRecords.clear();
 }

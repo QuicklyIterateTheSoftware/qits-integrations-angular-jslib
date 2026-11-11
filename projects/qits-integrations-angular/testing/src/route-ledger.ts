@@ -19,8 +19,9 @@
  * {@link goldenMasterRoutes} is the Vitest browser command a spec file sends its records to; it
  * only stages them, and its reporter (added by its `plugin`) writes the ledger when the run ends,
  * replacing only the sections of spec files that ran completely (ticket qits-1966), the way the
- * screenshot freezes are written. A file that failed, was skipped or ran in part keeps its
- * section. {@link routeLedger} reads the file for the pact specs. Node-side only.
+ * screenshot freezes are written. A file that failed, was skipped, ran in part or never sent its
+ * records (ticket qits-2056) keeps its section. {@link routeLedger} reads the file for the pact
+ * specs. Node-side only.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
@@ -143,8 +144,11 @@ function complete(testModule: RouteLedgerTestModule): boolean {
  * the reporter rewrites the section of every spec file that ran completely and nothing else:
  *
  * - The section's key is the spec's path relative to `root`, with `/` separators.
- * - Its records are sorted and without duplicates; a file that ran completely and staged nothing
- *   (or an empty list) loses its section.
+ * - Its records are sorted and without duplicates; a file that ran completely and sent an empty
+ *   list loses its section.
+ * - A file that ran completely but never sent its records keeps its section as it was, and the
+ *   reporter warns, naming the spec (ticket qits-2056): a file that sent nothing has said nothing
+ *   about its routes, so its silence never empties the ledger either.
  * - A file that failed (in a test or in a hook such as `beforeAll`), was skipped or ran in part
  *   (`-t`, `.only`) keeps its section as it was, so a broken run never empties the ledger.
  * - Sections of spec files that no longer exist (relative to `root`) are dropped.
@@ -193,9 +197,16 @@ export function goldenMasterRoutes(
         const keys = new Set(Object.keys(ledger));
         for (const spec of ran) keys.add(spec);
         for (const key of [...keys].sort()) {
-          if (ran.has(key)) {
-            const section = staged.get(key) ?? [];
+          const section = staged.get(key);
+          if (ran.has(key) && section) {
             if (section.length) next[key] = section;
+          } else if (ran.has(key)) {
+            console.warn(
+              `goldenMasterRoutes: ${key} ran completely but never sent its route records, so its ` +
+                'section is kept as it was. Send them after each spec file in the setup file: ' +
+                'afterAll(() => commands.goldenMasterRoutes(takeRouteRecords())).',
+            );
+            if (Array.isArray(ledger[key])) next[key] = normal(ledger[key]);
           } else if (existsSync(resolve(base, key))) {
             next[key] = normal(Array.isArray(ledger[key]) ? ledger[key] : []);
           }

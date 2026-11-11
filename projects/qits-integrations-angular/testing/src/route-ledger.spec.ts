@@ -112,11 +112,53 @@ describe('the route ledger', () => {
     expect(Object.keys(JSON.parse(written()))).toEqual([BOARD]);
   });
 
-  it('removes the section of a passing spec that staged nothing', () => {
+  it('keeps, with a warning, the section of a passing spec that never sent its records', () => {
     run([LIST, [record('a', 'things')]], [BOARD, [record('a', 'boards/:id')]]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      routes.reporter.onTestRunStart();
+      routes(spec(BOARD), [record('b', 'boards/:id')]);
+      routes.reporter.onTestRunEnd([passed(LIST), passed(BOARD)]);
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn.mock.calls[0][0]).toContain(`${LIST} ran completely but never sent`);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(JSON.parse(written())).toEqual({
+      [BOARD]: [record('b', 'boards/:id')],
+      [LIST]: [record('a', 'things')],
+    });
+  });
+
+  it('keeps a never-sent section normalised, and adds none where there was none', () => {
+    mkdirSync(join(root, 'src/testing/browser'), { recursive: true });
+    const hand = { [LIST]: [record('b', 'things'), record('a', 'things'), record('a', 'things')] };
+    writeFileSync(ledger, JSON.stringify(hand));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      routes.reporter.onTestRunStart();
+      routes.reporter.onTestRunEnd([passed(LIST), passed(BOARD)]);
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(written()).toBe(
+      `${JSON.stringify({ [LIST]: [record('a', 'things'), record('b', 'things')] }, null, 2)}\n`,
+    );
+  });
+
+  it('writes byte-identical text from the same staged records, and touches the file once', () => {
     routes.reporter.onTestRunStart();
-    routes.reporter.onTestRunEnd([passed(LIST)]);
-    expect(Object.keys(JSON.parse(written()))).toEqual([BOARD]);
+    routes(spec(LIST), [record('b', 'things'), record('a', 'things/:id', 'getThing')]);
+    routes(spec(BOARD), [record('a', 'boards/:id'), record('a', 'things')]);
+    const modules = [passed(LIST), passed(BOARD)];
+    routes.reporter.onTestRunEnd(modules);
+    const first = written();
+    const old = new Date('2026-01-01T00:00:00Z');
+    utimesSync(ledger, old, old);
+    routes.reporter.onTestRunEnd(modules);
+    expect(written()).toBe(first);
+    expect(statSync(ledger).mtimeMs).toBe(old.getTime());
   });
 
   it('keeps the section of a spec whose test failed', () => {
@@ -169,9 +211,15 @@ describe('the route ledger', () => {
   it('forgets what was staged when a run starts', () => {
     run([LIST, [record('a', 'things')]], [BOARD, [record('a', 'boards/:id')]]);
     routes(spec(LIST), [record('z', 'stale')]);
-    routes.reporter.onTestRunStart();
-    routes.reporter.onTestRunEnd([passed(LIST)]);
-    expect(Object.keys(JSON.parse(written()))).toEqual([BOARD]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      routes.reporter.onTestRunStart();
+      routes.reporter.onTestRunEnd([passed(LIST)]);
+      expect(warn).toHaveBeenCalledOnce(); // the stale list is gone: LIST never sent in this run
+    } finally {
+      warn.mockRestore();
+    }
+    expect(JSON.parse(written())[LIST]).toEqual([record('a', 'things')]);
   });
 
   it('writes no file for a first spec that recorded nothing', () => {
