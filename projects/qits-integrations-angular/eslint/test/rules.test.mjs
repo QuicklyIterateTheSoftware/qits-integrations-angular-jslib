@@ -1211,6 +1211,14 @@ tester.run(
           { messageId: 'recorder', data: { name: 'fromGoldenMasters' } },
         ],
       },
+      {
+        filename: PAGE_SPEC,
+        code: "import { recordedText, fromGoldenMasterTexts } from '@qits/angular/testing/browser';",
+        errors: [
+          { messageId: 'recorder', data: { name: 'recordedText' } },
+          { messageId: 'recorder', data: { name: 'fromGoldenMasterTexts' } },
+        ],
+      },
     ],
   },
 );

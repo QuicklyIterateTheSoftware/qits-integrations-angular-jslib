@@ -17,41 +17,54 @@ interface PactFile {
 }
 
 /**
- * `masters`, with `body(state, operationId)` refusing an answer that no interaction in `pactFile`
- * (the committed `pacts/<consumer>_<provider>.json`) uses: same provider state, same
- * `qits-call` operationId. So every body a screenshot shows is one the provider verifies. The pact
- * is read on every call, so a regenerated one counts at once.
+ * `masters`, with `body(state, operationId)` and `text(state, operationId)` (ticket qits-2058)
+ * refusing an answer that no interaction in `pactFile` (the committed
+ * `pacts/<consumer>_<provider>.json`) uses: same provider state, same `qits-call` operationId. So
+ * every body a screenshot shows, JSON or text, is one the provider verifies. The pact is read on
+ * every call, so a regenerated one counts at once.
  */
 export function pactedGoldenMasters(masters: GoldenMasters, pactFile: string): GoldenMasters {
   return {
     operation: (state, operationId) => masters.operation(state, operationId),
     body: (state, operationId) => {
-      if (!existsSync(pactFile)) {
-        throw new Error(
-          `no pact at ${pactFile}, so no golden master from it is verified. Add the consumer's ` +
-            `pact spec next to the store with an interaction for provider state '${state}', ` +
-            `operationId '${operationId}', and generate and commit the pact (QITS_GOLDEN_UPDATE=true).`,
-        );
-      }
-      const pact = JSON.parse(readFileSync(pactFile, 'utf8')) as PactFile;
-      const provider = pact.provider?.name ?? '<provider repository>';
-      const used = (pact.interactions ?? []).some(
-        (i) =>
-          i.comments?.references?.['qits-call']?.operationId === operationId &&
-          (i.providerStates ?? []).some((s) => s.name === state),
-      );
-      if (!used) {
-        throw new Error(
-          `golden master '${state}' / ${operationId} is in no interaction of ${pactFile}, so ` +
-            `${provider} does not verify it. Add a pact interaction for it in the consumer’s pact ` +
-            `spec next to the store (provider state '${state}', operationId '${operationId}'), ` +
-            'regenerate the pact (QITS_GOLDEN_UPDATE=true) and commit it. If no recorded state ' +
-            `fits this case, add a provider state to ${provider} (ProviderStates + golden-master ` +
-            'recorder), record it, and add a pact interaction for it in the same way, so the ' +
-            `provider verifies it. Then answer with goldenMaster('<new state>', '${operationId}').`,
-        );
-      }
+      assertPacted(pactFile, state, operationId);
       return masters.body(state, operationId);
     },
+    text: (state, operationId) => {
+      assertPacted(pactFile, state, operationId);
+      return masters.text(state, operationId);
+    },
   };
+}
+
+/**
+ * Throws, saying how to fix it, unless an interaction in `pactFile` uses provider state `state` and
+ * operation `operationId`: the one check `body()` and `text()` share (ticket qits-2058).
+ */
+function assertPacted(pactFile: string, state: string, operationId: string): void {
+  if (!existsSync(pactFile)) {
+    throw new Error(
+      `no pact at ${pactFile}, so no golden master from it is verified. Add the consumer's ` +
+        `pact spec next to the store with an interaction for provider state '${state}', ` +
+        `operationId '${operationId}', and generate and commit the pact (QITS_GOLDEN_UPDATE=true).`,
+    );
+  }
+  const pact = JSON.parse(readFileSync(pactFile, 'utf8')) as PactFile;
+  const provider = pact.provider?.name ?? '<provider repository>';
+  const used = (pact.interactions ?? []).some(
+    (i) =>
+      i.comments?.references?.['qits-call']?.operationId === operationId &&
+      (i.providerStates ?? []).some((s) => s.name === state),
+  );
+  if (!used) {
+    throw new Error(
+      `golden master '${state}' / ${operationId} is in no interaction of ${pactFile}, so ` +
+        `${provider} does not verify it. Add a pact interaction for it in the consumer’s pact ` +
+        `spec next to the store (provider state '${state}', operationId '${operationId}'), ` +
+        'regenerate the pact (QITS_GOLDEN_UPDATE=true) and commit it. If no recorded state ' +
+        `fits this case, add a provider state to ${provider} (ProviderStates + golden-master ` +
+        'recorder), record it, and add a pact interaction for it in the same way, so the ' +
+        `provider verifies it. Then answer with goldenMaster('<new state>', '${operationId}').`,
+    );
+  }
 }

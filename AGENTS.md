@@ -277,7 +277,11 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   from golden masters, except the UI components' (`syntheticAllowed`, default `['src/app/ui/**']`,
   the same option in the guard and the lint rule). Only UI components may use synthetic data. It must stay browser-safe, so it never
   imports `@qits/angular/testing` (Node-only). `recorded()` deep-freezes a body and puts it and
-  everything in it in a `WeakSet`; `guardGoldenMasters()` patches `TestRequest.prototype.flush`
+  everything in it in a `WeakSet`; a text body (`responseType: 'text'`, ticket qits-2058) is
+  registered by `recordedText()` / `fromGoldenMasterTexts()` by **value** in a `Map` (a string has no
+  identity, so an equal string passes; `''` stays an empty answer), and read Node-side with
+  `goldenMasters(…).text()`, which `pactedGoldenMasters()` checks as it checks `body()`;
+  `guardGoldenMasters()` patches `TestRequest.prototype.flush`
   and `event`. Identity is made in the browser: a Vitest command sends JSON, so wrap the command,
   not the Node reader. The lint rule `browser-spec-data-from-golden-masters` is only a heuristic;
   the guard is the guarantee. `pactedGoldenMasters()` (in `@qits/angular/testing`, Node-side) refuses

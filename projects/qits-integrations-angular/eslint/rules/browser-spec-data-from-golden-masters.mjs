@@ -17,7 +17,12 @@ const STORE_FILE = /(^|\/)[^/]+\.store(\.[cm]?[jt]s)?$/;
 const STATE_TREE = /^\$core\/|(^|\/)core\//;
 
 /** What `@qits/angular/testing/browser` registers recordings with; a spec that has it can fake one. */
-const RECORDERS = new Set(['recorded', 'fromGoldenMasters']);
+const RECORDERS = new Set([
+  'recorded',
+  'fromGoldenMasters',
+  'recordedText',
+  'fromGoldenMasterTexts',
+]);
 const BROWSER_TESTING = '@qits/angular/testing/browser';
 
 /** Array methods that give an element of the array, so of a recording when the array is one. */

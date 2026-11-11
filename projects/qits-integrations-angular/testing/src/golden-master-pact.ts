@@ -6,7 +6,8 @@
  * tree as an npm package: `golden-masters/index.json` plus one JSON file per answer. This file:
  *
  * - reads that package from `node_modules` ({@link goldenMasters}), so plain specs can `flush(...)`
- *   a recorded answer instead of a hand-written one;
+ *   a recorded answer instead of a hand-written one: a JSON body parsed (`body()`), or a text body
+ *   (an `.html` or `.txt` file) verbatim (`text()`, ticket qits-2058);
  * - adds a Pact V4 interaction for a recorded answer to a `@pact-foundation/pact` `PactV4`
  *   ({@link addGoldenInteraction}), with matchers from the index's `frozen` lists;
  * - compares the pact a run wrote with the committed one ({@link assertPactFile}; one spec's part of
@@ -87,7 +88,11 @@ export interface GoldenOperation {
   /** The JSON body the recording sent (a write's request); undefined when it sent none. */
   readonly body: Json | undefined;
   readonly status: number;
-  /** The recorded body's file; null when the answer has no JSON body (a 204, a blob's bytes). */
+  /**
+   * The recorded body's file; null when the answer has no recorded body (a 204, a blob's bytes). A
+   * JSON body's file is `.json`; a text body's (ticket qits-2058) is the text itself, such as `.html`
+   * or `.txt`.
+   */
   readonly file: string | null;
   /** The response headers the provider recorded because consumers read them, by name. */
   readonly responseHeaders: Readonly<Record<string, string>>;
@@ -126,6 +131,14 @@ export interface GoldenMasters {
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped JSON by default, so specs read fields without casts
   body<T = any>(state: string, operationId: string): T;
+  /**
+   * The recorded body as text, verbatim and unparsed (ticket qits-2058): for an answer the consumer
+   * reads as text (HttpClient's `responseType: 'text'`), such as a recorded `.html` or `.txt` file.
+   * Angular's `TestRequest.flush` passes a string through to a text request as it is, where it would
+   * JSON-stringify an object, so a spec flushes exactly what the provider recorded. Throws when the
+   * answer was recorded without a body file (`file: null`).
+   */
+  text(state: string, operationId: string): string;
 }
 
 /**
@@ -203,6 +216,15 @@ export function goldenMasters(
         );
       }
       return JSON.parse(readFileSync(join(tree(), file), 'utf8'));
+    },
+    text: (state, operationId) => {
+      const file = operation(state, operationId).file;
+      if (file === null) {
+        throw new Error(
+          `${provider}'s golden master '${state}' / ${operationId} has no recorded body file: the answer is empty or not text`,
+        );
+      }
+      return readFileSync(join(tree(), file), 'utf8');
     },
   };
 }

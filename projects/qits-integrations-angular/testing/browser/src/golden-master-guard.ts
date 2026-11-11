@@ -10,6 +10,10 @@
  *   a recording (`list.entries`) passes, because it was registered with the whole.
  * - A recording is frozen, so changing it in place throws (specs are ES modules, so strict mode).
  *   A spec cannot take a recording and make it say something else.
+ * - A text body (ticket qits-2058; an `.html` or `.txt` file a request with `responseType: 'text'`
+ *   reads) is registered with {@link recordedText} (or a reader wrapped with
+ *   {@link fromGoldenMasterTexts}) by its VALUE: a string has no identity, so a string equal to a
+ *   recorded text passes, and any other string is refused.
  *
  * Every error says how to fix it: when no recorded state fits, add one to the provider and a pact
  * interaction for it, so the provider verifies what the spec shows.
@@ -44,6 +48,12 @@ export interface RecordingSource {
 }
 
 const recordings = new WeakMap<object, RecordingSource>();
+
+/**
+ * The recorded text bodies (ticket qits-2058), by value: a primitive has no identity to hold in the
+ * `WeakMap`, so the string itself is the key. The last registration of a text names its source.
+ */
+const textRecordings = new Map<string, RecordingSource>();
 
 /** A browser spec file. Its data must come from golden masters, unless it is a UI component's. */
 export const BROWSER_SPECS = /\.browser\.spec\.[cm]?[jt]sx?$/;
@@ -105,13 +115,16 @@ export function goldenMasterAdvice(source: RecordingSource = {}): string {
 /**
  * Registers `body`, a golden master body, as a recording and returns it, deep-frozen. Every object
  * and array inside it is registered too. `source` names where it came from, for error messages.
- * Only objects and arrays can be recordings: a bare string, number or boolean throws.
+ * Only objects and arrays can be recordings here: a bare string, number or boolean throws. A text
+ * body (a string) is registered with {@link recordedText} instead.
  */
 export function recorded<T>(body: T, source: RecordingSource = {}): T {
   if (body === null || typeof body !== 'object') {
     throw new TypeError(
       `golden-master guard: only a JSON object or array can be a recording, not ${describe(body)}. ` +
-        'Pass the whole JSON body a golden master holds, as the reader gave it.',
+        'Pass the whole JSON body a golden master holds, as the reader gave it. For a text body ' +
+        "(a request with responseType: 'text'), register the string with recordedText(…) or wrap " +
+        'the text reader with fromGoldenMasterTexts(…).',
     );
   }
   register(body, source);
@@ -128,8 +141,35 @@ function register(value: object, source: RecordingSource): void {
   Object.freeze(value);
 }
 
-/** Whether `value` is a recording, or an object or array inside one. */
+/**
+ * Registers `text`, a golden master's text body (ticket qits-2058: a recorded `.html` or `.txt` file,
+ * for a request with `responseType: 'text'`), as a recording and returns it unchanged. `source`
+ * names where it came from, for error messages and route records.
+ *
+ * A string is a primitive and has no identity, so it is registered by VALUE: from then on, any
+ * string equal to it counts as recorded, and every other string is refused. That is weaker than an
+ * object recording (a spec that types out the recorded text passes), but a string the provider never
+ * recorded still fails. `''` may be registered, yet the guard still treats it as an empty answer.
+ * Anything but a string throws: a JSON body is registered with {@link recorded}.
+ */
+export function recordedText(text: string, source: RecordingSource = {}): string {
+  if (typeof text !== 'string') {
+    throw new TypeError(
+      `golden-master guard: only a string can be a text recording, not ${describe(text)}. Pass ` +
+        'the text body a golden master holds, as the text reader gave it; a JSON body is ' +
+        'registered with recorded(…) or fromGoldenMasters(…).',
+    );
+  }
+  textRecordings.set(text, source);
+  return text;
+}
+
+/**
+ * Whether `value` is a recording, or an object or array inside one, or a string equal to a recorded
+ * text ({@link recordedText}; by value, as a string has no identity).
+ */
 export function isRecorded(value: unknown): boolean {
+  if (typeof value === 'string') return textRecordings.has(value);
   return value !== null && typeof value === 'object' && recordings.has(value);
 }
 
@@ -159,8 +199,9 @@ function copiedFrom(source: RecordingSource): string {
 }
 
 /**
- * `value`, when it is a recording; throws otherwise. For data that reaches a page by another way
- * than HTTP, such as an event a fake event stream sends: `send(assertRecorded(payload, 'event'))`.
+ * `value`, when it is a recording (or a string equal to a recorded text); throws otherwise. For
+ * data that reaches a page by another way than HTTP, such as an event a fake event stream sends:
+ * `send(assertRecorded(payload, 'event'))`.
  */
 export function assertRecorded<T>(value: T, what = 'value'): T {
   if (!isRecorded(value)) {
@@ -190,6 +231,26 @@ export function fromGoldenMasters<A extends unknown[]>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped JSON by default, as goldenMasters().body
 ): <T = any>(...args: A) => Promise<T> {
   return async <T>(...args: A) => recorded((await read(...args)) as T, source?.(...args));
+}
+
+/**
+ * The text twin of {@link fromGoldenMasters} (ticket qits-2058): `read` (a golden master text
+ * reader, such as a Vitest browser command calling `goldenMasters(…).text(…)` on the Node side),
+ * with every text it gives registered with {@link recordedText}. A reader that gives anything but a
+ * string throws. Flush the text as it is, to a request with `responseType: 'text'`:
+ *
+ *   export const goldenMasterText = fromGoldenMasterTexts(
+ *     (state: string, operationId: string) => commands.goldenMasterText(state, operationId),
+ *     (state, operationId) => ({ provider: 'qits-docs-service', state, operationId }),
+ *   );
+ *
+ * A text is registered by value, so a string equal to a recorded one passes the guard too.
+ */
+export function fromGoldenMasterTexts<A extends unknown[]>(
+  read: (...args: A) => unknown,
+  source?: (...args: A) => RecordingSource,
+): (...args: A) => Promise<string> {
+  return async (...args: A) => recordedText((await read(...args)) as string, source?.(...args));
 }
 
 /** Options for {@link guardGoldenMasters}. */
@@ -228,7 +289,8 @@ let uninstall: (() => void) | undefined;
  * starts with none (ticket qits-2056): the spec files share one page, and a route an earlier file
  * left behind must not reach this one's ledger section.
  *
- * - A 2xx answer must carry a recording (or a part of one).
+ * - A 2xx answer must carry a recording (or a part of one), or a string equal to a recorded text
+ *   ({@link recordedText}, ticket qits-2058).
  * - A 2xx answer with no body (`null`, `undefined`, `''`) fails too: an empty list is a recorded
  *   state like any other. The one exception is an operation that answers 204 No Content, and the
  *   spec says so: `flush(null, { status: 204 })`. A bare `flush(null)` (which Angular turns into
@@ -297,15 +359,21 @@ function runningFile(): string | undefined {
 }
 
 /**
- * Notes the route a 2xx answer carrying a recording is shown on. Whether the guard checks the test
- * makes no difference; nothing is noted for an answer without a body (a 204), a body that is not a
- * recording, a source that does not name provider, state and operation, or a TestBed without a
- * router that has matched a route.
+ * Notes the route a 2xx answer carrying a recording, or a recorded text (ticket qits-2058), is shown
+ * on. Whether the guard checks the test makes no difference; nothing is noted for an answer without a
+ * body (a 204), a body that is not a recording, a source that does not name provider, state and
+ * operation, or a TestBed without a router that has matched a route.
  */
 function noteRoute(body: unknown, status: number | undefined): void {
   if (status !== undefined && (status < 200 || status >= 300)) return;
-  if (body === null || typeof body !== 'object') return;
-  const source = recordings.get(body);
+  const source =
+    typeof body === 'string'
+      ? body === ''
+        ? undefined
+        : textRecordings.get(body)
+      : body !== null && typeof body === 'object'
+        ? recordings.get(body)
+        : undefined;
   if (!source?.provider || !source.state || !source.operationId) return;
   const shown: TestRecord = {
     provider: source.provider,
@@ -425,7 +493,8 @@ function checkAnswer(request: TestRequest, body: unknown, status: number | undef
   if (status !== undefined && (status < 200 || status >= 300)) return;
   const empty = body === null || body === undefined || body === '';
   if (empty && status === 204) return;
-  if (isRecorded(body)) return;
+  // A recorded text passes by value (ticket qits-2058); `''` stays an empty answer, registered or not.
+  if (!empty && isRecorded(body)) return;
   if (empty) {
     return fail(
       request,

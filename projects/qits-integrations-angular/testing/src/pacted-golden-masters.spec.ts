@@ -13,6 +13,7 @@ describe('pactedGoldenMasters', () => {
       throw new Error('not used');
     },
     body: (state: string, operationId: string) => ({ state, operationId }),
+    text: (state: string, operationId: string) => `<p>${state} / ${operationId}</p>`,
   } as unknown as GoldenMasters;
 
   beforeEach(() => {
@@ -48,6 +49,17 @@ describe('pactedGoldenMasters', () => {
     );
     expect(() => pacted.body('a thing exists', 'listThings')).toThrow(
       /add a provider state to qits-demo-service \(ProviderStates \+ golden-master recorder\)/,
+    );
+  });
+
+  it('gives a text body the pact uses, and refuses one it does not (ticket qits-2058)', () => {
+    const pacted = pactedGoldenMasters(masters, pact);
+    expect(pacted.text('a thing exists', 'getThing')).toBe('<p>a thing exists / getThing</p>');
+    expect(() => pacted.text('no thing exists', 'getThing')).toThrow(
+      /'no thing exists' \/ getThing is in no interaction of .*, so qits-demo-service does not verify it\. Add a pact interaction/,
+    );
+    expect(() => pacted.text('a thing exists', 'listThings')).toThrow(
+      /'a thing exists' \/ listThings is in no interaction/,
     );
   });
 

@@ -20,6 +20,8 @@ const PNG = Buffer.from(
 );
 const ID = '00000000-0000-4000-8000-000000000001';
 const PROJECT_ID = '00000000-0000-4000-8000-000000000002';
+/** A recorded text body (ticket qits-2058): it looks like JSON in no place, and ends in a newline. */
+const THING_PAGE = '<!doctype html>\n<h1>Thing “a”</h1>\n';
 
 /** A throwaway project holding a golden-master package in its node_modules. */
 function project(): string {
@@ -100,6 +102,14 @@ function project(): string {
             file: null,
           },
           {
+            operationId: 'getThingPage',
+            method: 'GET',
+            path: '/things/{thingId}/page',
+            status: 200,
+            responseHeaders: { 'Content-Type': 'text/html' },
+            file: 'get-thing-page.html',
+          },
+          {
             operationId: 'listSizes',
             method: 'GET',
             path: '/sizes',
@@ -140,6 +150,7 @@ function project(): string {
     join(tree, 'get-thing.json'),
     JSON.stringify({ id: ID, name: 'a', created: '2026-01-01T00:00:00Z', backup: null }),
   );
+  writeFileSync(join(tree, 'get-thing-page.html'), THING_PAGE);
   writeFileSync(join(tree, 'list-things.json'), JSON.stringify({ entries: [{ id: ID, size: 3 }] }));
   writeFileSync(
     join(tree, 'list-mixed.json'),
@@ -193,6 +204,20 @@ describe('golden-master-pact', () => {
     body.name = 'changed';
     expect(masters.body('a thing exists', 'getThing').name).toBe('a');
     expect(examplePath(masters.operation('a thing exists', 'getThing'))).toBe(`/things/${ID}`);
+  });
+
+  it('reads a recorded text body verbatim, unparsed (ticket qits-2058)', () => {
+    const masters = goldenMasters(PACKAGE, 'qits-demo', root);
+    expect(masters.text('a thing exists', 'getThingPage')).toBe(THING_PAGE);
+    expect(masters.text('a thing exists', 'getThing')).toBe(
+      JSON.stringify({ id: ID, name: 'a', created: '2026-01-01T00:00:00Z', backup: null }),
+    );
+  });
+
+  it('refuses text for an answer recorded without a body file', () => {
+    expect(() =>
+      goldenMasters(PACKAGE, 'qits-demo', root).text('a thing exists', 'getPicture'),
+    ).toThrow(/qits-demo's golden master 'a thing exists' \/ getPicture has no recorded body file/);
   });
 
   it('refuses another provider, and an unknown operation', () => {

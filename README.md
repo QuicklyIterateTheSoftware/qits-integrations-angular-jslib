@@ -643,6 +643,33 @@ const list = await goldenMaster('a project exists', 'listProjects');
 http.expectOne('/projects/api/projects').flush(list);
 ```
 
+**Text answers** (ticket qits-2058). A provider may record a text body (an `.html` or `.txt` file
+the index's `file` names), which the app requests with `responseType: 'text'`. `text(state,
+operationId)` on the Node-side reader gives that file verbatim (`pactedGoldenMasters` checks it as
+it checks `body`), and `fromGoldenMasterTexts(read, source?)` (or `recordedText(text, source?)`)
+registers it in the browser. Flush the string as it is: Angular passes a string through to a text
+request, where it would JSON-stringify an object. A string has no identity, so it is registered by
+**value**: a string equal to a recorded text passes the guard, any other string is refused.
+
+```ts
+// vitest-browser.config.ts: READERS maps a provider to its pactedGoldenMasters(…) reader
+// … commands: { goldenMasterText: (_ctx, state, operationId, p) => READERS[p].text(state, operationId) }
+
+// src/testing/browser/golden-master.ts
+export const goldenMasterText = fromGoldenMasterTexts(
+  (state: string, operationId: string, provider: Provider = 'qits-projects') =>
+    commands.goldenMasterText(state, operationId, provider),
+  (state, operationId, provider = 'qits-projects') => ({
+    provider: REPOSITORY[provider],
+    state,
+    operationId,
+  }),
+);
+
+// a page spec
+req.flush(await goldenMasterText('a project exists', 'getReadme'));
+```
+
 ### Which routes a pact interaction happens on
 
 A pact interaction names the routes its call happens on (ticket qits-1946), and the browser specs
@@ -736,7 +763,7 @@ export default [...yourConfig, ...qits.configs.recommended];
 | `qits/route-matches-directory`               | In a route table, every route with `component` or `loadComponent` (and every `loadChildren`) imports from the directory its URL names: the `path`s from the top of the table through `children`, `''` skipped, `:param` as `[param]`, relative to the routes directory. `path: '**'` may render any page; `redirectTo` routes are skipped. A route table under the routes directory is mounted at its own directory. A `*.layout.ts` under the `$layout` alias directory is shared and not checked. Imports through a path alias and non-literal paths are not checked.                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `qits/route-paths`                           | Keeps `src/app/route-paths.ts` (option `file`) generated from the route tables: `export type RoutePath`, every full path of a route with `component`, `loadComponent`, `children` or `loadChildren` (`''` included, `**`, `redirectTo` and non-literal paths left out, a nested `*.routes.ts` prefixed by its directory; sorted, no leading slash), and the `declare module '@qits/angular' { interface QitsApp { routePath: RoutePath } }` augmentation that makes `exit()` refuse other paths. Reports `stale` on that file when it differs; the fix rewrites it, so `eslint --fix src/app/route-paths.ts` is the generator. The file is opt-in: create it (empty is enough) and run that fix; a missing file is not reported. See [Where an interaction leads](#where-an-interaction-leads-outcomes).                                                                                                                                                                                              |
 | `qits/navigation-through-outcomes`           | **`warn`**, one of the two rules that are not `error` (with `screenshot-kind`). Navigation goes through a declared outcome ([Where an interaction leads](#where-an-interaction-leads-outcomes)): it reports a `Router.navigate` / `Router.navigateByUrl` call and a raw `routerLink` (plain or `[routerLink]`, on any element or `<ng-template>`) in a component's `template` or `templateUrl`. The `Router` is found without type information: the names it is imported under from `@angular/router`, then `inject(Router)`, a `this.<name>` whose field is `inject(Router)` or typed `Router` (constructor parameter properties too), and a parameter or variable typed `Router` or set to `inject(Router)`. `routerLinkActive`, `createUrlTree` / `parseUrl` (they do not navigate) and clicks that do neither are not reported, nor are specs or `src/testing/`. An external template's report sits on `templateUrl` and names `<file>.html:<line>:<col>`. Options `include` / `exclude` (below). |
-| `qits/browser-spec-data-from-golden-masters` | In every `*.browser.spec.ts` except the UI components' (option `syntheticAllowed`, default `['src/app/ui/**']`): no `patchState`, no `TestBed.overrideProvider`, no `useValue`/`useFactory`/`useClass`/`useExisting` for a `*Store` token or for any token imported from the app's state tree (`$core/…` or a path with `/core/`, such as `SelectedProject`; option `allowTokens: ['EVENT_SOURCE']` exempts named state-tree tokens that are transport seams only, never data, and never a `*Store`), no import from a `*.store` file except `import type`, no `recorded`/`fromGoldenMasters` import; the first argument of `flush(…)` traces back to a golden-master call, unless the options give a literal `status` of 400 or more (or 204 with `null`). See [Browser spec data comes from golden masters](#browser-spec-data-comes-from-golden-masters-qitsangulartestingbrowser).                                                                                                                |
+| `qits/browser-spec-data-from-golden-masters` | In every `*.browser.spec.ts` except the UI components' (option `syntheticAllowed`, default `['src/app/ui/**']`): no `patchState`, no `TestBed.overrideProvider`, no `useValue`/`useFactory`/`useClass`/`useExisting` for a `*Store` token or for any token imported from the app's state tree (`$core/…` or a path with `/core/`, such as `SelectedProject`; option `allowTokens: ['EVENT_SOURCE']` exempts named state-tree tokens that are transport seams only, never data, and never a `*Store`), no import from a `*.store` file except `import type`, no `recorded`/`fromGoldenMasters`/`recordedText`/`fromGoldenMasterTexts` import; the first argument of `flush(…)` traces back to a golden-master call, unless the options give a literal `status` of 400 or more (or 204 with `null`). See [Browser spec data comes from golden masters](#browser-spec-data-comes-from-golden-masters-qitsangulartestingbrowser).                                                                         |
 
 Generated clients are `src/app/api/**` (relative to the nearest `package.json`) unless you pass
 `{ clients: ['<glob>', …] }` to `client-only-in-stores`, `consume-client-calls` and `store-has-pact`. A path alias such as

@@ -10,12 +10,14 @@ import {
   clearTestRecords,
   currentRoutePattern,
   currentTestRecords,
+  fromGoldenMasterTexts,
   fromGoldenMasters,
   goldenMasterAdvice,
   goldenMastersRequired,
   guardGoldenMasters,
   isRecorded,
   recorded,
+  recordedText,
   takeRouteRecords,
 } from './golden-master-guard';
 
@@ -26,6 +28,10 @@ interface List {
   total: number;
 }
 const read = async (_state?: string, _operationId?: string): Promise<List> => JSON.parse(LIST);
+
+/** A golden master text body (ticket qits-2058), as the Node side's `text()` sends it. */
+const PAGE = '<!doctype html>\n<h1>Demo</h1>\n';
+const readText = async (_state?: string, _operationId?: string): Promise<string> => PAGE;
 
 describe('recorded', () => {
   it('registers the body and everything inside it', () => {
@@ -54,8 +60,11 @@ describe('recorded', () => {
     expect(list.entries[0].project.slug).toBe('demo');
   });
 
-  it('refuses a bare value', () => {
+  it('refuses a bare value, and points a string at recordedText', () => {
     expect(() => recorded('text')).toThrow(/only a JSON object or array/);
+    expect(() => recorded('text')).toThrow(
+      /recordedText\(…\) or wrap the text reader with fromGoldenMasterTexts\(…\)/,
+    );
     expect(() => recorded(null)).toThrow(/only a JSON object or array/);
   });
 
@@ -64,6 +73,33 @@ describe('recorded', () => {
     const list = await goldenMaster<List>();
     expect(isRecorded(list.entries)).toBe(true);
     expect(Object.isFrozen(list)).toBe(true);
+  });
+
+  it('registers a text by value (ticket qits-2058)', () => {
+    const page = recordedText('<p>registered by value</p>');
+    expect(page).toBe('<p>registered by value</p>');
+    expect(isRecorded(page)).toBe(true);
+    expect(isRecorded(['<p>registered', 'by value</p>'].join(' '))).toBe(true); // equal is enough
+    expect(isRecorded('<p>never registered</p>')).toBe(false);
+    expect(assertRecorded(page, 'text')).toBe(page);
+    expect(() => assertRecorded('<p>never registered</p>', 'text')).toThrow(
+      /the text is not a golden master recording \(a string\)/,
+    );
+  });
+
+  it('refuses anything but a string as a text', () => {
+    expect(() => recordedText({ html: '' } as unknown as string)).toThrow(
+      /only a string can be a text recording, not an object/,
+    );
+    expect(() => recordedText(null as unknown as string)).toThrow(TypeError);
+  });
+
+  it('wraps a text reader', async () => {
+    const goldenMasterText = fromGoldenMasterTexts(readText);
+    expect(await goldenMasterText()).toBe(PAGE);
+    expect(isRecorded(PAGE)).toBe(true);
+    const notText = fromGoldenMasterTexts(async () => ({ html: PAGE }));
+    await expect(notText()).rejects.toThrow(/only a string can be a text recording/);
   });
 
   it('asserts a recording for data that does not come over HTTP', async () => {
@@ -199,6 +235,27 @@ describe('guardGoldenMasters', () => {
     req.flush(null, { status: 500, statusText: 'Server Error' });
   });
 
+  it('passes a recorded text to a text request, and the app receives the string', async () => {
+    const page = await fromGoldenMasterTexts(readText)();
+    const texts: string[] = [];
+    client.get('/api/page', { responseType: 'text' }).subscribe((body) => texts.push(body));
+    http.expectOne('/api/page').flush(page);
+    expect(texts).toEqual([PAGE]);
+    request().flush(null, { status: 500, statusText: 'Server Error' });
+  });
+
+  it('refuses a text no golden master recorded', () => {
+    client.get('/api/page', { responseType: 'text' }).subscribe({ error: () => undefined });
+    const req = http.expectOne('/api/page');
+    expect(() => req.flush('<h1>Hand written</h1>')).toThrow(
+      /GET \/api\/page was answered 200 with a body that is not a golden master recording \(a string\)/,
+    );
+    recordedText('');
+    expect(() => req.flush('')).toThrow(/with no body/); // still an empty answer
+    req.flush(null, { status: 500, statusText: 'Server Error' });
+    request().flush(null, { status: 500, statusText: 'Server Error' });
+  });
+
   it('checks nothing once removed', () => {
     unguard();
     request().flush({ total: 0 });
@@ -320,6 +377,19 @@ const routed = async (url: string) => {
   await (await RouterTestingHarness.create()).navigateByUrl(url);
 };
 
+const pages = fromGoldenMasterTexts(
+  async (state: string, operationId: string) => `<p>${state} / ${operationId}</p>`,
+  (state, operationId) => ({ provider: 'qits-projects-service', state, operationId }),
+);
+
+/** Answers a text request (`responseType: 'text'`) with `body`, as a primitive string. */
+const answerText = (body: string) => {
+  TestBed.inject(HttpClient)
+    .get('/api/page', { responseType: 'text' })
+    .subscribe({ error: () => undefined });
+  TestBed.inject(HttpTestingController).expectOne('/api/page').flush(body);
+};
+
 const answer = (body: object | null, opts?: { status?: number; statusText?: string }) => {
   TestBed.inject(HttpClient)
     .get('/api/x')
@@ -393,6 +463,21 @@ describe('route records', () => {
       .expectOne('/api/x')
       .event(new HttpResponse({ body: list, status: 200 }));
     expect(takeRouteRecords().map((r) => r.route)).toEqual(['projects/:slug/repositories']);
+  });
+
+  it('notes the matched route of a recorded text (ticket qits-2058)', async () => {
+    await routed('/projects/demo/repositories');
+    const page = await pages('a project exists', 'getReadme');
+    answerText(page);
+    answerText(page);
+    expect(takeRouteRecords()).toEqual([
+      {
+        provider: 'qits-projects-service',
+        state: 'a project exists',
+        operationId: 'getReadme',
+        route: 'projects/:slug/repositories',
+      },
+    ]);
   });
 
   it('forgets them on clear', async () => {
@@ -483,5 +568,12 @@ describe('test records', () => {
     expect(currentRoutePattern()).toBeNull();
     clearTestRecords();
     expect(currentTestRecords()).toEqual([]);
+  });
+
+  it('keeps a recorded text the test answered with (ticket qits-2058)', async () => {
+    answerText(await pages('a state', 'getReadme'));
+    expect(currentTestRecords()).toEqual([
+      { provider: 'qits-projects-service', state: 'a state', operationId: 'getReadme' },
+    ]);
   });
 });
