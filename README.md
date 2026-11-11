@@ -491,7 +491,7 @@ as it does for its own; a test that reaches an external one stubs `QITS_LEAVE_AP
 not declare an interaction of its own under any of them.
 
 **Entry points** (ticket qits-2049). Besides the outcome gaps above, `--check` also holds every
-*checked* route — a row of `manifest.routes` (`describeRoutes()`'s tree, walking `children`) with
+_checked_ route — a row of `manifest.routes` (`describeRoutes()`'s tree, walking `children`) with
 no `children` of its own, no `redirectTo`, and a `path` other than `**` — against the declared
 exits: a route is reached when some declared `exit()`, in any scope (a page's own, a layout's,
 app-wide, or the library's), has a `to` equal to the route's `fullPath`. A route entered from
@@ -958,7 +958,7 @@ What the run writes, under `dir` (default `src/testing/browser/freezes`, the tre
   Two different files with the same name fail the run. A copy no freeze uses any more is deleted.
 - `manifest.json`: `routes` (the tree as `describeRoutes()` gives it: `{path, fullPath, redirectTo?,
 entry?, children?}`; `entry: true` marks a route entered from outside the app, `data: QITS_ENTRY`
-on it, ticket qits-2049), `freezes` (`{file, spec, test, name, kind, viewport, route, records, triggers}`,
+  on it, ticket qits-2049), `freezes` (`{file, spec, test, name, kind, viewport, route, records, triggers}`,
   sorted by `file`, which is relative to `dir`), `byRoute` (route pattern → files) and `outcomes`
   (below). `name` is the name the spec gave, without a width suffix. `kind` is the state the shot
   says it shows (`'DATA'`, `'NO_DATA'`, `'PENDING'`, `'ERROR'`), `null` when it gave none.
