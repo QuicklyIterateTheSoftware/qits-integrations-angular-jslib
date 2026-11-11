@@ -180,6 +180,8 @@ export interface FreezeRoute {
   path: string;
   fullPath: string;
   redirectTo?: string;
+  /** `true` when the route is entered from outside the app (`data: QITS_ENTRY`, ticket qits-2049). */
+  entry?: true;
   children?: FreezeRoute[];
 }
 
