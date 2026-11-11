@@ -38,7 +38,9 @@ providers: [provideQitsIntegration(withFeatureCapture())];
 ```
 
 Where an interaction leads is declared with `outcomes('<interaction>', { done: exit('projects/:slug'),
-refused: stay() })`, linked with the `QitsExit` directive and marked with `QitsTriggers`; the paths
+refused: stay() })`, linked with the `QitsExit` directive (`[exitQueryParams]`, `[exitFragment]`, and an `isActive()`
+signal with `aria-current="page"` in place of `routerLinkActive`) and marked with `QitsTriggers`; an
+exit's `go(params, { queryParams, fragment, replaceUrl })` takes the query and fragment too. The paths
 are checked against the `RoutePath` type `qits/route-paths` generates. That file is opt-in: it is
 only checked once the app creates it.
 

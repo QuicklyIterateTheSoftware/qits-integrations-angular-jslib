@@ -19,8 +19,9 @@ export interface OutcomeRecord {
    */
   readonly to: string | null;
   /**
-   * Where it led: the exit's interpolated URL, as `url()` gives it (`/projects/demo`), the URL a
-   * return navigated to, or the `href` an external left for; absent for a stay.
+   * Where it led: the URL an exit navigated to, serialized as the router serializes it (`url()`'s
+   * `/projects/demo`, with the `?query` and `#fragment` its `go()` was given, ticket qits-2038), the
+   * URL a return navigated to, or the `href` an external left for; absent for a stay.
    */
   readonly url?: string;
 }

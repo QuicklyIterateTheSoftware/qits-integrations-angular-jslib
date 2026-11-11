@@ -61,6 +61,7 @@ export type {
 export { base64Url, randomToken, s256Challenge } from './lib/sign-in/pkce';
 export { exit, external, outcomes, QITS_LEAVE_APP, returnTo, stay } from './lib/outcomes/outcomes';
 export type {
+  ExitGoOptions,
   ExitOutcome,
   ExitSpec,
   ExternalOutcome,

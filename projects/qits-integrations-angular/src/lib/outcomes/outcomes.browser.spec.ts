@@ -136,3 +136,110 @@ describe('QitsExit and QitsTriggers', () => {
     );
   });
 });
+
+@Component({
+  imports: [QitsExit],
+  template: `
+    <a
+      id="query"
+      [qitsExit]="open.detail"
+      [exitParams]="{ slug: 'demo', id: 7 }"
+      [exitQueryParams]="{ tab: 'work', q: 'a b' }"
+      exitFragment="open"
+      >Detail</a
+    >
+    <a id="list" [qitsExit]="open.list" #list="qitsExit">List {{ list.isActive() }}</a>
+    <a id="list-exact" [qitsExit]="open.list" [exitActiveExact]="true">List only</a>
+    <a id="project" [qitsExit]="open.project" [exitParams]="{ slug: 'demo' }">Project</a>
+    <a id="other" [qitsExit]="open.project" [exitParams]="{ slug: 'other' }">Other</a>
+  `,
+})
+class ActiveHost {
+  readonly open = outcomes('open-project', {
+    detail: exit('projects/:slug/work/detail/:id'),
+    list: exit('projects'),
+    project: exit('projects/:slug'),
+  });
+}
+
+describe('QitsExit query, fragment and active state', () => {
+  let fixture: ComponentFixture<ActiveHost>;
+  let records: OutcomeRecord[];
+  let router: Router;
+
+  beforeEach(async () => {
+    records = [];
+    ɵsetOutcomeRecorder((record) => records.push(record));
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([
+          { path: '', component: Blank },
+          { path: 'projects', component: Blank },
+          { path: 'projects/:slug', component: Blank },
+          { path: 'projects/:slug/work/detail/:id', component: Blank },
+        ]),
+        { provide: APP_BASE_HREF, useValue: '/app/' },
+      ],
+    });
+    fixture = TestBed.createComponent(ActiveHost);
+    router = TestBed.inject(Router);
+    await router.navigateByUrl('/projects/demo');
+    await fixture.whenStable();
+  });
+
+  afterEach(() => ɵsetOutcomeRecorder(null));
+
+  const link = (id: string) =>
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLAnchorElement>(`#${id}`)!;
+
+  it('renders the query and fragment in the href, and a plain click goes to that URL', async () => {
+    const url = '/projects/demo/work/detail/7?tab=work&q=a%20b#open';
+    expect(link('query').getAttribute('href')).toBe(`/app${url}`);
+
+    link('query').click();
+    await fixture.whenStable();
+
+    expect(router.url).toBe(url);
+    expect(records).toEqual([
+      {
+        interaction: 'open-project',
+        outcome: 'detail',
+        kind: 'exit',
+        to: 'projects/:slug/work/detail/:id',
+        url,
+      },
+    ]);
+  });
+
+  it('marks the current route’s link and its parent’s with aria-current, and no other', () => {
+    expect(link('project').getAttribute('aria-current')).toBe('page');
+    expect(link('list').getAttribute('aria-current')).toBe('page');
+    expect(link('other').hasAttribute('aria-current')).toBe(false);
+    expect(link('query').hasAttribute('aria-current')).toBe(false);
+  });
+
+  it('keeps a parent’s link inactive below it with exitActiveExact', async () => {
+    expect(link('list-exact').hasAttribute('aria-current')).toBe(false);
+    await router.navigateByUrl('/projects?page=2#top');
+    await fixture.whenStable();
+    expect(link('list-exact').getAttribute('aria-current')).toBe('page');
+  });
+
+  it('exposes isActive() through #x="qitsExit"', async () => {
+    expect(link('list').textContent).toBe('List true');
+    await router.navigateByUrl('/');
+    await fixture.whenStable();
+    expect(link('list').textContent).toBe('List false');
+    expect(link('list').hasAttribute('aria-current')).toBe(false);
+  });
+
+  it('moves aria-current with the navigation', async () => {
+    link('other').click();
+    await fixture.whenStable();
+
+    expect(router.url).toBe('/projects/other');
+    expect(link('other').getAttribute('aria-current')).toBe('page');
+    expect(link('project').hasAttribute('aria-current')).toBe(false);
+    expect(link('query').hasAttribute('aria-current')).toBe(false);
+  });
+});

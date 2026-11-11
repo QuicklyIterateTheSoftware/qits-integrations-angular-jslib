@@ -1,6 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
-import { TmplAstRecursiveVisitor, parseTemplate, tmplAstVisitAll } from '@angular/compiler';
+import {
+  LiteralArray,
+  TmplAstRecursiveVisitor,
+  parseTemplate,
+  tmplAstVisitAll,
+} from '@angular/compiler';
 import {
   globRegex,
   isComponentClass,
@@ -42,12 +47,54 @@ function keyName(member) {
   return member.key.name ?? member.key.value;
 }
 
+/** Whether `relativeTo`'s value is a plain identifier or a `this.<name>` / `this.#name` member. */
+function isLocalRelativeTo(value) {
+  value = unwrap(value);
+  if (!value) return false;
+  if (value.type === 'Identifier') return true;
+  return (
+    value.type === 'MemberExpression' &&
+    !value.computed &&
+    value.object.type === 'ThisExpression' &&
+    (value.property.type === 'Identifier' || value.property.type === 'PrivateIdentifier')
+  );
+}
+
+/**
+ * Whether a `navigate(...)` call is a local click under owner decision 4 (epic qits-2000, ticket
+ * qits-2038): an empty command array keeps the current route and changes only the query or
+ * fragment, so it names no other route. A second argument, when there is one, has to agree: no
+ * `relativeTo` at all, or one that cannot name another route either. `navigateByUrl` never
+ * qualifies; callers check the method themselves.
+ */
+function isLocalNavigate(node) {
+  const commands = unwrap(node.arguments[0]);
+  if (commands?.type !== 'ArrayExpression' || commands.elements.length !== 0) return false;
+  if (node.arguments.length < 2) return true;
+  const options = unwrap(node.arguments[1]);
+  if (options?.type !== 'ObjectExpression') return false;
+  const relativeTo = property(options, 'relativeTo');
+  return !relativeTo || isLocalRelativeTo(relativeTo.value);
+}
+
+/**
+ * Whether a `routerLink` attribute's expression is an empty array literal (`[routerLink]="[]"`):
+ * it keeps the current route and changes only the query or fragment — a local click under owner
+ * decision 4 (epic qits-2000, ticket qits-2038) — so it is not reported. A static `routerLink="…"`
+ * attribute has no `.ast` at all and is never exempted this way.
+ */
+function isEmptyRouterLink(attr) {
+  const ast = attr.value?.ast;
+  return ast instanceof LiteralArray && ast.expressions.length === 0;
+}
+
 /** Every `routerLink` attribute or bound input in a parsed template, once each. */
 function routerLinks(nodes) {
   const found = new Map();
   const check = (attrs) => {
     for (const attr of attrs) {
-      if (attr.name === 'routerLink') found.set(attr.sourceSpan.start.offset, attr.sourceSpan);
+      if (attr.name === 'routerLink' && !isEmptyRouterLink(attr))
+        found.set(attr.sourceSpan.start.offset, attr.sourceSpan);
     }
   };
   class Visitor extends TmplAstRecursiveVisitor {
@@ -95,6 +142,16 @@ function templateLinks(text, url) {
  * without `${}`) is reported where the attribute sits, an external `templateUrl:` on that
  * property with the `.html` file, line and column in the message. A real exception opts out
  * with an `eslint-disable-next-line` comment giving the reason.
+ *
+ * An empty command list — `router.navigate([], …)` (never `navigateByUrl`) or a template
+ * `[routerLink]="[]"` — keeps the current route and changes only the query or fragment (a tabs
+ * `?tab=`, a file picker `?path=`, a `#fragment`), so it names no other route and is not a
+ * navigation an outcome would declare: a local click under owner decision 4 (epic qits-2000,
+ * ticket qits-2038). `navigate([])`'s second argument, when there is one, has to agree: an object
+ * literal without `relativeTo`, or with a `relativeTo` that is a plain identifier or a
+ * `this.<name>` / `this.#name` member expression — anything that could still name another route
+ * (`.parent`, `.root`, `.firstChild`, a call, a computed member, or a `relativeTo` behind a
+ * variable the rule cannot see into) keeps the call reported.
  */
 export default {
   meta: {
@@ -269,6 +326,7 @@ export default {
         if (callee.type !== 'MemberExpression') return;
         const method = memberName(callee);
         if (!NAVIGATE.has(method) || !isRouterRef(callee.object, node)) return;
+        if (method === 'navigate' && isLocalNavigate(node)) return;
         context.report({ node: callee.property, messageId: 'navigate', data: { method } });
       },
     };

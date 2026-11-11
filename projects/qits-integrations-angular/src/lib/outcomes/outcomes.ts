@@ -25,7 +25,13 @@
  * interaction slugs. An app that augments neither gets `string` for both.
  */
 import { DOCUMENT, inject, InjectionToken } from '@angular/core';
-import { Router, type NavigationBehaviorOptions } from '@angular/router';
+import {
+  PRIMARY_OUTLET,
+  Router,
+  type NavigationBehaviorOptions,
+  type UrlCreationOptions,
+  type UrlTree,
+} from '@angular/router';
 import { recordOutcome } from './outcome-recorder';
 
 /**
@@ -70,10 +76,18 @@ export type UrlArgs<P extends string> = [ParamNames<P>] extends [never]
   ? [params?: NoParams]
   : [params: PathParams<P>];
 
-/** `go()`'s arguments: {@link UrlArgs}, then the router's `replaceUrl` / `state` and friends. */
+/**
+ * What an exit's `go()` takes beside the params (ticket qits-2038): the router's `replaceUrl` /
+ * `state` and friends, and the `queryParams` and `fragment` of the URL it goes to. The query and the
+ * fragment are not part of the declared exit, so `url()` never carries them.
+ */
+export type ExitGoOptions = NavigationBehaviorOptions &
+  Pick<UrlCreationOptions, 'queryParams' | 'fragment'>;
+
+/** `go()`'s arguments: {@link UrlArgs}, then {@link ExitGoOptions}. */
 export type GoArgs<P extends string> = [ParamNames<P>] extends [never]
-  ? [params?: NoParams, behaviour?: NavigationBehaviorOptions]
-  : [params: PathParams<P>, behaviour?: NavigationBehaviorOptions];
+  ? [params?: NoParams, options?: ExitGoOptions]
+  : [params: PathParams<P>, options?: ExitGoOptions];
 
 /** What {@link exit} declares: the interaction leaves for `to`. */
 export interface ExitSpec<P extends string = string> {
@@ -114,7 +128,12 @@ export interface ExitOutcome<P extends string = string> {
    * `encodeURIComponent`ed; a missing one throws.
    */
   url(...params: UrlArgs<P>): string;
-  /** Records the outcome, then navigates to {@link url} (`router.navigateByUrl`'s Promise). */
+  /**
+   * Records the outcome, then navigates to {@link url} (`router.navigateByUrl`'s Promise). With
+   * `queryParams` or a `fragment` in the options it navigates to the URL tree they make with the
+   * path (`/projects/demo?tab=work#open`, as `RouterLink` builds it), and the rest of the options go
+   * to the router as its behaviour.
+   */
   go(...args: GoArgs<P>): Promise<boolean>;
 }
 
@@ -258,10 +277,16 @@ function exitEntry(
     kind: 'exit' as const,
     to,
     url,
-    go(params?: Readonly<Record<string, string | number>>, behaviour?: NavigationBehaviorOptions) {
+    go(params?: Readonly<Record<string, string | number>>, options?: ExitGoOptions) {
       const target = url(params);
-      recordOutcome({ interaction, outcome, kind: 'exit', to, url: target });
-      return router.navigateByUrl(target, behaviour);
+      const { queryParams, fragment, ...behaviour } = options ?? {};
+      if (queryParams == null && fragment == null) {
+        recordOutcome({ interaction, outcome, kind: 'exit', to, url: target });
+        return router.navigateByUrl(target, options);
+      }
+      const tree = exitUrlTree(router, target, { queryParams, fragment });
+      recordOutcome({ interaction, outcome, kind: 'exit', to, url: router.serializeUrl(tree) });
+      return router.navigateByUrl(tree, behaviour);
     },
   });
 }
@@ -321,6 +346,21 @@ function externalEntry(
 function isAppUrl(url: string): boolean {
   const cleaned = url.replace(/[\t\n\r]/g, '');
   return cleaned.startsWith('/') && !/^\/[/\\]/.test(cleaned);
+}
+
+/**
+ * Internal (`QitsExit` builds its `href` with it): the URL tree of an exit's `url`, with the query
+ * and fragment `extras` name. Not `createUrlTree([url])`: a string command is split on `/` but not
+ * decoded, so an encoded param (`a%20b`) would be encoded once more. The parsed path's segments go
+ * in as commands instead, each serialized again as the router does for any segment.
+ */
+export function exitUrlTree(
+  router: Router,
+  url: string,
+  extras: Pick<UrlCreationOptions, 'queryParams' | 'fragment'> = {},
+): UrlTree {
+  const segments = router.parseUrl(url).root.children[PRIMARY_OUTLET]?.segments ?? [];
+  return router.createUrlTree(['/', ...segments.map((segment) => segment.path)], extras);
 }
 
 /** `/` plus `to` with every `:name` segment replaced by its encoded param. */

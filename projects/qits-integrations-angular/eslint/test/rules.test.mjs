@@ -1686,6 +1686,32 @@ tester.run('navigation-through-outcomes', rules['navigation-through-outcomes'], 
       code: FIELD,
       options: [{ exclude: ['src/app/routes/**'] }],
     },
+    // An empty command list is a local click (owner decision 4, epic qits-2000, qits-2038): it
+    // keeps the current route and changes only the query or fragment.
+    {
+      filename: at('src/app/routes/work/work.page.ts'),
+      code: `${ROUTER}export class P {\n  private readonly router = inject(Router);\n  private readonly route = inject(ActivatedRoute);\n  openTab(tab: string) {\n    void this.router.navigate([], { relativeTo: this.route, queryParams: { tab } });\n  }\n}`,
+    },
+    {
+      filename: at('src/app/routes/work/work.page.ts'),
+      code: `${ROUTER}export class P {\n  private readonly router = inject(Router);\n  go() {\n    void this.router.navigate([], { fragment: 'x' });\n  }\n}`,
+    },
+    {
+      filename: at('src/app/routes/work/work.page.ts'),
+      code: `${ROUTER}export class P {\n  private readonly router = inject(Router);\n  clear() {\n    void this.router.navigate([]);\n  }\n}`,
+    },
+    {
+      filename: at('src/app/routes/work/work.page.ts'),
+      code: component('<a [routerLink]="[]" [queryParams]="{ tab: 1 }">Tab</a>'),
+    },
+    {
+      filename: at('src/app/routes/work/work.page.ts'),
+      code: component('\n    @if (open) {\n      <a [routerLink]="[]">Tab</a>\n    }\n  '),
+    },
+    {
+      filename: at('src/app/patterns/menu/menu.ts'),
+      code: component('<a *ngIf="x" [routerLink]="[]">Tab</a>'),
+    },
   ],
   invalid: [
     {
@@ -1714,7 +1740,7 @@ tester.run('navigation-through-outcomes', rules['navigation-through-outcomes'], 
     // Constructor injection, a parameter, a typed field, a local.
     {
       filename: at('src/app/patterns/work-list/work-list.ts'),
-      code: `${ROUTER}export class L {\n  private other!: Router;\n  constructor(private r: Router) {\n    r.navigate([]);\n  }\n  go(router: Router) {\n    this.r.navigate(['/a']);\n    router.navigateByUrl('/b');\n    this.other.navigate([]);\n    const local = inject(Router);\n    local.navigate([]);\n  }\n}`,
+      code: `${ROUTER}export class L {\n  private other!: Router;\n  constructor(private r: Router) {\n    r.navigate(['/a']);\n  }\n  go(router: Router) {\n    this.r.navigate(['/a']);\n    router.navigateByUrl('/b');\n    this.other.navigate(['/a']);\n    const local = inject(Router);\n    local.navigate(['/a']);\n  }\n}`,
       errors: [
         { messageId: 'navigate', line: 6 },
         { messageId: 'navigate', line: 9 },
@@ -1792,6 +1818,25 @@ tester.run('navigation-through-outcomes', rules['navigation-through-outcomes'], 
       filename: at('src/app/ui/components/tag-link/tag-link.ts'),
       code: component('<a [routerLink]="link()">{{ label() }}</a>'),
       errors: [{ messageId: 'routerLink' }],
+    },
+    // The empty-array exemption only reaches what owner decision 4 names: a relativeTo that can
+    // still name another route, a second argument the rule cannot see into, a non-empty command
+    // list, and navigateByUrl, all stay reported.
+    {
+      filename: at('src/app/routes/work/work.page.ts'),
+      code: `${ROUTER}export class P {\n  private readonly router = inject(Router);\n  private readonly route = inject(ActivatedRoute);\n  go(opts: { relativeTo?: unknown }) {\n    this.router.navigate([], { relativeTo: this.route.parent });\n    this.router.navigate([], opts);\n    this.router.navigate(['x']);\n    this.router.navigateByUrl('');\n  }\n}`,
+      errors: [
+        { messageId: 'navigate', data: { method: 'navigate' }, line: 7 },
+        { messageId: 'navigate', data: { method: 'navigate' }, line: 8 },
+        { messageId: 'navigate', data: { method: 'navigate' }, line: 9 },
+        { messageId: 'navigate', data: { method: 'navigateByUrl' }, line: 10 },
+      ],
+    },
+    // A non-empty-array routerLink, and a static attribute, stay reported.
+    {
+      filename: at('src/app/patterns/menu/menu.ts'),
+      code: component('<a [routerLink]="[\'x\']">a</a><a routerLink="x">b</a>'),
+      errors: [{ messageId: 'routerLink' }, { messageId: 'routerLink' }],
     },
   ],
 });

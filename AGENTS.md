@@ -133,8 +133,13 @@ declared once and checked by the compiler.
   gives one frozen entry per key (`interaction`, `outcome`, `kind`, `to`). It `inject`s the `Router` and `QITS_LEAVE_APP`, so it runs in an injection context
   (a field initializer). An exit's `url(params)` is **absolute** (`/` + the
   pattern with each `:param` `encodeURIComponent`ed; a missing one throws), so a `routerLink` built
-  from it never resolves against the current route; `go(params, behaviour?)` records, then returns
-  `navigateByUrl`'s Promise. A stay's `reach()` only records. A return's `go(url, behaviour?)`
+  from it never resolves against the current route; `go(params, options?)` records, then returns
+  `navigateByUrl`'s Promise. `options` is `ExitGoOptions` (ticket qits-2038): the router's
+  behaviour plus `queryParams` / `fragment`; with either, it navigates to `exitUrlTree()`'s tree
+  (the rest of the options as behaviour) and records `serializeUrl` of it, without them it calls
+  `navigateByUrl(url, options)` as before. `exitUrlTree()` (internal, `QitsExit`'s `href` too) feeds
+  the parsed path's **segments** to `createUrlTree`, never the URL string: a string command is split
+  on `/` but not decoded, so an encoded param would be encoded twice. A stay's `reach()` only records. A return's `go(url, behaviour?)`
   (ticket qits-2044) follows only an app URL (one leading `/`, tabs and line breaks dropped first as
   a browser does; else `/`); an external's `leave(href)` records, then calls `QITS_LEAVE_APP` (root token, default `DOCUMENT.location.assign`; a routed browser test provides a spy, since overriding the `DOCUMENT` breaks rendering). The third
   argument does nothing at run time: the screenshot reader reads `triggered: false` (an interaction
@@ -149,7 +154,14 @@ declared once and checked by the compiler.
 - `qits-exit.directive.ts` / `qits-triggers.directive.ts` / `outcome-mark.ts` — `a[qitsExit]`
   renders `href` as `RouterLink` does (`LocationStrategy.prepareExternalUrl` of the serialized
   URL, so a base href is honoured) and takes only a plain primary click without `target` (or
-  `_self`); anything else is the browser's and records nothing. `QitsExit` and `[qitsTriggers]`
+  `_self`); anything else is the browser's and records nothing. `[exitQueryParams]` /
+  `[exitFragment]` (ticket qits-2038) go into both the `href` and the click's `go()` options (only
+  the keys that are set). `exportAs: 'qitsExit'` and the `isActive()` signal replace
+  `routerLinkActive` + `ariaCurrentWhenActive="page"` (`[attr.aria-current]`): Angular's
+  standalone `isActive()` function (`Router.isActive` is deprecated since 21.1) on the path-only
+  tree, `paths: 'subset'` (`'exact'` with `[exitActiveExact]`) and query, matrix params and fragment
+  ignored; it follows `router.lastSuccessfulNavigation`, set just before each `NavigationEnd`, so no
+  `router.events` subscription. `QitsExit` and `[qitsTriggers]`
   set `data-qits-outcome` through `outcomeMark()`. The attribute name is spelled out in the
   directives and in `interaction-telemetry.ts`: that file is reached from the lazy
   `telemetry-sdk.ts`, so importing a shared constant split `outcome-mark.ts` into its own chunk.
@@ -323,7 +335,12 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   (ticket qits-2044): its own `eslint.config.js` `require()`s `./eslint/index.mjs` (ESM without
   top-level await) and sets the rule with `include: ['src/lib/**']`,
   `exclude: ['src/lib/outcomes/**']` — only the outcome API, whose `QitsExit` and `go()` navigate by design, is
-  left out. No type information: the `Router` is
+  left out. An empty command list — `router.navigate([], …)` (never `navigateByUrl`) or
+  `[routerLink]="[]"` — keeps the current route and changes only the query or fragment, a local
+  click under owner decision 4 (epic qits-2000, ticket qits-2038), and is not reported; a
+  `navigate([])` second argument stays innocent only with no `relativeTo`, or one that is a plain
+  identifier or a `this.<name>`/`this.#name` member (anything that could still name another route,
+  such as `.parent` or a computed member, keeps it reported). No type information: the `Router` is
   resolved syntactically from its `@angular/router` import (`inject(R)`, `this.<field>` set to
   `inject(R)` or typed `R`, parameter properties, typed or `inject(R)` locals). Templates are parsed
   with `parseTemplate` from `@angular/compiler`, a **required peer** for that (every Angular app

@@ -1,6 +1,6 @@
 import { Component, DOCUMENT, Injector, runInInjectionContext } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter, Router } from '@angular/router';
+import { provideRouter, Router, type UrlTree } from '@angular/router';
 import type { InteractionName, RoutePath } from '@qits/angular';
 import { outcomeMark } from './outcome-mark';
 import { ɵsetOutcomeRecorder, type OutcomeRecord } from './outcome-recorder';
@@ -11,6 +11,7 @@ import {
   QITS_LEAVE_APP,
   returnTo,
   stay,
+  type ExitGoOptions,
   type PathParams,
 } from './outcomes';
 
@@ -123,6 +124,53 @@ describe('outcomes', () => {
         url: '/projects/demo/work/detail/7',
       },
     ]);
+  });
+
+  it('go adds the query and fragment it is given, and forwards the rest as behaviour', async () => {
+    const create = setUp();
+    const router = TestBed.inject(Router);
+    const navigate = vi.spyOn(router, 'navigateByUrl');
+
+    await expect(
+      create.created.go(
+        { slug: 'a b', id: 7 },
+        {
+          queryParams: { tab: 'work', q: 'x y' },
+          fragment: 'open',
+          replaceUrl: true,
+          state: { from: 'list' },
+        },
+      ),
+    ).resolves.toBe(true);
+
+    const url = '/projects/a%20b/work/detail/7?tab=work&q=x%20y#open';
+    expect(navigate).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+      replaceUrl: true,
+      state: { from: 'list' },
+    });
+    expect(router.serializeUrl(navigate.mock.calls[0][0] as UrlTree)).toBe(url);
+    expect(router.url).toBe(url);
+    expect(router.lastSuccessfulNavigation()?.extras.state).toEqual({ from: 'list' });
+    expect(records).toEqual([
+      {
+        interaction: 'create-work-item',
+        outcome: 'created',
+        kind: 'exit',
+        to: 'projects/:slug/work/detail/:id',
+        url,
+      },
+    ]);
+  });
+
+  it('go takes a query or a fragment alone, and keeps url() path-only', async () => {
+    const create = setUp();
+    const router = TestBed.inject(Router);
+    await create.cancelled.go(undefined, { queryParams: { page: 2 } });
+    expect(router.url).toBe('/projects?page=2');
+    await create.home.go({}, { fragment: 'top' });
+    expect(router.url).toBe('/#top');
+    expect(records.map((record) => record.url)).toEqual(['/projects?page=2', '/#top']);
+    expect(create.cancelled.url()).toBe('/projects');
   });
 
   it('go takes no params when the path has none', async () => {
@@ -348,6 +396,22 @@ describe('the typing seam', () => {
       void create.created.go();
       // @ts-expect-error -- the path has no params
       void create.cancelled.go({ slug: 'demo' });
+      // @ts-expect-error -- a query is the options' queryParams, not a param
+      void create.cancelled.go({ tab: 'work' }, {});
+    });
+  });
+
+  it('takes the query and fragment in go()’s options', () => {
+    const create = setUp();
+    expectTypeOf<Parameters<typeof create.cancelled.go>[1]>().toEqualTypeOf<
+      ExitGoOptions | undefined
+    >();
+    void (() => {
+      void create.cancelled.go(undefined, { queryParams: { tab: 'work' } });
+      void create.cancelled.go({}, { fragment: 'top' });
+      void create.created.go({ slug: 'demo', id: 1 }, { queryParams: null, replaceUrl: true });
+      // @ts-expect-error -- a fragment is a string
+      void create.cancelled.go(undefined, { fragment: 1 });
     });
   });
 
