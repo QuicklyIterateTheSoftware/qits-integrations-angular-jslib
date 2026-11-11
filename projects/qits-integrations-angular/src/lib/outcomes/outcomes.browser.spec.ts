@@ -4,7 +4,7 @@ import { TestBed, type ComponentFixture } from '@angular/core/testing';
 import { provideRouter, Router } from '@angular/router';
 import { ɵsetOutcomeRecorder, type OutcomeRecord } from './outcome-recorder';
 import { exit, outcomes, stay } from './outcomes';
-import { QitsExit } from './qits-exit.directive';
+import { QitsExit, type ExitCurrent } from './qits-exit.directive';
 import { QitsTriggers } from './qits-triggers.directive';
 
 /**
@@ -152,6 +152,24 @@ describe('QitsExit and QitsTriggers', () => {
     <a id="list-exact" [qitsExit]="open.list" [exitActiveExact]="true">List only</a>
     <a id="project" [qitsExit]="open.project" [exitParams]="{ slug: 'demo' }">Project</a>
     <a id="other" [qitsExit]="open.project" [exitParams]="{ slug: 'other' }">Other</a>
+    <a
+      id="other-current-true"
+      [qitsExit]="open.project"
+      [exitParams]="{ slug: 'other' }"
+      [exitCurrent]="'true'"
+      >Other true</a
+    >
+    <a
+      id="project-current-null"
+      [qitsExit]="open.project"
+      [exitParams]="{ slug: 'demo' }"
+      [exitCurrent]="null"
+      #projectCurrentNull="qitsExit"
+      >Project null {{ projectCurrentNull.isActive() }}</a
+    >
+    <a id="list-current-dynamic" [qitsExit]="open.list" [exitCurrent]="dynamicCurrent()"
+      >List dynamic</a
+    >
   `,
 })
 class ActiveHost {
@@ -160,6 +178,7 @@ class ActiveHost {
     list: exit('projects'),
     project: exit('projects/:slug'),
   });
+  readonly dynamicCurrent = signal<ExitCurrent | undefined>('page');
 }
 
 describe('QitsExit query, fragment and active state', () => {
@@ -241,5 +260,32 @@ describe('QitsExit query, fragment and active state', () => {
     expect(link('other').getAttribute('aria-current')).toBe('page');
     expect(link('project').hasAttribute('aria-current')).toBe(false);
     expect(link('query').hasAttribute('aria-current')).toBe(false);
+  });
+
+  it('exitCurrent overrides the path rule on an inactive exit', () => {
+    expect(link('other').hasAttribute('aria-current')).toBe(false);
+    expect(link('other-current-true').getAttribute('aria-current')).toBe('true');
+  });
+
+  it('exitCurrent="null" leaves no aria-current on an active exit, but isActive() stays true', () => {
+    expect(link('project-current-null').hasAttribute('aria-current')).toBe(false);
+    expect(link('project-current-null').textContent).toBe('Project null true');
+  });
+
+  it('follows a signal-bound exitCurrent, and ignores navigation while it stays fixed', async () => {
+    const dynamic = () => link('list-current-dynamic');
+    expect(dynamic().getAttribute('aria-current')).toBe('page');
+
+    fixture.componentInstance.dynamicCurrent.set(null);
+    await fixture.whenStable();
+    expect(dynamic().hasAttribute('aria-current')).toBe(false);
+
+    fixture.componentInstance.dynamicCurrent.set('true');
+    await fixture.whenStable();
+    expect(dynamic().getAttribute('aria-current')).toBe('true');
+
+    await router.navigateByUrl('/');
+    await fixture.whenStable();
+    expect(dynamic().getAttribute('aria-current')).toBe('true');
   });
 });

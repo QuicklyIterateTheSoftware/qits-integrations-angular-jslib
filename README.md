@@ -379,7 +379,11 @@ export class WorkCreatePage {
   `ariaCurrentWhenActive="page"` set it. `[exitActiveExact]="true"` makes it active on that very
   path only. A template that read `#x="routerLinkActive"` / `x.isActive` reads
   `#x="qitsExit"` / `x.isActive()`; style the active link with `[class.active]="x.isActive()"` or
-  `a[aria-current='page']`.
+  `a[aria-current='page']`. `[exitCurrent]` (ticket qits-2064) overrides what `aria-current` the
+  link renders: bound to a token (`'step'`, `'true'`, …) the link carries that `aria-current`
+  whatever the route, bound to `null` it carries none even while active, and left unbound it keeps
+  the path rule above. `isActive()` itself never changes with `[exitCurrent]` — it is always the
+  path rule.
 - **Trigger marks.** `QitsExit` and `[qitsTriggers]="[…]"` set `data-qits-outcome` to
   `<interaction>:<outcome>` per entry, space-separated in the order given
   (`create-work-item:created create-work-item:refused`). `outcomeMark(...entries)` returns the

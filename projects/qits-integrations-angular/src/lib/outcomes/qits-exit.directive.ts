@@ -9,6 +9,9 @@ interface UntypedExit {
   go(params?: object, options?: ExitGoOptions): Promise<boolean>;
 }
 
+/** The ARIA `aria-current` tokens; `null` means the attribute is not rendered at all. */
+export type ExitCurrent = 'page' | 'step' | 'location' | 'date' | 'time' | 'true' | null;
+
 /**
  * A link to a declared exit: `<a [qitsExit]="create.cancelled" [exitParams]="{ slug }">`. It renders
  * a real `href`, so opening it in a new tab, copying it and hovering it all work, and marks the link
@@ -26,7 +29,10 @@ interface UntypedExit {
  * link staying active on its children (`RouterLinkActive`'s default rule; the query and the
  * fragment do not count), and only on that very path with `[exitActiveExact]="true"`. The link then
  * carries `aria-current="page"`, as `ariaCurrentWhenActive="page"` set it, and
- * `#x="routerLinkActive"` becomes `#x="qitsExit"`, read as `x.isActive()`.
+ * `#x="routerLinkActive"` becomes `#x="qitsExit"`, read as `x.isActive()`. `[exitCurrent]` (ticket
+ * qits-2064) overrides that path rule: bound to a token, the link carries that `aria-current`
+ * whatever the route, and bound to `null` the link carries no `aria-current` even while active.
+ * `isActive()` itself is unaffected either way — it stays the path rule.
  */
 @Directive({
   selector: 'a[qitsExit]',
@@ -34,7 +40,7 @@ interface UntypedExit {
   host: {
     '[attr.href]': 'href()',
     '[attr.data-qits-outcome]': 'mark()',
-    '[attr.aria-current]': "isActive() ? 'page' : null",
+    '[attr.aria-current]': 'current()',
     '(click)': 'onClick($event)',
   },
 })
@@ -48,6 +54,14 @@ export class QitsExit<P extends string = string> {
   readonly exitFragment = input<string | undefined>();
   /** Active only on the exit's very path, not on the routes below it (`exact: true`). */
   readonly exitActiveExact = input(false);
+  /**
+   * Overrides the `aria-current` the path rule would otherwise set (ticket qits-2064). Bound to a
+   * token, the link carries that `aria-current` whatever the route; bound to `null`, the link
+   * carries no `aria-current` at all. Left unbound, it is `undefined` — and since a signal input
+   * cannot tell "unbound" from "bound to `undefined`", `undefined` is what keeps the path rule:
+   * `'page'` while `isActive()`, nothing otherwise.
+   */
+  readonly exitCurrent = input<ExitCurrent | undefined>(undefined);
 
   private readonly router = inject(Router);
   private readonly locationStrategy = inject(LocationStrategy);
@@ -88,6 +102,14 @@ export class QitsExit<P extends string = string> {
   );
   /** Whether the router's current URL is (or, unless `exitActiveExact`, is below) the exit's path. */
   readonly isActive = computed(() => this.active()());
+  /**
+   * The `aria-current` to render: `exitCurrent()` when bound, else the path rule (`isActive()`
+   * must stay the path rule regardless, so it is read, not replaced).
+   */
+  protected readonly current = computed(() => {
+    const c = this.exitCurrent();
+    return c !== undefined ? c : this.isActive() ? 'page' : null;
+  });
 
   protected onClick(event: MouseEvent): void {
     if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {

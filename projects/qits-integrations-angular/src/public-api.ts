@@ -83,6 +83,7 @@ export type {
 } from './lib/outcomes/outcomes';
 export { outcomeMark } from './lib/outcomes/outcome-mark';
 export { QitsExit } from './lib/outcomes/qits-exit.directive';
+export type { ExitCurrent } from './lib/outcomes/qits-exit.directive';
 export { QitsTriggers } from './lib/outcomes/qits-triggers.directive';
 export { ɵsetOutcomeRecorder } from './lib/outcomes/outcome-recorder';
 export type { OutcomeRecord, OutcomeRecorder } from './lib/outcomes/outcome-recorder';
