@@ -7,15 +7,18 @@
  * - `--prune` deletes them. Only the platform's screenshot baselines job runs it.
  *
  * `--check` also holds the app's `outcomes()` declarations against the freeze manifest (ticket
- * qits-2003, `outcomes.mjs`). Those gaps are report-only unless `--enforce-outcomes` is given, so an
- * app adopts the check page by page; an update run only lists them, as it does the orphans.
+ * qits-2003, `outcomes.mjs`), and every checked route against the declared exits (ticket qits-2049):
+ * a route no exit leads to, and that is not itself declared an entry point
+ * (`data: QITS_ENTRY` / `data: { qitsEntry: true }`, `manifest.routes[].entry`), is named too. Those
+ * gaps are report-only unless `--enforce-outcomes` is given, so an app adopts the check page by
+ * page; an update run only lists them, as it does the orphans.
  */
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DEFAULT_RECORD } from './record.mjs';
 import { findOrphans, pruneOrphans } from './orphans.mjs';
 import { DEFAULT_FREEZE_DIRECTORY, MANIFEST } from './freezes.mjs';
-import { DEFAULT_ROUTES, declaredOutcomes, outcomeGaps } from './outcomes.mjs';
+import { checkedRoutes, DEFAULT_ROUTES, declaredOutcomes, outcomeGaps } from './outcomes.mjs';
 
 export const USAGE = `Usage: qits-angular screenshots --check | --prune [options]
 
@@ -28,8 +31,11 @@ every test ran and passed, and that has not changed since, is judged.
 --check also reads the outcomes() declarations from the source and the
 freeze manifest, and names each declared outcome no browser test reaches,
 each stay no screenshot follows, each outcome whose trigger no screenshot
-shows, and each outcomes() call it cannot read. These gaps are report-only
-unless --enforce-outcomes is given.
+shows, each outcomes() call it cannot read, and each route (manifest.routes,
+a page or layout with no children, no redirectTo, path other than '**') that
+no declared exit leads to and that is not itself declared an entry point
+(route data: QITS_ENTRY). These gaps are report-only unless --enforce-outcomes
+is given.
 
   --check              List the orphans; exit 1 if there are any.
   --prune              Delete the orphans (the screenshot baselines job does this).
@@ -160,12 +166,12 @@ function checkOrphans({ mode, root, record, verbose, env, out, err }) {
 function checkOutcomes({ root, freezes, routes, enforceOutcomes, env, out, err }) {
   let gaps;
   let declared;
+  let manifest;
   try {
     const read = declaredOutcomes({ root, routes });
     declared = read.declared;
     if (read.declared.length === 0 && read.unreadable.length === 0) return 0;
     const manifestPath = join(resolve(root, freezes), MANIFEST);
-    let manifest;
     try {
       manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     } catch {
@@ -186,7 +192,8 @@ function checkOutcomes({ root, freezes, routes, enforceOutcomes, env, out, err }
   if (gaps.length === 0) {
     out(
       `qits-angular screenshots: every declared outcome (${declared.length}) is reached by a test ` +
-        'and its trigger is shown.',
+        `and its trigger is shown, and every route (${checkedRoutes(manifest).length}) is led to ` +
+        'or an entry point.',
     );
     return 0;
   }

@@ -9,6 +9,7 @@ import {
   signal,
 } from '@angular/core';
 import type { Route } from '@angular/router';
+import { QITS_ENTRY } from '../outcomes/entry';
 import { exit, outcomes, returnTo, stay } from '../outcomes/outcomes';
 import { QitsExit } from '../outcomes/qits-exit.directive';
 import { QitsSignInError, QitsTokens, type QitsSignInFailure } from './qits-tokens';
@@ -132,9 +133,12 @@ export class QitsAuthCallbackPage {
 /**
  * The `auth/callback` route. `provideQitsBearerSignIn` puts it in front of the app's routes on its
  * own; an app that passes `callbackRoute: false` places it itself, outside any guard and before
- * any `**`.
+ * any `**`. Carries `data: QITS_ENTRY` (ticket qits-2049): the idp redirects here from outside the
+ * app, so no exit of this app's needs to lead to it, and every app that imports this route gets
+ * the entry point for free.
  */
 export const qitsAuthCallbackRoute: Route = {
   path: 'auth/callback',
   component: QitsAuthCallbackPage,
+  data: QITS_ENTRY,
 };

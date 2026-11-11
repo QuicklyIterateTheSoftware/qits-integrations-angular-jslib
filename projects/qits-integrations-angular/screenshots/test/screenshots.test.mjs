@@ -1527,3 +1527,180 @@ describe('qits-angular screenshots --check, the outcome gaps', () => {
     assert.equal(check(root, ['--enforce-outcomes']).code, 1);
   });
 });
+
+// Ticket qits-2049: a checked route (manifest.routes, walking children) that no declared exit
+// leads to, and that is not itself an entry point, is its own gap.
+describe('qits-angular screenshots --check, unreachable routes and entry points (qits-2049)', () => {
+  const PAGE = 'src/app/routes/projects/[slug]/work/create/work-create.page.browser.spec.ts';
+  const DIR = 'src/testing/browser/freezes';
+  const check = (root, args = [], env = {}) => {
+    const out = [];
+    const err = [];
+    const code = screenshots(['--check', ...args], {
+      cwd: root,
+      env,
+      out: (l) => out.push(l),
+      err: (l) => err.push(l),
+    });
+    return { code, out: out.join('\n'), err: err.join('\n') };
+  };
+  const withManifest = (files, manifest) =>
+    app({ ...files, [`${DIR}/manifest.json`]: JSON.stringify(manifest) });
+  const freeze = (route, triggers, name = 'x') => ({
+    file: `${PAGE}/${name}.html`,
+    spec: PAGE,
+    test: 't',
+    name,
+    route,
+    records: [],
+    triggers,
+  });
+  const fired = (interaction, outcome, route, freezeFile = null) => ({
+    spec: PAGE,
+    test: 't',
+    route,
+    interaction,
+    outcome,
+    kind: 'stay',
+    freeze: freezeFile,
+  });
+  // The menu's `menu:open` (app-wide) stays fully covered, so the only gap left is the route check.
+  const coveredManifest = (routes) => ({
+    routes,
+    freezes: [freeze(null, ['menu:open'])],
+    outcomes: { fired: [fired('menu', 'open', null, `${PAGE}/x.html`)] },
+  });
+
+  it('names a route no outcome leads to, and it is not an entry point, with the exact message', () => {
+    const root = withManifest(
+      { [MENU]: DECLARATIONS[MENU] },
+      coveredManifest([{ path: 'create', fullPath: 'create' }]),
+    );
+    const { code, err } = check(root);
+    assert.equal(code, 0, 'report-only');
+    assert.match(
+      err,
+      /\n {2}create: no outcome leads here, and it is not an entry point\. Add the exit that should lead here, or declare it an entry point\.\n?$/,
+    );
+  });
+
+  it("shows the root route ('') as / in the gap message", () => {
+    const root = withManifest(
+      { [MENU]: DECLARATIONS[MENU] },
+      coveredManifest([{ path: '', fullPath: '' }]),
+    );
+    const { err } = check(root);
+    assert.match(err, /\n {2}\/: no outcome leads here, and it is not an entry point\./);
+  });
+
+  it('passes a route reached only by a layout exit, or only by an app-wide exit', () => {
+    const NAV = 'src/app/ui/nav/nav.component.ts';
+    const navDeclaration = `import { exit, outcomes } from '@qits/angular';
+
+export class Nav {
+  readonly go = outcomes('nav-exit', { home: exit('home') });
+}
+`;
+    const root = withManifest(
+      { [PROJECTS_LAYOUT]: DECLARATIONS[PROJECTS_LAYOUT], [NAV]: navDeclaration },
+      {
+        routes: [
+          { path: 'projects', fullPath: 'projects' },
+          { path: 'home', fullPath: 'home' },
+        ],
+        freezes: [freeze('projects', ['project-nav:home']), freeze(null, ['nav-exit:home'])],
+        outcomes: {
+          fired: [fired('project-nav', 'home', 'projects'), fired('nav-exit', 'home', null)],
+        },
+      },
+    );
+    const { err } = check(root);
+    assert.doesNotMatch(err, /no outcome leads here/);
+  });
+
+  it('passes a route declared an entry point even with no inbound exit', () => {
+    const root = withManifest(
+      { [MENU]: DECLARATIONS[MENU] },
+      coveredManifest([{ path: 'auth/callback', fullPath: 'auth/callback', entry: true }]),
+    );
+    const { err } = check(root);
+    assert.doesNotMatch(err, /no outcome leads here/);
+  });
+
+  it('does not check a redirect, a wildcard route, or a parent that has children', () => {
+    const root = withManifest(
+      { [MENU]: DECLARATIONS[MENU] },
+      coveredManifest([
+        { path: '', fullPath: '', redirectTo: 'projects' },
+        { path: '**', fullPath: '**' },
+        {
+          path: 'projects',
+          fullPath: 'projects',
+          children: [{ path: ':slug', fullPath: 'projects/:slug' }],
+        },
+      ]),
+    );
+    const { err } = check(root);
+    // 'projects' is a parent (skipped); its child is checked and unreachable.
+    assert.doesNotMatch(err, /\n {2}projects: no outcome leads here/);
+    assert.doesNotMatch(err, /\n {2}\/: no outcome leads here/);
+    assert.doesNotMatch(err, /\n {2}\*\*: no outcome leads here/);
+    assert.match(err, /\n {2}projects\/:slug: no outcome leads here/);
+  });
+
+  it('a returnTo or an external outcome adds no inbound edge', () => {
+    const RETURN = 'src/app/ui/sign-in/sign-in.component.ts';
+    const EXTERNAL = 'src/app/ui/leave/leave.component.ts';
+    const root = withManifest(
+      {
+        [MENU]: DECLARATIONS[MENU],
+        [RETURN]: `import { outcomes, returnTo } from '@qits/angular';
+
+export class SignIn {
+  readonly back = outcomes('sign-in-again', { done: returnTo() }, { triggered: false });
+}
+`,
+        [EXTERNAL]: `import { external, outcomes } from '@qits/angular';
+
+export class Leave {
+  readonly go = outcomes('leave', { idp: external('idp') }, { triggered: false });
+}
+`,
+      },
+      coveredManifest([{ path: 'projects', fullPath: 'projects' }]),
+    );
+    const { err } = check(root);
+    assert.match(err, /\n {2}projects: no outcome leads here/);
+  });
+
+  it('--enforce-outcomes exits 1 on an unreachable route alone, 0 without it, report-only on stderr', () => {
+    const root = withManifest(
+      { [MENU]: DECLARATIONS[MENU] },
+      coveredManifest([{ path: 'create', fullPath: 'create' }]),
+    );
+    const plain = check(root);
+    assert.equal(plain.code, 0);
+    assert.match(plain.err, /report-only/);
+    assert.match(plain.err, /create: no outcome leads here/);
+    const enforced = check(root, ['--enforce-outcomes']);
+    assert.equal(enforced.code, 1);
+    assert.match(enforced.err, /create: no outcome leads here/);
+    assert.doesNotMatch(enforced.err, /report-only/);
+  });
+
+  it('the success line also counts the checked routes', () => {
+    const root = withManifest(
+      { [MENU]: DECLARATIONS[MENU] },
+      coveredManifest([
+        { path: '', fullPath: '', redirectTo: 'projects' },
+        { path: 'auth/callback', fullPath: 'auth/callback', entry: true },
+      ]),
+    );
+    const { out, err } = check(root, ['--enforce-outcomes']);
+    assert.equal(err, '');
+    assert.match(
+      out,
+      /every declared outcome \(1\) is reached by a test and its trigger is shown, and every route \(1\) is led to or an entry point\./,
+    );
+  });
+});

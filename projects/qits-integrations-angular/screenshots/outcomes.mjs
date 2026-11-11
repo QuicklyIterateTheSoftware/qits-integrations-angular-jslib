@@ -35,7 +35,8 @@
  *
  * `outcomeGaps()` holds the declarations against `manifest.json` (`freezes.mjs`): an outcome no
  * fired record reaches, a stay no screenshot follows, an outcome whose trigger no screenshot in its
- * scope shows (not asked of a `triggered: false` one), and the unreadable calls.
+ * scope shows (not asked of a `triggered: false` one), a checked route no outcome leads to
+ * ({@link unreachableRoutes}, ticket qits-2049), and the unreadable calls.
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -367,9 +368,55 @@ function shownOn(entry) {
     : `no screenshot of ${route}`;
 }
 
+/** `/` for the root route (`''`), the full path otherwise, as a gap message shows it. */
+const shownRoute = (fullPath) => (fullPath === '' ? '/' : fullPath);
+
 /**
- * The outcome gaps, one message each, in the order of the declarations, then the unreadable calls.
- * `manifest` is `manifest.json` as read (or `undefined` when there is none).
+ * The routes the reachability check holds against the declared exits (ticket qits-2049):
+ * `manifest.routes` (`describeRoutes()`'s tree), walked through `children`, keeping only the rows
+ * a route actually shows — no `children` of its own (a parent's `''` child stands for it), no
+ * `redirectTo`, and a `path` other than `**`. `[]` when `manifest` or `manifest.routes` is absent
+ * or not an array.
+ */
+export function checkedRoutes(manifest) {
+  const routes = Array.isArray(manifest?.routes) ? manifest.routes : [];
+  const rows = [];
+  const walk = (list) => {
+    for (const route of list) {
+      const children = Array.isArray(route.children) ? route.children : [];
+      if (children.length > 0) {
+        walk(children);
+        continue;
+      }
+      if (typeof route.redirectTo === 'string' || route.path === '**') continue;
+      rows.push(route);
+    }
+  };
+  walk(routes);
+  return rows;
+}
+
+/**
+ * The checked routes ({@link checkedRoutes}) that no declared outcome leads to and that are not
+ * themselves declared an entry point (ticket qits-2049): a route is reached when some declared
+ * entry is an `exit()` (`kind === 'exit'`) whose `to` equals the route's `fullPath`, from any
+ * scope — a page's own declaration, a layout's, app-wide, or the library's (`outcomes.json`'s).
+ * A row with `entry: true` (`route.data: QITS_ENTRY`, copied by `describeRoutes()`) is entered
+ * from outside the app on purpose, so it is skipped rather than asked for an inbound exit.
+ *
+ * @param {{ declared: object[], manifest?: object }} input
+ */
+export function unreachableRoutes({ declared, manifest }) {
+  const exits = new Set(declared.filter((entry) => entry.kind === 'exit').map((entry) => entry.to));
+  return checkedRoutes(manifest).filter(
+    (route) => route.entry !== true && !exits.has(route.fullPath),
+  );
+}
+
+/**
+ * The outcome gaps, one message each, in the order of the declarations, then one per unreachable
+ * route ({@link unreachableRoutes}, ticket qits-2049), then the unreadable calls. `manifest` is
+ * `manifest.json` as read (or `undefined` when there is none).
  *
  * @param {{ declared: object[], unreadable: object[], manifest?: object }} input
  */
@@ -404,6 +451,12 @@ export function outcomeGaps({ declared, unreadable, manifest }) {
           'with another provider state if needed (an open menu, a loaded list).',
       );
     }
+  }
+  for (const route of unreachableRoutes({ declared, manifest })) {
+    gaps.push(
+      `${shownRoute(route.fullPath)}: no outcome leads here, and it is not an entry point. Add ` +
+        'the exit that should lead here, or declare it an entry point.',
+    );
   }
   for (const { file, line, why } of unreadable) {
     gaps.push(`${file}:${line}: an outcomes() call that cannot be read statically (${why}).`);

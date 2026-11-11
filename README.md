@@ -451,6 +451,7 @@ Each freeze also lists the trigger marks visible in its shot (`triggers`). Then
   a layout's one of its subtree, an app-wide one any freeze, `route: null` ones included. This is
   not the same as reaching it: a test may click a button no screenshot shows. Not asked of a
   `triggered: false` interaction;
+- **a route no outcome leads to, and that is not an entry point** (ticket qits-2049, below);
 - **an `outcomes()` call it cannot read**, by `file:line`: a non-literal interaction, a spread, a
   computed key, an entry that is no `exit()` / `stay()` / `returnTo()` / `external()` call, an exit
   or external without a string literal, options that are not `{ triggered: true | false }`.
@@ -459,6 +460,7 @@ Each freeze also lists the trigger marks visible in its shot (`triggers`). Then
 create-work-item:refused (projects/:slug/work/create): no browser test reaches it.
 create-work-item:refused (projects/:slug/work/create): a stay needs a screenshot after it is reached.
 create-work-item:refused: no screenshot of projects/:slug/work/create shows its trigger. Add a screenshot test where it is visible, with another provider state if needed (an open menu, a loaded list).
+auth/old: no outcome leads here, and it is not an entry point. Add the exit that should lead here, or declare it an entry point.
 src/app/routes/projects/projects.page.ts:12: an outcomes() call that cannot be read statically (a spread).
 ```
 
@@ -487,6 +489,24 @@ package (`screenshots/outcomes.json`) and join the app's declarations when the a
 as it does for its own; a test that reaches an external one stubs `QITS_LEAVE_APP`. Their slugs
 (`sign-in`, `sign-in-failed`, `session-guard`, `session-expired`) are the library's: an app does
 not declare an interaction of its own under any of them.
+
+**Entry points** (ticket qits-2049). Besides the outcome gaps above, `--check` also holds every
+*checked* route — a row of `manifest.routes` (`describeRoutes()`'s tree, walking `children`) with
+no `children` of its own, no `redirectTo`, and a `path` other than `**` — against the declared
+exits: a route is reached when some declared `exit()`, in any scope (a page's own, a layout's,
+app-wide, or the library's), has a `to` equal to the route's `fullPath`. A route entered from
+outside the app rather than by a declared exit — an idp redirect, an old bookmarked address — says
+so instead of needing an inbound exit, with `data: QITS_ENTRY` (or the plain
+`data: { qitsEntry: true }` the manifest key reads; `QITS_ENTRY` is just the typed way to write it)
+on its route, which `describeRoutes()` copies into `routes[].entry`. `qitsAuthCallbackRoute` is
+already marked this way, so every app that imports it gets the entry point for free. A route with
+no inbound exit and no `entry: true` is its own gap, named by its `fullPath` (`''` as `/`), and is
+report-only until `--enforce-outcomes` like the rest:
+
+```ts
+import { QITS_ENTRY } from '@qits/angular';
+export const routes: Routes = [{ path: '', data: QITS_ENTRY, component: HomePage }];
+```
 
 The rollout is opt-in: the outcome gaps are **report-only** (printed to stderr under a heading
 that says so, the exit code untouched) until the app adds `--enforce-outcomes`, which makes any gap
@@ -937,7 +957,8 @@ What the run writes, under `dir` (default `src/testing/browser/freezes`, the tre
   `<root>/src/testing/browser/fonts/x.woff2`), referred to relatively (`../../…/assets/x.woff2`).
   Two different files with the same name fail the run. A copy no freeze uses any more is deleted.
 - `manifest.json`: `routes` (the tree as `describeRoutes()` gives it: `{path, fullPath, redirectTo?,
-children?}`), `freezes` (`{file, spec, test, name, kind, viewport, route, records, triggers}`,
+entry?, children?}`; `entry: true` marks a route entered from outside the app, `data: QITS_ENTRY`
+on it, ticket qits-2049), `freezes` (`{file, spec, test, name, kind, viewport, route, records, triggers}`,
   sorted by `file`, which is relative to `dir`), `byRoute` (route pattern → files) and `outcomes`
   (below). `name` is the name the spec gave, without a width suffix. `kind` is the state the shot
   says it shows (`'DATA'`, `'NO_DATA'`, `'PENDING'`, `'ERROR'`), `null` when it gave none.

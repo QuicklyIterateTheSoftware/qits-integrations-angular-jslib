@@ -188,6 +188,18 @@ declared once and checked by the compiler.
   `global` and `provides` (the exports whose import brings the entries into an app), and a
   declaring file missing there fails the run. A screenshots test fails when the committed file is
   stale.
+- Entry points (ticket qits-2049): a route entered from outside the app — an idp redirect, an old
+  bookmarked address — rather than by an exit this app declares, says so with plain route data,
+  `data: { qitsEntry: true }` (the manifest key is fixed); `QITS_ENTRY` (`src/lib/outcomes/entry.ts`,
+  exported from the public entry point) is the typed way to write it. `describeRoutes()`
+  (`@qits/angular/testing/browser`) copies it as `entry: true` on the manifest's `routes[]`, next to
+  `redirectTo`, never into `outcomes.declared` (an entry is a property of a route, not an outcome).
+  `qitsAuthCallbackRoute` carries it, so every app that imports it gets the entry point for free.
+  `outcomeGaps()`'s `unreachableRoutes()` (`screenshots/outcomes.mjs`) walks `manifest.routes`
+  (`children` recursed) and holds every checked row — no `children` of its own, no `redirectTo`, a
+  `path` other than `**` — against the declared `exit()`s (any scope: page, layout, app-wide,
+  library): a route no exit's `to` reaches, and that is not itself `entry: true`, is its own gap,
+  report-only until `--enforce-outcomes` like the rest.
 
 The library is **zoneless-first**: no `zone.js`, no `@opentelemetry/context-zone` — the default
 stack context manager is correct. The `instrumentation-user-interaction` `zone.js` peer is

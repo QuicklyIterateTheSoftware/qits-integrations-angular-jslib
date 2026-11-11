@@ -43,9 +43,11 @@ signal with `aria-current="page"` in place of `routerLinkActive`, and `[exitCurr
 `aria-current` with a token or `null`) and marked with `QitsTriggers`; an
 exit's `go(params, { queryParams, fragment, replaceUrl })` takes the query and fragment too. The paths
 are checked against the `RoutePath` type `qits/route-paths` generates. That file is opt-in: it is
-only checked once the app creates it.
+only checked once the app creates it. `qits-angular screenshots --check` also flags a route no
+declared exit leads to, unless its own route `data` marks it an **entry point** (reached from
+outside the app, such as an idp redirect) with `QITS_ENTRY` — see the repository README.
 
-More entry points, all documented in the repository README:
+More entry points (the package's own), all documented in the repository README:
 
 - `@qits/angular/testing`: golden masters and Pact V4 consumer pacts for specs (Node only; needs
   `@pact-foundation/pact`).

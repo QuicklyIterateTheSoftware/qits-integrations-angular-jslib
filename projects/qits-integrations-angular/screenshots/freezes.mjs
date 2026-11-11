@@ -10,7 +10,7 @@
  *   manifest.json                                             what is where (below)
  *
  *   {
- *     "routes": [{ "path": "projects", "fullPath": "projects", "children": [ … ] }],
+ *     "routes": [{ "path": "projects", "fullPath": "projects", "entry": true, "children": [ … ] }],
  *     "freezes": [{
  *       "file": "src/app/routes/projects/projects.page.browser.spec.ts/list.html",
  *       "spec": "src/app/routes/projects/projects.page.browser.spec.ts",
@@ -52,6 +52,11 @@
  * it, and falls back to that shot's first freeze. Both fields are optional for a reader: a manifest
  * written before them (and entries kept from specs a run skipped) reads as `null`, and is written
  * back with `null`.
+ *
+ * Entry points (ticket qits-2049): a route's `entry` is `true` when `describeRoutes()` sees
+ * `route.data.qitsEntry === true` (`QITS_ENTRY`), and is omitted otherwise. It marks a route that is
+ * entered from outside the app — an idp redirect, an old bookmarked address — rather than by an
+ * exit this app declares, so `outcomeGaps()` (`outcomes.mjs`) does not ask it for an inbound exit.
  */
 import {
   copyFileSync,

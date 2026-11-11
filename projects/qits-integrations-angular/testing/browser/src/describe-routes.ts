@@ -13,6 +13,13 @@ export interface RouteDescription {
   readonly fullPath: string;
   /** The route's `redirectTo`, when it is a string. */
   readonly redirectTo?: string;
+  /**
+   * `true` when the route is entered from outside the app — an idp redirect, an old bookmarked
+   * address — rather than by an exit this app declares (ticket qits-2049): `route.data`'s
+   * `qitsEntry` key, as `QITS_ENTRY` sets it. The outcome check reads it to tell a legitimate entry
+   * point from a route no exit leads to.
+   */
+  readonly entry?: true;
   /** The routes `children` declares (never those `loadChildren` would load). */
   readonly children?: RouteDescription[];
 }
@@ -30,9 +37,11 @@ function describeUnder(routes: Routes, parent: string): RouteDescription[] {
       path: string;
       fullPath: string;
       redirectTo?: string;
+      entry?: true;
       children?: RouteDescription[];
     } = { path, fullPath };
     if (typeof route.redirectTo === 'string') description.redirectTo = route.redirectTo;
+    if (route.data?.['qitsEntry'] === true) description.entry = true;
     if (route.children?.length) description.children = describeUnder(route.children, fullPath);
     return description;
   });
