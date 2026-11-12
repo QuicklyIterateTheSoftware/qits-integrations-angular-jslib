@@ -302,7 +302,9 @@ describe('freezeShot in a shared page', () => {
         '<div role="listitem" style="transform: scaleX(0.99);">b</div></div></div>' +
         '<p style="transform: scaleX(0.5);">kept</p></div>',
     );
-    const body = bodyOf(freezeShot(byId('shot')).html);
+    // emptyElements disabled: isolates dropInlineStyles, the default would otherwise drop the
+    // accessibility tree's rows entirely before their transform is ever considered.
+    const body = bodyOf(freezeShot(byId('shot'), document, { emptyElements: [] }).html);
     expect(body).not.toContain('scaleX(0.99');
     expect(body).toContain('<div role="listitem" style="height: 15px;">a</div>');
     expect(body).toContain('<div role="listitem">b</div>');
@@ -311,9 +313,45 @@ describe('freezeShot in a shared page', () => {
     // Other rules replace the default.
     const own = freezeShot(byId('shot'), document, {
       dropInlineStyles: [{ selector: 'p', properties: ['transform'] }],
+      emptyElements: [],
     }).html;
     expect(bodyOf(own)).toContain('<p>kept</p>');
     expect(bodyOf(own)).toContain('transform: scaleX(0.996885)');
+  });
+
+  it('empties elements matching emptyElements, keeping the element and its own attributes', () => {
+    mount(
+      '<div id="shot"><div class="xterm-accessibility-tree" role="list" aria-label="Terminal">' +
+        '<div role="listitem" aria-posinset="1" aria-setsize="2">a</div>' +
+        '<div role="listitem" aria-posinset="2" aria-setsize="2">b</div></div>' +
+        '<p>kept</p></div>',
+    );
+    const live = document.querySelector('.xterm-accessibility-tree')!;
+
+    const body = bodyOf(freezeShot(byId('shot')).html);
+    expect(body).toBe(
+      '<div id="f0"><div class="xterm-accessibility-tree" role="list" aria-label="Terminal"></div>' +
+        '<p>kept</p></div>',
+    );
+    // the live DOM is untouched: the frozen tree is a clone, not the real one.
+    expect(live.children.length).toBe(2);
+    expect(live.firstElementChild?.getAttribute('aria-posinset')).toBe('1');
+
+    // a custom list replaces the default.
+    const own = freezeShot(byId('shot'), document, { emptyElements: ['p'] }).html;
+    expect(bodyOf(own)).toBe(
+      '<div id="f0"><div class="xterm-accessibility-tree" role="list" aria-label="Terminal">' +
+        '<div role="listitem" aria-posinset="1" aria-setsize="2">a</div>' +
+        '<div role="listitem" aria-posinset="2" aria-setsize="2">b</div></div><p></p></div>',
+    );
+
+    // [] disables it.
+    const disabled = freezeShot(byId('shot'), document, { emptyElements: [] }).html;
+    expect(bodyOf(disabled)).toBe(
+      '<div id="f0"><div class="xterm-accessibility-tree" role="list" aria-label="Terminal">' +
+        '<div role="listitem" aria-posinset="1" aria-setsize="2">a</div>' +
+        '<div role="listitem" aria-posinset="2" aria-setsize="2">b</div></div><p>kept</p></div>',
+    );
   });
 
   it('inlines a loaded blob image as PNG data and turns any other blob URL into a placeholder', async () => {

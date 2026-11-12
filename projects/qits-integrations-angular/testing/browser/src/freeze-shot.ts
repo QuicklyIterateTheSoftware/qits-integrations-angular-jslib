@@ -32,6 +32,9 @@
  *   `xterm-dom-renderer-owner-<n>`) are renumbered in order of appearance, in the HTML and the CSS.
  * - Inline style properties a library measures at run time (`dropInlineStyles`, by default the
  *   `transform` xterm puts on its invisible accessibility rows) are dropped from matching elements.
+ * - Elements that are themselves invisible and refreshed on a timer (`emptyElements`, by default
+ *   xterm's accessibility tree) are frozen without their children: the element and its own
+ *   attributes stay, everything inside it goes.
  * - A rule whose text (in its at-rule context) was already kept is dropped: a sheet injected again
  *   for every spec file in the shared page would otherwise repeat once per file that ran before.
  * - A `blob:` URL is random per run and dies with the page: a loaded `<img>` from one is inlined as
@@ -62,6 +65,14 @@ export const DEFAULT_DROPPED_INLINE_STYLES: readonly DroppedInlineStyle[] = [
   { selector: '.xterm-accessibility-tree > div', properties: ['transform'] },
 ];
 
+/**
+ * Selectors whose matching elements are frozen without their contents, by default xterm's
+ * accessibility tree: it is invisible (built for screen readers) and refreshed by xterm on a
+ * 100 ms debouncer after the terminal resizes, which a whole-page shot does by itself, so its
+ * rows vary with timing rather than with anything the test controls.
+ */
+export const DEFAULT_EMPTIED_ELEMENTS: readonly string[] = ['.xterm-accessibility-tree'];
+
 /** Options for {@link freezeShot}. */
 export interface FreezeShotOptions {
   /**
@@ -76,6 +87,13 @@ export interface FreezeShotOptions {
    * replaces the default.
    */
   readonly dropInlineStyles?: readonly DroppedInlineStyle[];
+  /**
+   * Selectors whose matching elements are frozen without their contents (their children are
+   * dropped; the element and its own attributes stay). Default {@link DEFAULT_EMPTIED_ELEMENTS}
+   * (xterm's accessibility tree: invisible, and refreshed on a timer after a resize, so its rows
+   * vary with timing); giving it replaces the default, and `[]` disables it.
+   */
+  readonly emptyElements?: readonly string[];
 }
 
 /** What a `blob:` URL becomes when it cannot be inlined. */
@@ -145,6 +163,7 @@ export function freezeShot(
     classes: new Map(),
     classShapes: new Map(),
     dropInlineStyles: options.dropInlineStyles ?? DEFAULT_DROPPED_INLINE_STYLES,
+    emptyElements: options.emptyElements ?? DEFAULT_EMPTIED_ELEMENTS,
   };
 
   const html = shell(doc.documentElement, ctx);
@@ -189,6 +208,7 @@ interface Context {
   /** a class name's shape (its last number as `#`) → how many of that shape are named. */
   readonly classShapes: Map<string, number>;
   readonly dropInlineStyles: readonly DroppedInlineStyle[];
+  readonly emptyElements: readonly string[];
 }
 
 /** The element alone: its tag and its (cleaned) attributes. */
@@ -220,11 +240,24 @@ function appendCopy(node: Node, parent: Element, ctx: Context): void {
   reflectState(element, copy);
   dropInlineStyles(element, copy, ctx);
   parent.append(copy);
+  if (isEmptied(element, ctx)) return;
   if (element instanceof HTMLTextAreaElement) {
     copy.textContent = element.value;
     return;
   }
   for (const child of element.childNodes) appendCopy(child, copy, ctx);
+}
+
+/** Whether `element` (the live one) matches one of `ctx.emptyElements`: its contents are dropped. */
+function isEmptied(element: Element, ctx: Context): boolean {
+  for (const selector of ctx.emptyElements) {
+    try {
+      if (element.matches(selector)) return true;
+    } catch {
+      continue; // a selector this engine cannot read matches nothing
+    }
+  }
+  return false;
 }
 
 /** A canvas serializes empty: an `<img>` of its pixels instead (a tainted canvas stays empty). */

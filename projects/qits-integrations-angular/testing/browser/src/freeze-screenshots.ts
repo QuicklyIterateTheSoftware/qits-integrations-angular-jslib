@@ -33,6 +33,7 @@ import { beforeAll, beforeEach, chai, expect, vi } from 'vitest';
 import { describeRoutes, type RouteDescription } from './describe-routes';
 import {
   DEFAULT_DROPPED_INLINE_STYLES,
+  DEFAULT_EMPTIED_ELEMENTS,
   DEFAULT_RENAMED_CLASSES,
   type DroppedInlineStyle,
   freezeShot,
@@ -152,6 +153,13 @@ export interface FreezeScreenshotsOptions {
    * giving it replaces the default.
    */
   readonly dropInlineStyles?: readonly DroppedInlineStyle[];
+  /**
+   * Selectors whose matching elements are frozen without their contents (their children are
+   * dropped; the element and its own attributes stay). Default {@link DEFAULT_EMPTIED_ELEMENTS}
+   * (xterm's accessibility tree: invisible, and refreshed on a timer after a resize, so its rows
+   * vary with timing); giving it replaces the default, and `[]` disables it.
+   */
+  readonly emptyElements?: readonly string[];
   /**
    * The specs whose shots must show the page through the app's routes, matched against the test
    * file's path. Default {@link DEFAULT_ROUTE_SPECS}, the page and layout specs under
@@ -321,6 +329,7 @@ const counters = new WeakMap<Task, { repeat: number; current: number }>();
 export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void {
   const renameClasses = options.renameClasses ?? DEFAULT_RENAMED_CLASSES;
   const dropInlineStyles = options.dropInlineStyles ?? DEFAULT_DROPPED_INLINE_STYLES;
+  const emptyElements = options.emptyElements ?? DEFAULT_EMPTIED_ELEMENTS;
   const routeSpecs = options.routeSpecs ?? DEFAULT_ROUTE_SPECS;
   const viewportSpecs = options.viewportSpecs;
   const appSchemes = colorSchemesOption(options.colorSchemes);
@@ -401,7 +410,11 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
           const target = shotTarget(chai.util.flag(this, 'object'));
           // On the live DOM, before the serializer: the HTML cannot tell a hidden mark from a shown one.
           const triggers = visibleTriggers(target, document);
-          const freeze = freezeShot(target, document, { renameClasses, dropInlineStyles });
+          const freeze = freezeShot(target, document, {
+            renameClasses,
+            dropInlineStyles,
+            emptyElements,
+          });
           const payload: ScreenshotFreezePayload = {
             name,
             test,

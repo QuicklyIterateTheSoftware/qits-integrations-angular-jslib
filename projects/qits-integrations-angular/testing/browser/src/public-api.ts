@@ -9,6 +9,7 @@ export * from './describe-routes';
 export {
   BLOB_PLACEHOLDER,
   DEFAULT_DROPPED_INLINE_STYLES,
+  DEFAULT_EMPTIED_ELEMENTS,
   DEFAULT_RENAMED_CLASSES,
   FREEZE_ASSET_PREFIX,
   freezeShot,
