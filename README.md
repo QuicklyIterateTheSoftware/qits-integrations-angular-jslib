@@ -508,6 +508,27 @@ import { QITS_ENTRY } from '@qits/angular';
 export const routes: Routes = [{ path: '', data: QITS_ENTRY, component: HomePage }];
 ```
 
+**Forwards and page routes** (ticket qits-2076). A _forward_
+is a route that renders a component but leaves as soon as it is entered (a page that only decides
+where to send you): it is not `rendersNothing`, has no string `redirectTo` and a `path` other than
+`**`; the declared entries whose `route` is exactly its `fullPath` (page or layout scope; an
+app-wide `route: null` entry never counts) exist and are all `exit()`s with `triggered: false`; and
+every route below it is `rendersNothing` (a route without children qualifies, a layout over real
+pages never does). At the end of the run the freeze writer marks each one `forward: true` in
+`manifest.routes` — on the forward itself, not on its `rendersNothing` children, though a `''`
+child shares its `fullPath`. A manifest written before `rendersNothing` has no flag to read, so a
+route with children there is never a forward. `@qits/angular/screenshots` exports both readers:
+
+- `forwardRoutes(manifest, declared)`: the `Set` of the forwards' `fullPath`s, computed from the
+  route tree and the declarations.
+- `pageRoutes(manifest, declared?)`: the checked routes minus the `rendersNothing` ones and minus
+  every route in a forward's subtree (the forward and its `''` child among them). Any rule about
+  the states a page shows must iterate this set. It reads the `forward: true` flags of the manifest;
+  given `declared`, it computes the forwards with `forwardRoutes()` instead.
+
+Neither changes a gap: the reachability check above still holds every checked route, forwards
+included, since a forward still has to be led to.
+
 The rollout is opt-in: the outcome gaps are **report-only** (printed to stderr under a heading
 that says so, the exit code untouched) until the app adds `--enforce-outcomes`, which makes any gap
 exit 1, as an orphan does. An app without a declaration reports nothing, so it migrates page by
@@ -968,8 +989,12 @@ What the run writes, under `dir` (default `src/testing/browser/freezes`, the tre
   `<root>/src/testing/browser/fonts/x.woff2`), referred to relatively (`../../…/assets/x.woff2`).
   Two different files with the same name fail the run. A copy no freeze uses any more is deleted.
 - `manifest.json`: `routes` (the tree as `describeRoutes()` gives it: `{path, fullPath, redirectTo?,
-entry?, children?}`; `entry: true` marks a route entered from outside the app, `data: QITS_ENTRY`
-  on it, ticket qits-2049), `freezes` (`{file, spec, test, name, kind, viewport, route, records, triggers}`,
+entry?, rendersNothing?, forward?, children?}`; `entry: true` marks a route entered from outside the
+  app, `data: QITS_ENTRY` on it, ticket qits-2049; `rendersNothing: true` a route with no
+  `component`, `loadComponent`, `loadChildren` or `redirectTo` (string or function), a `path` other
+  than `**`, and children that all render nothing too — a layout's `''` child, a `:tab` child that
+  only feeds the layout a parameter — and `forward: true` a forward, ticket qits-2076, see
+  _Forwards and page routes_ under the outcome check; each is omitted when false), `freezes` (`{file, spec, test, name, kind, viewport, route, records, triggers}`,
   sorted by `file`, which is relative to `dir`), `byRoute` (route pattern → files) and `outcomes`
   (below). `name` is the name the spec gave, without a width suffix. `kind` is the state the shot
   says it shows (`'DATA'`, `'NO_DATA'`, `'PENDING'`, `'ERROR'`), `null` when it gave none.

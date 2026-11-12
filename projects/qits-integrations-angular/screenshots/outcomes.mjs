@@ -37,6 +37,11 @@
  * fired record reaches, a stay no screenshot follows, an outcome whose trigger no screenshot in its
  * scope shows (not asked of a `triggered: false` one), a checked route no outcome leads to
  * ({@link unreachableRoutes}, ticket qits-2049), and the unreadable calls.
+ *
+ * Forwards (ticket qits-2076): {@link forwardRoutes} names the routes that render a component but
+ * leave at once (only untriggered exits, nothing rendered below them); the freeze writer marks them
+ * `forward: true` in the manifest, and {@link pageRoutes} — the checked routes minus those and the
+ * `rendersNothing` ones — is the set any rule about the states a page shows iterates.
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -410,6 +415,117 @@ export function unreachableRoutes({ declared, manifest }) {
   const exits = new Set(declared.filter((entry) => entry.kind === 'exit').map((entry) => entry.to));
   return checkedRoutes(manifest).filter(
     (route) => route.entry !== true && !exits.has(route.fullPath),
+  );
+}
+
+/** A route's `children`, or `[]`. */
+const childrenOf = (route) => (Array.isArray(route.children) ? route.children : []);
+
+/** Every route of `manifest.routes`, depth first, parents before their children. */
+function allRoutes(manifest) {
+  const all = [];
+  const walk = (list) => {
+    for (const route of list) {
+      all.push(route);
+      walk(childrenOf(route));
+    }
+  };
+  walk(Array.isArray(manifest?.routes) ? manifest.routes : []);
+  return all;
+}
+
+/**
+ * Whether `route` is a forward (ticket qits-2076): a route that shows a component, yet leaves at
+ * once — its outcomes are exits no element triggers, and nothing below it renders. `byRoute` maps a
+ * full path to the declared entries whose `route` is exactly it.
+ */
+function isForward(route, byRoute) {
+  if (route.rendersNothing === true) return false;
+  if (typeof route.redirectTo === 'string' || route.path === '**') return false;
+  const entries = byRoute.get(route.fullPath) ?? [];
+  if (entries.length === 0) return false;
+  if (!entries.every((entry) => entry.kind === 'exit' && entry.triggered === false)) return false;
+  const rendersNothing = (child) =>
+    child.rendersNothing === true && childrenOf(child).every(rendersNothing);
+  return childrenOf(route).every(rendersNothing);
+}
+
+/** The routes of `manifest.routes` that are forwards ({@link forwardRoutes}), as route objects. */
+function forwardNodes(manifest, declared) {
+  const byRoute = new Map();
+  for (const entry of Array.isArray(declared) ? declared : []) {
+    if (typeof entry.route !== 'string') continue;
+    byRoute.set(entry.route, [...(byRoute.get(entry.route) ?? []), entry]);
+  }
+  return allRoutes(manifest).filter((route) => isForward(route, byRoute));
+}
+
+/**
+ * The full paths of the forwards in `manifest.routes` (ticket qits-2076). A forward is a route that
+ * renders a component (it is not `rendersNothing`, has no string `redirectTo`, and its `path` is not
+ * `**`), whose declared entries for exactly its full path (any `global`; a `route: null` entry never
+ * counts) are there and all `exit()`s with `triggered: false`, and every descendant of which is
+ * `rendersNothing` (a route without children qualifies; a layout over real pages never does). It
+ * shows nothing a page shows: it leaves as soon as it is entered. A manifest written before
+ * `rendersNothing` has none, so a route with children there is never a forward.
+ *
+ * @param {object | undefined} manifest
+ * @param {object[]} declared
+ * @returns {Set<string>}
+ */
+export function forwardRoutes(manifest, declared) {
+  return new Set(forwardNodes(manifest, declared).map((route) => route.fullPath));
+}
+
+/**
+ * `routes` (`describeRoutes()`'s tree) with `forward: true` on each forward ({@link forwardRoutes})
+ * and on nothing else — not on its `rendersNothing` descendants, though a `''` child shares its full
+ * path. A `forward` the tree already carries is dropped first, so a kept tree is judged again.
+ */
+export function markForwards(routes, declared) {
+  if (!Array.isArray(routes)) return routes;
+  const strip = (list) =>
+    list.map(({ forward, ...route }) =>
+      Array.isArray(route.children) ? { ...route, children: strip(route.children) } : route,
+    );
+  const stripped = strip(routes);
+  const forwards = new Set(forwardNodes({ routes: stripped }, declared));
+  const mark = (list) =>
+    list.map((route) => {
+      const marked = forwards.has(route) ? { ...route, forward: true } : route;
+      return Array.isArray(route.children) ? { ...marked, children: mark(route.children) } : marked;
+    });
+  return mark(stripped);
+}
+
+/**
+ * The page routes (ticket qits-2076): the rows of {@link checkedRoutes} that show a page of their
+ * own — minus the `rendersNothing` rows, and minus every row in a forward's subtree (the forward
+ * itself and its `''` child among them). Any rule about the states a page shows (its kinds, its
+ * screenshots) must iterate this set, not `checkedRoutes()`: a forward and a route that renders
+ * nothing have no states to show. The reachability check (`unreachableRoutes()`) stays over
+ * `checkedRoutes()`, since a forward still has to be led to.
+ *
+ * The forwards are read from the `forward: true` flags the freeze writer puts on `manifest.routes`,
+ * so the manifest alone answers; with `declared` they are computed with {@link forwardRoutes}
+ * instead (and the flags are ignored), for a manifest written before them.
+ *
+ * @param {object | undefined} manifest
+ * @param {object[]} [declared]
+ */
+export function pageRoutes(manifest, declared) {
+  const forwards =
+    declared === undefined
+      ? allRoutes(manifest).filter((route) => route.forward === true)
+      : forwardNodes(manifest, declared);
+  const excluded = new Set();
+  const exclude = (route) => {
+    excluded.add(route);
+    childrenOf(route).forEach(exclude);
+  };
+  forwards.forEach(exclude);
+  return checkedRoutes(manifest).filter(
+    (route) => route.rendersNothing !== true && !excluded.has(route),
   );
 }
 

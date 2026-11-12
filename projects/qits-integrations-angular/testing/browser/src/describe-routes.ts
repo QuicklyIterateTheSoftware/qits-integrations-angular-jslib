@@ -20,6 +20,14 @@ export interface RouteDescription {
    * point from a route no exit leads to.
    */
   readonly entry?: true;
+  /**
+   * `true` when the route renders nothing of its own (ticket qits-2076): no `component`, no
+   * `loadComponent`, no `loadChildren`, no `redirectTo` (a string or a function), a `path` other than
+   * `**`, and every child (if it has any) renders nothing too. A layout's `''` child, or a `:tab`
+   * child that only feeds the layout a parameter, is one; a componentless route grouping real pages
+   * is not. The outcome check reads it to tell a page from a route that only stands for its parent.
+   */
+  readonly rendersNothing?: true;
   /** The routes `children` declares (never those `loadChildren` would load). */
   readonly children?: RouteDescription[];
 }
@@ -38,11 +46,23 @@ function describeUnder(routes: Routes, parent: string): RouteDescription[] {
       fullPath: string;
       redirectTo?: string;
       entry?: true;
+      rendersNothing?: true;
       children?: RouteDescription[];
     } = { path, fullPath };
     if (typeof route.redirectTo === 'string') description.redirectTo = route.redirectTo;
     if (route.data?.['qitsEntry'] === true) description.entry = true;
-    if (route.children?.length) description.children = describeUnder(route.children, fullPath);
+    const children = route.children?.length ? describeUnder(route.children, fullPath) : undefined;
+    if (
+      !route.component &&
+      !route.loadComponent &&
+      !route.loadChildren &&
+      route.redirectTo === undefined &&
+      path !== '**' &&
+      (children ?? []).every((child) => child.rendersNothing === true)
+    ) {
+      description.rendersNothing = true;
+    }
+    if (children) description.children = children;
     return description;
   });
 }

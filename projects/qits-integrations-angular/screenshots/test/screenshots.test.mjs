@@ -18,7 +18,14 @@ import {
   screenshotReferences,
 } from '../index.mjs';
 import { DEFAULT_RECORD, fileHash } from '../record.mjs';
-import { libraryOutcomes, outcomeGaps, readOutcomes } from '../outcomes.mjs';
+import {
+  checkedRoutes,
+  forwardRoutes,
+  libraryOutcomes,
+  outcomeGaps,
+  pageRoutes,
+  readOutcomes,
+} from '../outcomes.mjs';
 import {
   LIBRARY_OUTCOMES,
   REGENERATE,
@@ -1701,6 +1708,171 @@ export class Leave {
     assert.match(
       out,
       /every declared outcome \(1\) is reached by a test and its trigger is shown, and every route \(1\) is led to or an entry point\./,
+    );
+  });
+});
+
+describe('forwards and page routes (qits-2076)', () => {
+  const exitEntry = (
+    route,
+    outcome,
+    to,
+    { global = false, triggered = false, kind = 'exit' } = {},
+  ) => ({
+    route,
+    interaction: 'forward',
+    outcome,
+    kind,
+    to: kind === 'exit' ? to : null,
+    global,
+    triggered,
+    file: 'src/app/routes/x.ts',
+  });
+  // A layout whose '' and :tab children only feed it, and which leaves at once (a guard, a redirect
+  // computed at run time): both exits are untriggered and declared on the layout's own route.
+  const forwardLayout = {
+    path: 'go',
+    fullPath: 'go',
+    children: [
+      { path: '', fullPath: 'go', rendersNothing: true },
+      { path: ':tab', fullPath: 'go/:tab', entry: true, rendersNothing: true },
+    ],
+  };
+  const layoutOverPage = {
+    path: 'settings',
+    fullPath: 'settings',
+    children: [
+      { path: '', fullPath: 'settings', rendersNothing: true },
+      { path: 'profile', fullPath: 'settings/profile' },
+    ],
+  };
+  const forwardDeclared = [
+    exitEntry('go', 'home', 'projects', { global: true }),
+    exitEntry('go', 'tab', 'projects/:slug', { global: true }),
+  ];
+
+  it('names a layout over rendersNothing children with only untriggered exits a forward', () => {
+    const manifest = { routes: [forwardLayout] };
+    assert.deepEqual([...forwardRoutes(manifest, forwardDeclared)], ['go']);
+    // A route without children qualifies trivially.
+    const leaf = { routes: [{ path: 'leaf', fullPath: 'leaf' }] };
+    assert.deepEqual([...forwardRoutes(leaf, [exitEntry('leaf', 'away', 'x')])], ['leaf']);
+  });
+
+  it('does not name a layout with a real page child', () => {
+    const declared = [exitEntry('settings', 'away', 'projects', { global: true })];
+    assert.deepEqual([...forwardRoutes({ routes: [layoutOverPage] }, declared)], []);
+  });
+
+  it('does not name a route whose exits come with a triggered outcome, or a stay', () => {
+    const manifest = { routes: [forwardLayout] };
+    const triggered = [...forwardDeclared, exitEntry('go', 'click', 'x', { triggered: true })];
+    assert.deepEqual([...forwardRoutes(manifest, triggered)], []);
+    const stay = [...forwardDeclared, exitEntry('go', 'wait', null, { kind: 'stay' })];
+    assert.deepEqual([...forwardRoutes(manifest, stay)], []);
+    for (const kind of ['returnTo', 'external']) {
+      const other = [...forwardDeclared, exitEntry('go', 'other', null, { kind })];
+      assert.deepEqual([...forwardRoutes(manifest, other)], [], kind);
+    }
+  });
+
+  it('ignores route: null declarations, and needs a declaration on the route itself', () => {
+    const manifest = { routes: [forwardLayout] };
+    const appWide = [exitEntry(null, 'away', 'x', { global: true })];
+    assert.deepEqual([...forwardRoutes(manifest, appWide)], []);
+    // An untriggered app-wide exit does not disqualify a forward either.
+    assert.deepEqual([...forwardRoutes(manifest, [...forwardDeclared, ...appWide])], ['go']);
+    // Neither does a stay declared on another route.
+    const elsewhere = [...forwardDeclared, exitEntry('settings', 'wait', null, { kind: 'stay' })];
+    assert.deepEqual([...forwardRoutes(manifest, elsewhere)], ['go']);
+  });
+
+  it('never names a rendersNothing route, a redirect or a wildcard, and reads no flag as absent', () => {
+    const routes = [
+      { path: 'blank', fullPath: 'blank', rendersNothing: true },
+      { path: 'old', fullPath: 'old', redirectTo: 'go' },
+      { path: '**', fullPath: '**' },
+      // A manifest written before rendersNothing: the children render, as far as it says.
+      { path: 'legacy', fullPath: 'legacy', children: [{ path: ':tab', fullPath: 'legacy/:tab' }] },
+    ];
+    const declared = ['blank', 'old', '**', 'legacy'].map((r) => exitEntry(r, 'away', 'x'));
+    assert.deepEqual([...forwardRoutes({ routes }, declared)], []);
+    assert.deepEqual([...forwardRoutes(undefined, declared)], []);
+  });
+
+  it('pageRoutes drops the rendersNothing rows and a forward’s subtree, from flags or from declared', () => {
+    // `leaf` is a forward without children: it is a checked row itself, and no page.
+    const leaf = { path: 'leaf', fullPath: 'leaf' };
+    const routes = [
+      forwardLayout,
+      layoutOverPage,
+      leaf,
+      { path: 'projects', fullPath: 'projects' },
+      { path: 'blank', fullPath: 'blank', rendersNothing: true },
+    ];
+    const declared = [...forwardDeclared, exitEntry('leaf', 'away', 'projects')];
+    const paths = (rows) => rows.map((route) => route.fullPath);
+    assert.deepEqual(paths(checkedRoutes({ routes })), [
+      'go',
+      'go/:tab',
+      'settings',
+      'settings/profile',
+      'leaf',
+      'projects',
+      'blank',
+    ]);
+    assert.deepEqual([...forwardRoutes({ routes }, declared)], ['go', 'leaf']);
+    assert.deepEqual(paths(pageRoutes({ routes }, declared)), ['settings/profile', 'projects']);
+    // Without declared, the forward: true flags the writer puts in the manifest decide.
+    const flagged = routes.map((route) =>
+      route === forwardLayout || route === leaf ? { ...route, forward: true } : route,
+    );
+    assert.deepEqual(paths(pageRoutes({ routes: flagged })), ['settings/profile', 'projects']);
+    // No flags and no declared: no forwards, only the rendersNothing rows go.
+    assert.deepEqual(paths(pageRoutes({ routes })), ['settings/profile', 'leaf', 'projects']);
+    assert.deepEqual(pageRoutes(undefined), []);
+  });
+
+  it('the freeze writer writes forward: true on the forward only, in manifest.json', () => {
+    const DIR = 'src/testing/browser/freezes';
+    const root = app({
+      'src/app/routes/go/go.layout.ts': `import { exit, outcomes } from '@qits/angular';
+
+export class GoLayout {
+  readonly forward = outcomes(
+    'forward',
+    { home: exit('projects'), tab: exit('projects/:slug') },
+    { triggered: false },
+  );
+}
+`,
+      'src/app/routes/settings/settings.layout.ts': `import { exit, outcomes } from '@qits/angular';
+
+export class SettingsLayout {
+  readonly away = outcomes('away', { home: exit('projects') }, { triggered: false });
+}
+`,
+    });
+    const vitest = { config: { reporters: [] } };
+    const project = { config: { root, browser: { enabled: true } } };
+    screenshotReferences({ freezes: true }).configureVitest({ vitest, project });
+    const [reporter] = vitest.config.reporters;
+    reporter.onTestRunStart([]);
+    // A forward flag a stale tree carries is judged again.
+    project.config.browser.commands.qitsFreezeRoutes({}, [
+      forwardLayout,
+      { ...layoutOverPage, forward: true },
+    ]);
+    reporter.onTestRunEnd([]);
+    const manifest = JSON.parse(readFileSync(join(root, DIR, 'manifest.json'), 'utf8'));
+    assert.deepEqual(manifest.routes, [{ ...forwardLayout, forward: true }, layoutOverPage]);
+    assert.deepEqual(
+      manifest.outcomes.declared.filter((entry) => entry.route === 'go').map((e) => e.triggered),
+      [false, false],
+    );
+    assert.deepEqual(
+      pageRoutes(manifest).map((route) => route.fullPath),
+      ['settings/profile'],
     );
   });
 });

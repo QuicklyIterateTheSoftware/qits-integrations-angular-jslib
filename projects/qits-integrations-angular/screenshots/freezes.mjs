@@ -10,7 +10,11 @@
  *   manifest.json                                             what is where (below)
  *
  *   {
- *     "routes": [{ "path": "projects", "fullPath": "projects", "entry": true, "children": [ … ] }],
+ *     "routes": [
+ *       { "path": "projects", "fullPath": "projects", "entry": true, "children": [ … ] },
+ *       { "path": "go", "fullPath": "go", "forward": true,
+ *         "children": [{ "path": "", "fullPath": "go", "rendersNothing": true }] }
+ *     ],
  *     "freezes": [{
  *       "file": "src/app/routes/projects/projects.page.browser.spec.ts/list.html",
  *       "spec": "src/app/routes/projects/projects.page.browser.spec.ts",
@@ -26,7 +30,7 @@
  *     "outcomes": {
  *       "declared": [{ "route": "projects", "interaction": "projects", "outcome": "open",
  *                      "kind": "exit", "to": "projects/:slug", "global": false,
- *                      "file": "src/app/routes/projects/projects.page.ts" }],
+ *                      "triggered": true, "file": "src/app/routes/projects/projects.page.ts" }],
  *       "fired": [{ "spec": "…", "test": "…", "route": "projects", "interaction": "projects",
  *                   "outcome": "open", "kind": "exit", "freeze": "…/list.html" }]
  *     }
@@ -57,6 +61,14 @@
  * `route.data.qitsEntry === true` (`QITS_ENTRY`), and is omitted otherwise. It marks a route that is
  * entered from outside the app — an idp redirect, an old bookmarked address — rather than by an
  * exit this app declares, so `outcomeGaps()` (`outcomes.mjs`) does not ask it for an inbound exit.
+ *
+ * Forwards (ticket qits-2076): `describeRoutes()` writes `rendersNothing: true` on a route with no
+ * component, lazy load or redirect of its own whose children render nothing too (a layout's `''`
+ * child, a `:tab` child that only feeds it a parameter). At the end of the run, with `declared`
+ * known, this writes `forward: true` on each route `forwardRoutes()` (`outcomes.mjs`) names: one
+ * that renders a component, whose own declared entries are all `exit()`s with `triggered: false`,
+ * and below which nothing renders. The flag sits on that route only, never on its `rendersNothing`
+ * descendants; a route tree kept from an earlier run is judged again. Both are omitted when false.
  */
 import {
   copyFileSync,
@@ -70,7 +82,7 @@ import {
 } from 'node:fs';
 import { basename, dirname, extname, join, posix, relative, resolve } from 'node:path';
 import { toPosix } from './record.mjs';
-import { DEFAULT_ROUTES, declaredOutcomes } from './outcomes.mjs';
+import { DEFAULT_ROUTES, declaredOutcomes, markForwards } from './outcomes.mjs';
 
 export const DEFAULT_FREEZE_DIRECTORY = 'src/testing/browser/freezes';
 
@@ -328,7 +340,7 @@ export function freezeWriter({
       // Stable: a test's records keep the order they were reached in.
       fired.sort((a, b) => compare(a.spec, b.spec) || compare(a.test, b.test));
       const manifest = {
-        routes: routes ?? old.routes,
+        routes: markForwards(routes ?? old.routes, declared),
         freezes: freezes.map(
           ({ file, spec, test, name, kind, viewport, route, records, triggers }) => ({
             file,

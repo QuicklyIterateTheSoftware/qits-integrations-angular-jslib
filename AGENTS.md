@@ -200,6 +200,16 @@ declared once and checked by the compiler.
   `path` other than `**` — against the declared `exit()`s (any scope: page, layout, app-wide,
   library): a route no exit's `to` reaches, and that is not itself `entry: true`, is its own gap,
   report-only until `--enforce-outcomes` like the rest.
+- Forwards (ticket qits-2076): `describeRoutes()` writes `rendersNothing: true` on a route with no
+  `component` / `loadComponent` / `loadChildren` / `redirectTo` (string or function), a `path`
+  other than `**`, and children that all render nothing too. `forwardRoutes(manifest, declared)`
+  (`screenshots/outcomes.mjs`) names the routes that render a component, whose own declared entries
+  (`route === fullPath`; `route: null` never counts) are all untriggered `exit()`s, and below which
+  everything is `rendersNothing`; `freezeWriter().end()` writes `forward: true` on those nodes
+  (`markForwards()`, re-judging a kept tree; never on the `''` child that shares the path).
+  `pageRoutes(manifest, declared?)` is `checkedRoutes()` minus `rendersNothing` rows and forward
+  subtrees, read from the flags (computed when `declared` is given): the set any rule about a
+  page's states iterates. `outcomeGaps()` and the reachability rule do not use it.
 
 The library is **zoneless-first**: no `zone.js`, no `@opentelemetry/context-zone` — the default
 stack context manager is correct. The `instrumentation-user-interaction` `zone.js` peer is

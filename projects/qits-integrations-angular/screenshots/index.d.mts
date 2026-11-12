@@ -176,12 +176,44 @@ export declare function outcomeGaps(input: {
   manifest?: FreezeManifest;
 }): string[];
 
+/**
+ * The full paths of the forwards in `manifest.routes` (ticket qits-2076): routes that render a
+ * component (not `rendersNothing`, no string `redirectTo`, `path` not `**`), whose declared entries
+ * for exactly their full path (any `global`; `route: null` never counts) exist and are all `exit()`s
+ * with `triggered: false`, and every descendant of which is `rendersNothing`.
+ */
+export declare function forwardRoutes(
+  manifest: FreezeManifest | undefined,
+  declared: DeclaredOutcome[],
+): Set<string>;
+
+/**
+ * The page routes (ticket qits-2076): the checked routes (no children, no `redirectTo`, `path` not
+ * `**`) minus the `rendersNothing` ones and minus every route in a forward's subtree. The set any
+ * rule about the states a page shows must iterate. The forwards are read from the manifest's
+ * `forward: true` flags; given `declared`, they are computed with {@link forwardRoutes} instead.
+ */
+export declare function pageRoutes(
+  manifest: FreezeManifest | undefined,
+  declared?: DeclaredOutcome[],
+): FreezeRoute[];
+
 export interface FreezeRoute {
   path: string;
   fullPath: string;
   redirectTo?: string;
   /** `true` when the route is entered from outside the app (`data: QITS_ENTRY`, ticket qits-2049). */
   entry?: true;
+  /**
+   * `true` when the route renders nothing of its own (ticket qits-2076): no component, lazy load or
+   * redirect, a `path` other than `**`, and children (if any) that render nothing either.
+   */
+  rendersNothing?: true;
+  /**
+   * `true` on a forward (ticket qits-2076, {@link forwardRoutes}): written by the freeze writer at
+   * the end of the run, on the forward itself and never on its `rendersNothing` descendants.
+   */
+  forward?: true;
   children?: FreezeRoute[];
 }
 

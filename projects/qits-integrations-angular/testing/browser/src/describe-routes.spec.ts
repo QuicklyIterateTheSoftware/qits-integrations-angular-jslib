@@ -63,4 +63,61 @@ describe('describeRoutes', () => {
       { path: 'none', fullPath: 'none' },
     ]);
   });
+
+  // Ticket qits-2076: a route that renders nothing of its own (a layout's '' child, a :tab child
+  // that only feeds the layout a parameter) says so; a grouping route over real pages does not.
+  it('records rendersNothing on a route with nothing to render, whose children render nothing too', () => {
+    const load = vi.fn(() => Promise.resolve(Page));
+    const routes: Routes = [
+      {
+        path: 'settings',
+        component: Page,
+        children: [
+          { path: '', children: [] },
+          { path: ':tab', children: [], data: { qitsEntry: true } },
+        ],
+      },
+      { path: 'group', children: [{ path: 'page', component: Page }] },
+      { path: 'nested', children: [{ path: '', children: [{ path: 'leaf' }] }] },
+      { path: 'lazy', loadComponent: load },
+      { path: 'lazy-children', loadChildren: () => Promise.resolve([]) },
+      { path: 'old', redirectTo: 'settings' },
+      { path: 'older', redirectTo: () => 'settings' },
+      { path: '**' },
+    ];
+    expect(describeRoutes(routes)).toEqual([
+      {
+        path: 'settings',
+        fullPath: 'settings',
+        children: [
+          { path: '', fullPath: 'settings', rendersNothing: true },
+          { path: ':tab', fullPath: 'settings/:tab', entry: true, rendersNothing: true },
+        ],
+      },
+      {
+        path: 'group',
+        fullPath: 'group',
+        children: [{ path: 'page', fullPath: 'group/page' }],
+      },
+      {
+        path: 'nested',
+        fullPath: 'nested',
+        rendersNothing: true,
+        children: [
+          {
+            path: '',
+            fullPath: 'nested',
+            rendersNothing: true,
+            children: [{ path: 'leaf', fullPath: 'nested/leaf', rendersNothing: true }],
+          },
+        ],
+      },
+      { path: 'lazy', fullPath: 'lazy' },
+      { path: 'lazy-children', fullPath: 'lazy-children' },
+      { path: 'old', fullPath: 'old', redirectTo: 'settings' },
+      { path: 'older', fullPath: 'older' },
+      { path: '**', fullPath: '**' },
+    ]);
+    expect(load).not.toHaveBeenCalled();
+  });
 });
