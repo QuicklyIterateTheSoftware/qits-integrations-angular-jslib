@@ -11,7 +11,8 @@
  * `freezes.mjs`): it registers the browser commands `freezeScreenshots()` sends them to (in its
  * Vite `config` hook, see there), and the
  * same reporter writes them at the end of the run. The outcomes `recordOutcomes()` sends after each
- * test (`qitsOutcomes`, ticket qits-2003) go into the same manifest.
+ * test (`qitsOutcomes`, ticket qits-2003) go into the same manifest. `qitsColorScheme` (ticket
+ * qits-2083) emulates `prefers-color-scheme` for `freezeScreenshots({ colorSchemes })`.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { platform } from 'node:os';
@@ -24,6 +25,7 @@ import {
   toPosix,
 } from './record.mjs';
 import {
+  FREEZE_COLOR_SCHEME_COMMAND,
   FREEZE_COMMAND,
   FREEZE_ROUTES_COMMAND,
   OUTCOMES_COMMAND,
@@ -47,6 +49,31 @@ const vitestDefault = ({
     testFileName,
     `${arg}-${browserName}-${platform()}${ext}`,
   );
+
+/**
+ * The `qitsColorScheme` command (ticket qits-2083): emulates `prefers-color-scheme` on the page the
+ * tests run in, `'light'` or `'dark'`, or resets it with `null`. Only the Playwright provider has a
+ * `page` with `emulateMedia` (in Vitest 4 and 5 alike); any other fails the shot naming the fix.
+ */
+export async function emulateColorScheme(context, scheme) {
+  if (scheme !== null && scheme !== 'light' && scheme !== 'dark') {
+    throw new Error(
+      `screenshot freezes: ${FREEZE_COLOR_SCHEME_COMMAND} takes 'light', 'dark' or null, not ` +
+        `${JSON.stringify(scheme)}.`,
+    );
+  }
+  const page = context?.page;
+  if (!page || typeof page.emulateMedia !== 'function') {
+    throw new Error(
+      `screenshot freezes: freezeScreenshots({ colorSchemes }) emulates prefers-color-scheme ` +
+        `through Playwright, but the browser provider${context?.provider?.name ? ` '${context.provider.name}'` : ''} ` +
+        'has no page to emulate it on. Use the playwright provider (@vitest/browser-playwright), ' +
+        'or drop the colorSchemes option.',
+    );
+  }
+  await page.emulateMedia({ colorScheme: scheme });
+  return null;
+}
 
 const WRAPPED = Symbol.for('qits.screenshotReferences.wrapped');
 
@@ -145,6 +172,7 @@ export function screenshotReferences(options = {}) {
       writerFor(context).addOutcomes(context.testPath, records);
       return null;
     },
+    [FREEZE_COLOR_SCHEME_COMMAND]: emulateColorScheme,
   };
 
   const reporter = {

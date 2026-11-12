@@ -12,12 +12,17 @@
  * (`data: QITS_ENTRY` / `data: { qitsEntry: true }`, `manifest.routes[].entry`), is named too. Those
  * gaps are report-only unless `--enforce-outcomes` is given, so an app adopts the check page by
  * page; an update run only lists them, as it does the orphans.
+ *
+ * With a manifest that records `colorSchemes` (ticket qits-2083, `freezeScreenshots({ colorSchemes
+ * })`), `--check` also fails on every page or layout shot missing one of them that it did not opt
+ * out of (`colorSchemeGaps()` in `freezes.mjs`). That is not an outcome gap: it fails without
+ * `--enforce-outcomes`, and only an update run lists it instead.
  */
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DEFAULT_RECORD } from './record.mjs';
 import { findOrphans, pruneOrphans } from './orphans.mjs';
-import { DEFAULT_FREEZE_DIRECTORY, MANIFEST } from './freezes.mjs';
+import { DEFAULT_FREEZE_DIRECTORY, MANIFEST, colorSchemeGaps } from './freezes.mjs';
 import { checkedRoutes, DEFAULT_ROUTES, declaredOutcomes, outcomeGaps } from './outcomes.mjs';
 
 export const USAGE = `Usage: qits-angular screenshots --check | --prune [options]
@@ -36,6 +41,11 @@ a page or layout with no children, no redirectTo, path other than '**') that
 no declared exit leads to and that is not itself declared an entry point
 (route data: QITS_ENTRY). These gaps are report-only unless --enforce-outcomes
 is given.
+
+When the manifest records colorSchemes (freezeScreenshots({ colorSchemes })),
+--check also fails on each page or layout shot (spec, test, name, viewport)
+missing one of those schemes, unless it opted out with its own colorSchemes
+and a reason.
 
   --check              List the orphans; exit 1 if there are any.
   --prune              Delete the orphans (the screenshot baselines job does this).
@@ -106,7 +116,49 @@ export function screenshots(args, io = {}) {
   const orphanCode = checkOrphans({ mode, root, record, verbose, env, out, err });
   if (mode === '--prune') return orphanCode;
   const outcomeCode = checkOutcomes({ root, freezes, routes, enforceOutcomes, env, out, err });
-  return Math.max(orphanCode, outcomeCode);
+  const schemeCode = checkColorSchemes({ root, freezes, env, out, err });
+  return Math.max(orphanCode, outcomeCode, schemeCode);
+}
+
+/**
+ * The page and layout shots missing a colour scheme the manifest records (ticket qits-2083), on
+ * stderr with exit 1; nothing at all for a manifest without `colorSchemes` (or none). An update run
+ * only lists them: its job writes the freezes that close them.
+ */
+function checkColorSchemes({ root, freezes, env, out, err }) {
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(join(resolve(root, freezes), MANIFEST), 'utf8'));
+  } catch {
+    return 0;
+  }
+  if (!Array.isArray(manifest?.colorSchemes)) return 0;
+  const gaps = colorSchemeGaps(manifest);
+  if (gaps.length === 0) {
+    out(
+      'qits-angular screenshots: every page and layout shot is taken in each colour scheme ' +
+        `(${manifest.colorSchemes.join(', ')}) or says why not.`,
+    );
+    return 0;
+  }
+  const report = [
+    `qits-angular screenshots: ${gaps.length} page or layout shot(s) miss a colour scheme:`,
+    ...gaps.map((gap) => `  ${gap}`),
+  ];
+  if (isUpdateRun(env)) {
+    out(
+      [...report, 'This is an update run (UPDATE_SNAPSHOT): the gaps are listed only.'].join('\n'),
+    );
+    return 0;
+  }
+  err(
+    [
+      ...report,
+      'Run the spec with freezeScreenshots({ colorSchemes }) so each shot is frozen in every',
+      "scheme, or leave a scheme out on the shot with { colorSchemes: ['LIGHT'], reason: '…' }.",
+    ].join('\n'),
+  );
+  return 1;
 }
 
 function checkOrphans({ mode, root, record, verbose, env, out, err }) {

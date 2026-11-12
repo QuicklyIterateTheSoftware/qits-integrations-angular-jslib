@@ -58,6 +58,27 @@ export type FreezeKind = 'DATA' | 'NO_DATA' | 'PENDING' | 'ERROR';
 /** A preset width a shot was taken at (`ScreenshotViewport` there). */
 export type FreezeViewport = 'PHONE' | 'TABLET' | 'DESKTOP';
 
+/** A colour scheme a shot was taken in (`ColorScheme` there, ticket qits-2083). */
+export type FreezeColorScheme = 'LIGHT' | 'DARK';
+
+/** `['LIGHT', 'DARK']`, the order a shot is taken in them. */
+export declare const COLOR_SCHEMES: readonly FreezeColorScheme[];
+
+/**
+ * `'qitsColorScheme'`: the browser command `freezeScreenshots({ colorSchemes })` emulates
+ * `prefers-color-scheme` through (`'light'`, `'dark'`, `null` to reset; Playwright only).
+ * `screenshotReferences({ freezes })` registers it.
+ */
+export declare const FREEZE_COLOR_SCHEME_COMMAND: string;
+
+/**
+ * The page and layout shots (`route` not `null`) that lack a scheme of `manifest.colorSchemes`,
+ * one message each (`<spec> '<name>' [<viewport>]: missing DARK`): grouped by spec, test, name and
+ * viewport, a group misses each scheme none of its freezes was taken in, unless one of them opted
+ * out (`colorSchemeReason`). Empty without `colorSchemes` in the manifest.
+ */
+export declare function colorSchemeGaps(manifest: FreezeManifest | undefined): string[];
+
 /** `['DATA', 'NO_DATA', 'PENDING', 'ERROR']`. */
 export declare const SCREENSHOT_KINDS: readonly FreezeKind[];
 
@@ -66,28 +87,35 @@ export declare const SCREENSHOT_VIEWPORTS: readonly FreezeViewport[];
 
 /**
  * A shot's freeze file, relative to the freeze directory: `<spec>/<slug>.html`, or
- * `<spec>/<slug>-<viewport>.html` (lower case) for a shot at a preset width.
+ * `<spec>/<slug>-<viewport>.html` (lower case) for a shot at a preset width; a shot in a colour
+ * scheme takes it as the last suffix, `<spec>/<slug>[-<viewport>]-light.html`, `-dark`.
  */
 export declare function freezeFile(
   spec: string,
   name: string,
   viewport?: FreezeViewport | null,
+  colorScheme?: FreezeColorScheme | null,
 ): string;
 
 /** `<dir>/manifest.json`. */
 export interface FreezeManifest {
   /** The app's route tree, as `describeRoutes()` gives it. */
   routes: FreezeRoute[];
+  /**
+   * The app's `freezeScreenshots({ colorSchemes })` (ticket qits-2083), as the run's shots carried
+   * it, kept from the previous manifest by a run that froze nothing. Absent without the option.
+   */
+  colorSchemes?: FreezeColorScheme[] | null;
   freezes: {
     /**
      * Relative to the freeze directory: `<spec>/<name>.html`, or `<spec>/<name>-<viewport>.html`
-     * for a shot at a preset width.
+     * for a shot at a preset width; `<spec>/<name>[-<viewport>]-<scheme>.html` in a colour scheme.
      */
     file: string;
     /** Relative to the root. */
     spec: string;
     test: string;
-    /** The name the spec gave (without the `-<viewport>` suffix), or Vitest's default. */
+    /** The name the spec gave (without the `-<viewport>` and `-<scheme>` suffixes), or Vitest's default. */
     name: string;
     /**
      * The state the shot said it shows (ticket qits-2046), `null` when it gave none. Optional for a
@@ -99,6 +127,16 @@ export interface FreezeManifest {
      * own viewport. Optional for a reader, as `kind`.
      */
     viewport?: FreezeViewport | null;
+    /**
+     * The colour scheme the shot was taken in (ticket qits-2083), `null` for one taken without it.
+     * Written only when the manifest has `colorSchemes`; a reader takes a missing one as `null`.
+     */
+    colorScheme?: FreezeColorScheme | null;
+    /**
+     * The shot's `reason` when it named its own `colorSchemes` (an opt-out of a scheme), else
+     * `null`. Written and read as `colorScheme`.
+     */
+    colorSchemeReason?: string | null;
     route: string | null;
     records: { provider: string; state: string; operationId: string }[];
     /** The `<interaction>:<outcome>` marks visible in the shot, sorted. */
@@ -151,7 +189,8 @@ export interface FiredOutcome {
   kind: 'exit' | 'stay' | 'returnTo' | 'external';
   /**
    * The first freeze of the test whose shot came after it (its DESKTOP freeze when the shot was
-   * taken at the preset widths), or `null`.
+   * taken at the preset widths, and of its colour schemes the first taken, LIGHT unless the shot
+   * left it out), or `null`.
    */
   freeze: string | null;
 }

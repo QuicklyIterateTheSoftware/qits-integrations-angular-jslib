@@ -9,6 +9,9 @@ import { dirname, join } from 'node:path';
 import { strict as assert } from 'node:assert';
 import { screenshots } from '../cli.mjs';
 import {
+  COLOR_SCHEMES,
+  FREEZE_COLOR_SCHEME_COMMAND,
+  colorSchemeGaps,
   completeForFreezes,
   declaredOutcomes,
   findOrphans,
@@ -18,6 +21,7 @@ import {
   screenshotReferences,
 } from '../index.mjs';
 import { DEFAULT_RECORD, fileHash } from '../record.mjs';
+import { emulateColorScheme } from '../plugin.mjs';
 import {
   checkedRoutes,
   forwardRoutes,
@@ -425,6 +429,7 @@ describe('screenshot freezes', () => {
       'qitsFreeze',
       'qitsFreezeRoutes',
       'qitsOutcomes',
+      'qitsColorScheme',
     ]);
     assert.equal(screenshotReferences().config({}), undefined);
     // configureVitest keeps what the config hook registered.
@@ -690,6 +695,117 @@ describe('screenshot freezes', () => {
     assert.equal(read(root, `${CARD}/menu/open-tablet.html`), '<p>menu/open</p>');
     assert.equal(freezeFile(CARD, 'detail: an epic', 'PHONE'), `${CARD}/detail-an-epic-phone.html`);
     assert.equal(freezeFile(CARD, 'detail: an epic'), `${CARD}/detail-an-epic.html`);
+  });
+
+  // Ticket qits-2083: the colour scheme each shot was taken in, with freezeScreenshots({ colorSchemes }).
+  const BOTH = ['LIGHT', 'DARK'];
+
+  it('names the freeze of a shot in a colour scheme with the scheme last, and records the option', () => {
+    const root = app({ [CARD]: 'spec' });
+    send(root, [
+      ...['PHONE', 'DESKTOP'].flatMap((viewport) =>
+        BOTH.map((colorScheme) => ({
+          name: 'list',
+          kind: 'DATA',
+          viewport,
+          colorScheme,
+          colorSchemes: BOTH,
+          colorSchemeReason: null,
+        })),
+      ),
+      // An opt-out: one scheme, its reason recorded; a shot at the test's own viewport.
+      {
+        name: 'chart',
+        kind: 'DATA',
+        viewport: null,
+        colorScheme: 'LIGHT',
+        colorSchemes: BOTH,
+        colorSchemeReason: 'no dark palette yet',
+      },
+      // A scheme outside the enum is no scheme; an empty reason is none.
+      {
+        name: 'odd',
+        kind: 'DATA',
+        colorScheme: 'DUSK',
+        colorSchemes: BOTH,
+        colorSchemeReason: ' ',
+      },
+    ]);
+    const written = manifest(root);
+    assert.deepEqual(written.colorSchemes, BOTH);
+    assert.deepEqual(Object.keys(written), [
+      'routes',
+      'colorSchemes',
+      'freezes',
+      'byRoute',
+      'outcomes',
+    ]);
+    assert.deepEqual(
+      written.freezes.map((f) => [f.file, f.name, f.viewport, f.colorScheme, f.colorSchemeReason]),
+      [
+        [`${CARD}/chart-light.html`, 'chart', null, 'LIGHT', 'no dark palette yet'],
+        [`${CARD}/list-desktop-dark.html`, 'list', 'DESKTOP', 'DARK', null],
+        [`${CARD}/list-desktop-light.html`, 'list', 'DESKTOP', 'LIGHT', null],
+        [`${CARD}/list-phone-dark.html`, 'list', 'PHONE', 'DARK', null],
+        [`${CARD}/list-phone-light.html`, 'list', 'PHONE', 'LIGHT', null],
+        [`${CARD}/odd.html`, 'odd', null, null, null],
+      ],
+    );
+    assert.deepEqual(Object.keys(written.freezes[0]), [
+      'file',
+      'spec',
+      'test',
+      'name',
+      'kind',
+      'viewport',
+      'colorScheme',
+      'colorSchemeReason',
+      'route',
+      'records',
+      'triggers',
+    ]);
+    assert.equal(read(root, `${CARD}/list-phone-dark.html`), '<p>list</p>');
+    assert.equal(freezeFile(CARD, 'list', 'PHONE', 'DARK'), `${CARD}/list-phone-dark.html`);
+    assert.equal(freezeFile(CARD, 'list', null, 'LIGHT'), `${CARD}/list-light.html`);
+    assert.deepEqual(COLOR_SCHEMES, BOTH);
+    assert.equal(FREEZE_COLOR_SCHEME_COMMAND, 'qitsColorScheme');
+  });
+
+  it('keeps the colour-scheme option across a run that froze nothing, and drops it with the option', () => {
+    const root = app({ [CARD]: 'spec' });
+    const shot = { name: 'list', kind: 'DATA', colorSchemes: BOTH, colorSchemeReason: null };
+    send(
+      root,
+      BOTH.map((colorScheme) => ({ ...shot, colorScheme })),
+    );
+    // A run in which CARD did not run: nothing carried the option, the old manifest's stays.
+    send(root, [], []);
+    assert.deepEqual(manifest(root).colorSchemes, BOTH);
+    assert.deepEqual(
+      manifest(root).freezes.map((f) => f.colorScheme),
+      ['DARK', 'LIGHT'],
+    );
+    // A run whose payloads carry no option (the app dropped it): the keys go, as before it.
+    send(root, [{ name: 'list', kind: 'DATA', colorScheme: null, colorSchemes: null }]);
+    const written = manifest(root);
+    assert.equal('colorSchemes' in written, false);
+    assert.deepEqual(
+      written.freezes.map((f) => [f.file, 'colorScheme' in f]),
+      [[`${CARD}/list.html`, false]],
+    );
+  });
+
+  it('emulates prefers-color-scheme on the Playwright page, and refuses without one', async () => {
+    const calls = [];
+    const page = { emulateMedia: async (options) => calls.push(options) };
+    assert.equal(await emulateColorScheme({ page }, 'dark'), null);
+    await emulateColorScheme({ page }, null);
+    assert.deepEqual(calls, [{ colorScheme: 'dark' }, { colorScheme: null }]);
+    await assert.rejects(
+      emulateColorScheme({ provider: { name: 'webdriverio' } }, 'dark'),
+      /provider 'webdriverio' has no page to emulate it on\. Use the playwright provider/,
+    );
+    await assert.rejects(emulateColorScheme({ page }, 'DARK'), /takes 'light', 'dark' or null/);
   });
 
   it('reads a manifest written before kind and viewport, and writes its kept entries back with null', () => {
@@ -1201,7 +1317,8 @@ describe('outcomes in the freeze manifest', () => {
     route,
   });
   /**
-   * A run: `steps` per spec, in order, each `['shot', test, name, outcomes, triggers, viewport?]` or
+   * A run: `steps` per spec, in order, each
+   * `['shot', test, name, outcomes, triggers, viewport?, colorScheme?]` or
    * `['fired', test, ...outcome names]`; `modules` the outcome of each spec (default passed).
    */
   function run(root, steps, modules) {
@@ -1220,7 +1337,7 @@ describe('outcomes in the freeze manifest', () => {
             rest.map((outcome) => fire(test, outcome)),
           );
         } else {
-          const [name, outcomes, triggers, viewport] = rest;
+          const [name, outcomes, triggers, viewport, colorScheme] = rest;
           qitsFreeze(context, {
             name,
             test,
@@ -1232,6 +1349,8 @@ describe('outcomes in the freeze manifest', () => {
             triggers,
             kind: 'DATA',
             viewport,
+            colorScheme,
+            colorSchemes: colorScheme ? ['LIGHT', 'DARK'] : null,
           });
         }
       }
@@ -1342,6 +1461,27 @@ describe('outcomes in the freeze manifest', () => {
     assert.deepEqual(
       manifest(root).outcomes.fired.map((f) => f.freeze),
       [`${PAGE}/refused-desktop.html`, `${PAGE}/later-phone.html`],
+    );
+  });
+
+  // Ticket qits-2083: of a shot's schemes, the link is the first it took (LIGHT unless left out).
+  it('links a fire to the first colour scheme of the DESKTOP freeze of the shot after it', () => {
+    const root = app({ [PAGE]: 'spec' });
+    const shots = (test, name, outcomes, schemes) =>
+      ['PHONE', 'DESKTOP'].flatMap((viewport) =>
+        schemes.map((scheme) => ['shot', test, name, outcomes, [], viewport, scheme]),
+      );
+    run(root, {
+      [PAGE]: [
+        ...shots('refuses', 'before', 0, ['LIGHT', 'DARK']),
+        ...shots('refuses', 'refused', 1, ['LIGHT', 'DARK']),
+        ...shots('refuses', 'later', 2, ['DARK']),
+        ['fired', 'refuses', 'refused', 'refused'],
+      ],
+    });
+    assert.deepEqual(
+      manifest(root).outcomes.fired.map((f) => f.freeze),
+      [`${PAGE}/refused-desktop-light.html`, `${PAGE}/later-desktop-dark.html`],
     );
   });
 
@@ -1873,6 +2013,117 @@ export class SettingsLayout {
     assert.deepEqual(
       pageRoutes(manifest).map((route) => route.fullPath),
       ['settings/profile'],
+    );
+  });
+});
+
+describe('qits-angular screenshots --check, the colour schemes (qits-2083)', () => {
+  const PAGE = 'src/app/routes/projects/projects.page.browser.spec.ts';
+  const CARD = 'src/app/ui/card/card.browser.spec.ts';
+  const DIR = 'src/testing/browser/freezes';
+  /** A page freeze (`route` set) of `name` at `viewport` in `colorScheme`. */
+  const freeze = (name, viewport, colorScheme, extra = {}) => ({
+    file: `${PAGE}/${name}.html`,
+    spec: PAGE,
+    test: `t ${name}`,
+    name,
+    kind: 'DATA',
+    viewport,
+    colorScheme,
+    colorSchemeReason: null,
+    route: 'projects',
+    records: [],
+    triggers: [],
+    ...extra,
+  });
+  /** An app whose manifest holds `freezes`, and `colorSchemes` when given. */
+  const withManifest = (freezes, colorSchemes) => {
+    const root = app({ [PAGE]: 'spec' });
+    const manifest = {
+      routes: [],
+      ...(colorSchemes ? { colorSchemes } : {}),
+      freezes,
+      byRoute: {},
+      outcomes: { declared: [], fired: [] },
+    };
+    mkdirSync(join(root, DIR), { recursive: true });
+    writeFileSync(join(root, DIR, 'manifest.json'), JSON.stringify(manifest));
+    return root;
+  };
+  const check = (root, env = {}) => {
+    const out = [];
+    const err = [];
+    const code = screenshots(['--check'], {
+      cwd: root,
+      env,
+      out: (l) => out.push(l),
+      err: (l) => err.push(l),
+    });
+    return { code, out: out.join('\n'), err: err.join('\n') };
+  };
+  const BOTH = ['LIGHT', 'DARK'];
+
+  it('fails on a page shot missing a scheme, per viewport, and on one taken in none', () => {
+    const root = withManifest(
+      [
+        freeze('list', 'PHONE', 'LIGHT'),
+        freeze('list', 'PHONE', 'DARK'),
+        freeze('list', 'DESKTOP', 'LIGHT'),
+        freeze('menu', null, null),
+        // Not a page or layout shot: never held to the schemes.
+        { ...freeze('card', null, 'LIGHT'), spec: CARD, route: null },
+      ],
+      BOTH,
+    );
+    const { code, err } = check(root);
+    assert.equal(code, 1);
+    assert.match(err, /2 page or layout shot\(s\) miss a colour scheme:/);
+    assert.match(err, new RegExp(`  ${PAGE} 'list' \\[DESKTOP\\]: missing DARK\\n`));
+    assert.match(err, new RegExp(`  ${PAGE} 'menu': missing LIGHT, DARK\\n`));
+    assert.doesNotMatch(err, /card/);
+    assert.match(err, /\{ colorSchemes: \['LIGHT'\], reason: '…' \}/);
+    // An update run only lists them.
+    const update = check(root, { UPDATE_SNAPSHOT: 'all' });
+    assert.equal(update.code, 0);
+    assert.match(update.out, /missing DARK[\s\S]*the gaps are listed only/);
+  });
+
+  it('passes a shot that opted out of a scheme with a reason, and one taken in every scheme', () => {
+    const root = withManifest(
+      [
+        freeze('list', 'DESKTOP', 'LIGHT'),
+        freeze('list', 'DESKTOP', 'DARK'),
+        freeze('chart', 'DESKTOP', 'LIGHT', { colorSchemeReason: 'no dark palette yet' }),
+      ],
+      BOTH,
+    );
+    const { code, out, err } = check(root);
+    assert.equal(code, 0, err);
+    assert.match(out, /every page and layout shot is taken in each colour scheme \(LIGHT, DARK\)/);
+  });
+
+  it('checks nothing without colorSchemes in the manifest, or without a manifest', () => {
+    const root = withManifest([freeze('list', 'DESKTOP', null)]);
+    const { code, out, err } = check(root);
+    assert.equal(code, 0, err);
+    assert.doesNotMatch(`${out}${err}`, /colour scheme/);
+    assert.equal(check(app({ [PAGE]: 'spec' })).code, 0);
+  });
+
+  it('groups by spec, test, name and viewport, reading missing keys as null', () => {
+    assert.deepEqual(colorSchemeGaps(undefined), []);
+    assert.deepEqual(colorSchemeGaps({ freezes: [freeze('list', null, null)] }), []);
+    assert.deepEqual(
+      colorSchemeGaps({
+        colorSchemes: ['DARK'],
+        freezes: [
+          freeze('list', null, 'DARK'),
+          // Another test of the same name is its own group; a freeze without the keys has none.
+          { ...freeze('list', null, 'LIGHT'), test: 'other' },
+          { file: 'x', spec: PAGE, test: 't', name: 'old', route: 'projects' },
+        ],
+      }),
+      [`${PAGE} 'list': missing DARK`, `${PAGE} 'old': missing DARK`],
     );
   });
 });

@@ -14,14 +14,18 @@
  * With `recordOutcomes()` there too, the manifest carries the outcomes the tests reached, and
  * `--check` names the declared outcomes no test reaches or no screenshot shows (ticket qits-2003).
  * Each freeze records the `kind` its shot gave and the preset `viewport` it was taken at (ticket
- * qits-2046).
+ * qits-2046), and, with `freezeScreenshots({ colorSchemes })`, the colour scheme it was taken in
+ * (ticket qits-2083), which `--check` holds every page and layout shot to.
  */
 export { completeForFreezes, screenshotReferences } from './plugin.mjs';
 export {
+  COLOR_SCHEMES,
   DEFAULT_FREEZE_DIRECTORY,
   DEFAULT_ROUTE_SPECS,
+  FREEZE_COLOR_SCHEME_COMMAND,
   SCREENSHOT_KINDS,
   SCREENSHOT_VIEWPORTS,
+  colorSchemeGaps,
   freezeFile,
   freezeSlug,
 } from './freezes.mjs';

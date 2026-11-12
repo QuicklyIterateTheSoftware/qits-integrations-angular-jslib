@@ -6,6 +6,7 @@
  *
  *   <spec path relative to the root>/<screenshot name>.html   one file per screenshot
  *   <spec path relative to the root>/<name>-<viewport>.html   one per preset width (viewportSpecs)
+ *   <spec path relative to the root>/<name>[-<viewport>]-<scheme>.html   one per colour scheme
  *   assets/<file name>                                        same-origin files the HTML uses
  *   manifest.json                                             what is where (below)
  *
@@ -57,6 +58,17 @@
  * written before them (and entries kept from specs a run skipped) reads as `null`, and is written
  * back with `null`.
  *
+ * Colour schemes (ticket qits-2083): in an app that gives `freezeScreenshots({ colorSchemes })`,
+ * every shot is taken once per scheme, LIGHT then DARK, at each width: `<name>[-<viewport>]-light`
+ * and `-dark` (the scheme is the last suffix, as on the PNG). The manifest then carries the option
+ * as a top-level `"colorSchemes": ["LIGHT", "DARK"]`, and each freeze `"colorScheme"` (the scheme,
+ * `null` for one taken without it) and `"colorSchemeReason"` (the shot's `reason` when it named its
+ * own `colorSchemes`, else `null`). Without the option none of the three keys is written, so the
+ * manifest stays as it was; a reader takes a missing key as `null`. The top-level value is the one
+ * the run's payloads carried; a run that froze nothing keeps the previous manifest's. An outcome
+ * links to the first scheme its shot took (LIGHT unless it opted out of it), at DESKTOP as above.
+ * `colorSchemeGaps()` is what `qits-angular screenshots --check` holds the manifest to.
+ *
  * Entry points (ticket qits-2049): a route's `entry` is `true` when `describeRoutes()` sees
  * `route.data.qitsEntry === true` (`QITS_ENTRY`), and is omitted otherwise. It marks a route that is
  * entered from outside the app — an idp redirect, an old bookmarked address — rather than by an
@@ -98,6 +110,7 @@ export const DEFAULT_ROUTE_SPECS =
 export const FREEZE_COMMAND = 'qitsFreeze';
 export const FREEZE_ROUTES_COMMAND = 'qitsFreezeRoutes';
 export const OUTCOMES_COMMAND = 'qitsOutcomes';
+export const FREEZE_COLOR_SCHEME_COMMAND = 'qitsColorScheme';
 
 /** What a same-origin URL is in the HTML the browser sends (`FREEZE_ASSET_PREFIX` there). */
 const ASSET = /qits-freeze-asset:(\/[^"'\s),?#]*)/g;
@@ -110,19 +123,72 @@ export const SCREENSHOT_KINDS = Object.freeze(['DATA', 'NO_DATA', 'PENDING', 'ER
 /** The preset widths, in the order a shot is taken at them (`ScreenshotViewport` there). */
 export const SCREENSHOT_VIEWPORTS = Object.freeze(['PHONE', 'TABLET', 'DESKTOP']);
 
+/** The colour schemes, in the order a shot is taken in them (`ColorScheme` there). */
+export const COLOR_SCHEMES = Object.freeze(['LIGHT', 'DARK']);
+
 /** The width an outcome links to first: the one a reader shows by default. */
 const LINKED_VIEWPORT = 'DESKTOP';
 
 const oneOf = (values, value) => (values.includes(value) ? value : null);
 
+/** A reason as the manifest keeps it: a non-empty string, else `null`. */
+const reasonOf = (value) => (typeof value === 'string' && value.trim() !== '' ? value : null);
+
+/**
+ * A colour-scheme option as the manifest keeps it: the schemes in {@link COLOR_SCHEMES} order, or
+ * `null` when it is not a non-empty list of them.
+ */
+function schemesOf(value) {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  if (!value.every((scheme) => COLOR_SCHEMES.includes(scheme))) return null;
+  return COLOR_SCHEMES.filter((scheme) => value.includes(scheme));
+}
+
 /**
  * The freeze file of a shot, relative to the freeze directory: `<spec>/<slug>.html`, or
  * `<spec>/<slug>-<viewport>.html` for a shot at a preset width, as Vitest names its PNG
- * `<name>-<viewport>-<browser>-<platform>.png` (the browser side suffixes the name it compares).
+ * `<name>-<viewport>-<browser>-<platform>.png` (the browser side suffixes the name it compares). A
+ * shot in a colour scheme (ticket qits-2083) takes the scheme as the last suffix:
+ * `<spec>/<slug>[-<viewport>]-light.html`, `-dark`.
  */
-export function freezeFile(spec, name, viewport = null) {
-  const suffix = viewport ? `-${viewport.toLowerCase()}` : '';
-  return `${spec}/${freezeSlug(name)}${suffix}.html`;
+export function freezeFile(spec, name, viewport = null, colorScheme = null) {
+  const width = viewport ? `-${viewport.toLowerCase()}` : '';
+  const scheme = colorScheme ? `-${colorScheme.toLowerCase()}` : '';
+  return `${spec}/${freezeSlug(name)}${width}${scheme}.html`;
+}
+
+/**
+ * The page and layout shots (`route` not `null`) that lack a scheme of the manifest's
+ * `colorSchemes` (ticket qits-2083), one message each: `<spec> '<name>' [<viewport>]: missing DARK`.
+ * The freezes are grouped by spec, test, name and viewport; a group misses each scheme of
+ * `colorSchemes` none of its freezes was taken in, unless one of them opted out (its
+ * `colorSchemeReason` is set). A freeze without a scheme counts as none taken. Empty without
+ * `colorSchemes` in the manifest.
+ */
+export function colorSchemeGaps(manifest) {
+  const wanted = schemesOf(manifest?.colorSchemes);
+  if (!wanted) return [];
+  const groups = new Map();
+  for (const freeze of Array.isArray(manifest.freezes) ? manifest.freezes : []) {
+    if (freeze?.route === null || freeze?.route === undefined) continue;
+    const viewport = oneOf(SCREENSHOT_VIEWPORTS, freeze.viewport);
+    const key = JSON.stringify([freeze.spec, freeze.test, freeze.name, viewport]);
+    const group = groups.get(key) ?? { freeze, viewport, taken: new Set(), optedOut: false };
+    const scheme = oneOf(COLOR_SCHEMES, freeze.colorScheme);
+    if (scheme) group.taken.add(scheme);
+    if (reasonOf(freeze.colorSchemeReason)) group.optedOut = true;
+    groups.set(key, group);
+  }
+  const gaps = [];
+  for (const { freeze, viewport, taken, optedOut } of groups.values()) {
+    if (optedOut) continue;
+    const missing = wanted.filter((scheme) => !taken.has(scheme));
+    if (missing.length === 0) continue;
+    gaps.push(
+      `${freeze.spec} '${freeze.name}'${viewport ? ` [${viewport}]` : ''}: missing ${missing.join(', ')}`,
+    );
+  }
+  return gaps.sort(compare);
 }
 const ASSETS = 'assets';
 
@@ -167,6 +233,8 @@ export function freezeWriter({
   /** asset name → the request path it was copied from, this run */
   let assetSources = new Map();
   let routes;
+  /** The `colorSchemes` option this run's payloads carried (`null`: off), `undefined` before one. */
+  let runColorSchemes;
 
   /** The copy's name for a same-origin `path`, and the file it is copied from (or `null`). */
   function assetFor(path) {
@@ -195,6 +263,7 @@ export function freezeWriter({
       shots = 0;
       assetSources = new Map();
       routes = undefined;
+      runColorSchemes = undefined;
     },
 
     /** The `qitsFreezeRoutes` command: the app's route tree, as `describeRoutes()` gives it. */
@@ -203,10 +272,28 @@ export function freezeWriter({
     },
 
     /** The `qitsFreeze` command, for the spec at `testPath`. */
-    add(testPath, { name, test, html, route, records, outcomes, triggers, kind, viewport }) {
+    add(
+      testPath,
+      {
+        name,
+        test,
+        html,
+        route,
+        records,
+        outcomes,
+        triggers,
+        kind,
+        viewport,
+        colorScheme,
+        colorSchemes,
+        colorSchemeReason,
+      },
+    ) {
       const spec = toPosix(relative(root, testPath));
       const width = oneOf(SCREENSHOT_VIEWPORTS, viewport);
-      const file = freezeFile(spec, name, width);
+      const scheme = oneOf(COLOR_SCHEMES, colorScheme);
+      runColorSchemes = schemesOf(colorSchemes);
+      const file = freezeFile(spec, name, width, scheme);
       const toAssets = toPosix(relative(dirname(join(base, file)), join(base, ASSETS)));
       const assets = new Map();
       const rewritten = html.replace(ASSET, (_, path) => {
@@ -227,6 +314,8 @@ export function freezeWriter({
         name,
         kind: oneOf(SCREENSHOT_KINDS, kind),
         viewport: width,
+        colorScheme: scheme,
+        colorSchemeReason: reasonOf(colorSchemeReason),
         route: routeSpecs.test(spec) ? (route ?? null) : null,
         records: (records ?? []).map(({ provider, state, operationId }) => ({
           provider,
@@ -301,7 +390,8 @@ export function freezeWriter({
             const after = shotsInOrder.find(
               (shot) => shot.entry.test === test && shot.outcomes > index,
             );
-            // The widths of one shot share its test, name and outcome count; DESKTOP first.
+            // The widths and schemes of one shot share its test, name and outcome count; DESKTOP
+            // first, and of its schemes the first taken (LIGHT unless the shot left it out).
             const linked =
               after &&
               (shotsInOrder.find(
@@ -339,16 +429,38 @@ export function freezeWriter({
       }
       // Stable: a test's records keep the order they were reached in.
       fired.sort((a, b) => compare(a.spec, b.spec) || compare(a.test, b.test));
+      // The option as this run's payloads carried it; a run that froze nothing keeps the old one.
+      const colorSchemes = runColorSchemes === undefined ? old.colorSchemes : runColorSchemes;
       const manifest = {
         routes: markForwards(routes ?? old.routes, declared),
+        // Written only with the option, so a manifest without it stays byte for byte as before.
+        ...(colorSchemes ? { colorSchemes } : {}),
         freezes: freezes.map(
-          ({ file, spec, test, name, kind, viewport, route, records, triggers }) => ({
+          ({
+            file,
+            spec,
+            test,
+            name,
+            kind,
+            viewport,
+            colorScheme,
+            colorSchemeReason,
+            route,
+            records,
+            triggers,
+          }) => ({
             file,
             spec,
             test,
             name,
             kind: oneOf(SCREENSHOT_KINDS, kind),
             viewport: oneOf(SCREENSHOT_VIEWPORTS, viewport),
+            ...(colorSchemes
+              ? {
+                  colorScheme: oneOf(COLOR_SCHEMES, colorScheme),
+                  colorSchemeReason: reasonOf(colorSchemeReason),
+                }
+              : {}),
             route,
             records,
             triggers: triggers ?? [],
@@ -378,11 +490,12 @@ function readManifest(path) {
     const manifest = JSON.parse(readFileSync(path, 'utf8'));
     return {
       routes: Array.isArray(manifest.routes) ? manifest.routes : [],
+      colorSchemes: schemesOf(manifest.colorSchemes),
       freezes: Array.isArray(manifest.freezes) ? manifest.freezes : [],
       fired: Array.isArray(manifest.outcomes?.fired) ? manifest.outcomes.fired : [],
     };
   } catch {
-    return { routes: [], freezes: [], fired: [] };
+    return { routes: [], colorSchemes: null, freezes: [], fired: [] };
   }
 }
 
