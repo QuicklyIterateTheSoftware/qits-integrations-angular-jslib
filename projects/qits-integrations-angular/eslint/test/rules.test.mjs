@@ -1473,6 +1473,21 @@ tester.run('screenshot-kind', rules['screenshot-kind'], {
       filename: KIND_SPEC,
       code: "await expect.element(view).toMatchScreenshot('hover', { kind: 'DATA', viewports: ['PHONE', 'TABLET'], reason: 'needs a fine pointer' });",
     },
+    // A colour-scheme opt-out (ticket qits-2083): enum literals with a reason, alone or beside
+    // viewports, which the one reason covers.
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('chart', { kind: 'DATA', colorSchemes: ['LIGHT'], reason: 'the chart has no dark palette yet' });",
+    },
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('hover', { kind: 'DATA', viewports: ['DESKTOP'], colorSchemes: ['LIGHT', 'DARK'], reason: 'needs a fine pointer' });",
+    },
+    // A spread hides colorSchemes as it hides viewports.
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('loaded', { ...base, kind: 'DATA', colorSchemes: ['DUSK'] });",
+    },
     // A kind given literally beside a spread is still checkable.
     {
       filename: KIND_SPEC,
@@ -1569,6 +1584,46 @@ tester.run('screenshot-kind', rules['screenshot-kind'], {
       code: "await expect.element(view).toMatchScreenshot('hover', { kind: 'DATA', viewports: ['MOBILE'] });",
       errors: [{ messageId: 'missingReason' }, { messageId: 'invalidViewports' }],
     },
+    // colorSchemes present but not a non-empty array literal of LIGHT / DARK literals (qits-2083).
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('chart', { kind: 'DATA', colorSchemes: 'DARK', reason: 'x' });",
+      errors: [{ messageId: 'invalidColorSchemes' }],
+    },
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('chart', { kind: 'DATA', colorSchemes: [], reason: 'x' });",
+      errors: [{ messageId: 'invalidColorSchemes' }],
+    },
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('chart', { kind: 'DATA', colorSchemes: ['light'], reason: 'x' });",
+      errors: [{ messageId: 'invalidColorSchemes' }],
+    },
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('chart', { kind: 'DATA', colorSchemes: [scheme], reason: 'x' });",
+      errors: [{ messageId: 'invalidColorSchemes' }],
+    },
+    // colorSchemes without a reason, and with both lists one missing reason, on viewports.
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('chart', { kind: 'DATA', colorSchemes: ['LIGHT'] });",
+      errors: [{ messageId: 'missingReason' }],
+    },
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('chart', { kind: 'DATA', colorSchemes: ['LIGHT'], reason: '' });",
+      errors: [{ messageId: 'missingReason' }],
+    },
+    {
+      filename: KIND_SPEC,
+      code: "await expect.element(view).toMatchScreenshot('hover', { kind: 'DATA', viewports: ['DESKTOP'], colorSchemes: ['DUSK'] });",
+      errors: [
+        { messageId: 'missingReason', line: 1, column: 71 },
+        { messageId: 'invalidColorSchemes' },
+      ],
+    },
     // A spread with no literal kind is reported as missing, not as unreadable.
     {
       filename: KIND_SPEC,
@@ -1597,6 +1652,8 @@ describe('screenshot-kind messages', () => {
     assert.match(messages.missingKind, /DATA, NO_DATA, PENDING, ERROR/);
     assert.match(messages.invalidKind, /DATA, NO_DATA, PENDING, ERROR/);
     assert.match(messages.invalidViewports, /PHONE, TABLET, DESKTOP/);
+    assert.match(messages.invalidColorSchemes, /LIGHT, DARK/);
+    assert.match(messages.missingReason, /viewports and colorSchemes need a reason/);
   });
 });
 

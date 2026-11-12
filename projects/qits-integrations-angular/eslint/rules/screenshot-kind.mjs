@@ -16,8 +16,15 @@ const KINDS = ['DATA', 'NO_DATA', 'PENDING', 'ERROR'];
  */
 const VIEWPORTS = ['PHONE', 'TABLET', 'DESKTOP'];
 
+/**
+ * The colour schemes a shot may be narrowed to (ticket qits-2083). Mirrors `COLOR_SCHEMES` in
+ * `testing/browser/src/screenshot-options.ts`; same caveat as `KINDS`. Keep the two lists in step.
+ */
+const COLOR_SCHEMES = ['LIGHT', 'DARK'];
+
 const KIND_LIST = KINDS.join(', ');
 const VIEWPORT_LIST = VIEWPORTS.join(', ');
+const COLOR_SCHEME_LIST = COLOR_SCHEMES.join(', ');
 
 /** A member's plain name (`.x`, `['x']` with a literal), or undefined when it is dynamic. */
 const memberName = (node) => (node.computed ? literalText(node.property) : node.property.name);
@@ -41,11 +48,14 @@ const describe = (node) => {
  * own messageId: no options object at all; an options object with no `kind`; a `kind` that is not
  * a string literal (a plain string `Literal` or a no-expression `TemplateLiteral`) naming one of
  * `DATA` / `NO_DATA` / `PENDING` / `ERROR`; a `viewports` that is not a non-empty array literal of
- * string literals from `PHONE` / `TABLET` / `DESKTOP`; and a `viewports` given without a `reason`
- * that is a non-empty string literal.
+ * string literals from `PHONE` / `TABLET` / `DESKTOP`; a `colorSchemes` that is not a non-empty
+ * array literal of string literals from `LIGHT` / `DARK` (ticket qits-2083); and a `viewports` or
+ * `colorSchemes` given without a `reason` that is a non-empty string literal (one reason covers
+ * both, reported once, on the first of the two).
  *
  * A spread element in the options object (`{ ...base, kind: 'DATA' }`) makes the rest of the
- * object unreadable, so `viewports` / `reason` are not checked when one is present; `kind` still
+ * object unreadable, so `viewports` / `colorSchemes` / `reason` are not checked when one is
+ * present; `kind` still
  * is, because it is common to give it as its own literal property beside a spread. Without a
  * literal `kind` to find, the spread case is reported the same as a missing `kind`.
  */
@@ -54,7 +64,7 @@ export default {
     type: 'problem',
     docs: {
       description:
-        "Every toMatchScreenshot(...) in a browser spec names the shot's kind (and, with viewports, a reason).",
+        "Every toMatchScreenshot(...) in a browser spec names the shot's kind (and, with viewports or colorSchemes, a reason).",
     },
     schema: [],
     messages: {
@@ -62,8 +72,9 @@ export default {
       missingKind: `This options object has no kind: add kind: '<one of ${KIND_LIST}>', so the UI builder knows what the shot shows.`,
       invalidKind: `kind must be a string literal naming one of ${KIND_LIST}, not {{given}}.`,
       invalidViewports: `viewports must be a non-empty array literal of ${VIEWPORT_LIST} string literals, not {{given}}.`,
+      invalidColorSchemes: `colorSchemes must be a non-empty array literal of ${COLOR_SCHEME_LIST} string literals, not {{given}}.`,
       missingReason:
-        "viewports needs a reason: add reason: '<why only these widths>', a non-empty string literal.",
+        "viewports and colorSchemes need a reason: add reason: '<why only these widths or schemes>', a non-empty string literal.",
     },
   },
   create(context) {
@@ -98,31 +109,36 @@ export default {
           }
         }
 
-        // A spread makes the rest of the object unreadable: viewports/reason are not checkable.
+        // A spread makes the rest of the object unreadable: viewports/colorSchemes/reason are not
+        // checkable.
         if (spread) return;
 
+        /** An opt-out list: reported unless a non-empty array literal of `allowed` literals. */
+        const checkList = (prop, allowed, messageId) => {
+          if (!prop) return;
+          const value = prop.value;
+          const elements =
+            value.type === 'ArrayExpression'
+              ? value.elements.map((e) => e && literalText(e))
+              : undefined;
+          const valid =
+            elements !== undefined &&
+            elements.length > 0 &&
+            elements.every((v) => v !== undefined && allowed.includes(v));
+          if (!valid) context.report({ node: value, messageId, data: { given: describe(value) } });
+        };
+
         const viewportsProp = property(options, 'viewports');
-        if (!viewportsProp) return;
-        const viewportsValue = viewportsProp.value;
-        const elements =
-          viewportsValue.type === 'ArrayExpression'
-            ? viewportsValue.elements.map((e) => e && literalText(e))
-            : undefined;
-        const validViewports =
-          elements !== undefined &&
-          elements.length > 0 &&
-          elements.every((v) => v !== undefined && VIEWPORTS.includes(v));
-        if (!validViewports) {
-          context.report({
-            node: viewportsValue,
-            messageId: 'invalidViewports',
-            data: { given: describe(viewportsValue) },
-          });
-        }
+        const colorSchemesProp = property(options, 'colorSchemes');
+        if (!viewportsProp && !colorSchemesProp) return;
+        checkList(viewportsProp, VIEWPORTS, 'invalidViewports');
+        checkList(colorSchemesProp, COLOR_SCHEMES, 'invalidColorSchemes');
 
         const reasonProp = property(options, 'reason');
         const reason = reasonProp && literalText(reasonProp.value);
-        if (!reason) context.report({ node: viewportsProp, messageId: 'missingReason' });
+        if (!reason) {
+          context.report({ node: viewportsProp ?? colorSchemesProp, messageId: 'missingReason' });
+        }
       },
     };
   },
