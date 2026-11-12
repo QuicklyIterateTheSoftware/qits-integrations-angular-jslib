@@ -52,8 +52,13 @@ More entry points (the package's own), all documented in the repository README:
 - `@qits/angular/testing`: golden masters and Pact V4 consumer pacts for specs (Node only; needs
   `@pact-foundation/pact`).
 - `@qits/angular/testing/browser`: the golden-master guard, the screenshot freezes (each shot's
-  `kind`, `toMatchScreenshot(name, { kind: 'DATA' })`, and the PHONE / TABLET / DESKTOP widths of
-  `freezeScreenshots({ viewportSpecs })`) and `recordOutcomes()` for browser specs.
+  `kind`, `toMatchScreenshot(name, { kind: 'DATA' })`, the PHONE / TABLET / DESKTOP widths of
+  `freezeScreenshots({ viewportSpecs })`, and the LIGHT / DARK schemes of
+  `freezeScreenshots({ colorSchemes })`: `prefers-color-scheme` emulated and `data-theme` set on
+  `<html>`, every shot taken in each as `<name>[-<viewport>]-light` / `-dark`, a shot opting out
+  with `{ colorSchemes: ['LIGHT'], reason }`, and `qits-angular screenshots --check` failing on a
+  page shot missing a scheme; expect twice the references, regenerated through the
+  screenshot-baselines job) and `recordOutcomes()` for browser specs.
 - `@qits/angular/eslint`: lint rules (`client-only-in-stores`, `store-has-pact`, `pact-names`, the route rules,
   `page-has-screenshots`, `page-screenshots-through-routes`, `page-screenshot-whole-page`, `screenshot-kind`, and `route-paths`, which generates `src/app/route-paths.ts`) as
   a flat-config plugin: `export default [...yourConfig, ...qits.configs.recommended];`

@@ -374,10 +374,11 @@ the `pnpm.onlyBuiltDependencies` allowlist it needed have nothing left to do.
   the app once the app navigates through outcomes.
   `screenshot-kind` (ticket qits-2046) is the second `warn` rule, for the same reason: in every
   `*.browser.spec.*` each `toMatchScreenshot(...)` names its `kind` (`DATA`, `NO_DATA`, `PENDING`,
-  `ERROR`) as a literal, and an opt-out `viewports` (`PHONE`, `TABLET`, `DESKTOP`) a literal
-  `reason`; the enums are spelled in the rule and in `screenshot-options.ts`, keep them in step.
+  `ERROR`) as a literal, and an opt-out `viewports` (`PHONE`, `TABLET`, `DESKTOP`) or
+  `colorSchemes` (`LIGHT`, `DARK`, ticket qits-2083) a literal `reason` (one covers both); the enums
+  are spelled in the rule and in `screenshot-options.ts` (and `freezes.mjs`), keep them in step.
   qits-2047 turns it to `error` in landing. The runtime half is `freezeScreenshots({ requireKind,
-viewportSpecs })`, both off by default so a bump changes nothing until the app opts in.
+viewportSpecs, colorSchemes })`, all off by default so a bump changes nothing until the app opts in.
   `page-screenshots-through-routes` (ticket qits-1998) reads only `*.page.browser.spec.ts` /
   `*.layout.browser.spec.ts` under the routes directory: a `TestBed.createComponent` of an import
   from a `*.page.ts` / `*.layout.ts`, a router provider given anything but an identifier imported
@@ -458,6 +459,23 @@ viewportSpecs })`, both off by default so a bump changes nothing until the app o
   `--enforce-outcomes`; an app with no declaration prints nothing; an update run only lists them.
   `--freezes <dir>` names the manifest's directory. The root page's route `''` also takes `null`,
   since `currentRoutePattern()` reports the empty route as `null`.
+  Colour schemes (ticket qits-2083): `freezeScreenshots({ colorSchemes, themeAttribute })` takes
+  every shot of every spec (no spec filter) at each width once per scheme, LIGHT then DARK: the
+  fourth command, `qitsColorScheme` (`FREEZE_COLOR_SCHEME_COMMAND` in both halves), calls
+  `context.page.emulateMedia({ colorScheme })` (Playwright only; `null` resets), the harness sets
+  `themeAttribute` (default `data-theme`) on `<html>` to `light` / `dark`, then `settle()` and the
+  shot, named `<name>[-<viewport>]-light` / `-dark` (PNG and freeze; `viewportName()`,
+  `freezeFile(spec, name, viewport, colorScheme)`). A `finally` puts the attribute back (removed
+  when absent) and the emulation to `null`. A shot opts out with `colorSchemes` and the `reason`
+  `viewports` uses (an `OWN_KEYS` entry, stripped for Vitest); without the app option it is ignored.
+  The payload carries `colorScheme`, `colorSchemes` (the option) and `colorSchemeReason`. **Without
+  the option the manifest is byte-identical to before**: the top-level `colorSchemes` and each
+  freeze's `colorScheme` / `colorSchemeReason` are written only when the run's payloads carried the
+  option (a run that froze nothing keeps the old manifest's value; a run that carried `null` drops
+  it). With it, `--check` fails (exit 1, not behind `--enforce-outcomes`, listed only in an update
+  run) on each page or layout freeze group (spec, test, name, viewport) missing a scheme none of its
+  freezes opted out of (`colorSchemeGaps()`). Turning the option on doubles and renames every
+  reference: they are regenerated through the screenshot-baselines job.
 
 ## Conventions (inherited from the qits webui)
 

@@ -818,7 +818,7 @@ export default [...yourConfig, ...qits.configs.recommended];
 | `qits/page-suffix`                           | The exported component in a `*.page.ts` ends in `Page`, the one in a `*.layout.ts` ends in `Layout`, and a component named `…Page` / `…Layout` lives in such a file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `qits/page-has-screenshots`                  | Every `*.page.ts` and `*.layout.ts` under the routes directory, and every `*.layout.ts` under the `$layout` alias directory, has `<name>.page.browser.spec.ts` / `<name>.layout.browser.spec.ts` beside it, and that spec calls `toMatchScreenshot`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `qits/page-screenshots-through-routes`       | A `*.page.browser.spec.ts` / `*.layout.browser.spec.ts` under the routes directory opens its page through the app's routes: it calls one of `helpers` (default `['openRoute']`) or passes a route table imported from a route-table file to the router (`provideRouter(routes)`). Reported: `TestBed.createComponent(X)` with `X` from a `*.page.ts` / `*.layout.ts`; `provideRouter`, `RouterModule.forRoot` or `RouterTestingModule.withRoutes` given anything else (`[]`, an inline table, a local constant); and a spec doing neither, once, on its first `toMatchScreenshot`. Specs elsewhere (patterns, UI components, a `$layout` layout) are not read.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `qits/screenshot-kind`                       | **`warn`** in `recommended`. In a `*.browser.spec.*` file, every `toMatchScreenshot` call passes an options object (after the name, or alone) whose `kind` is a string literal from the enum (`'DATA'`, `'NO_DATA'`, `'PENDING'`, `'ERROR'`); a `viewports` there is an array of enum literals (`'PHONE'`, `'TABLET'`, `'DESKTOP'`) with a non-empty string-literal `reason` beside it. Reported: no options object, no `kind`, a `kind` that is not such a literal, a `viewports` that is not such an array, `viewports` without a `reason`. See [What a screenshot shows](#what-a-screenshot-shows-kind-and-the-preset-widths).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `qits/screenshot-kind`                       | **`warn`** in `recommended`. In a `*.browser.spec.*` file, every `toMatchScreenshot` call passes an options object (after the name, or alone) whose `kind` is a string literal from the enum (`'DATA'`, `'NO_DATA'`, `'PENDING'`, `'ERROR'`); a `viewports` there is an array of enum literals (`'PHONE'`, `'TABLET'`, `'DESKTOP'`), and a `colorSchemes` one of `'LIGHT'`, `'DARK'`, with a non-empty string-literal `reason` beside either. Reported: no options object, no `kind`, a `kind` that is not such a literal, a `viewports` or `colorSchemes` that is not such an array, either without a `reason`. See [What a screenshot shows](#what-a-screenshot-shows-kind-and-the-preset-widths).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `qits/page-screenshot-whole-page`            | **`warn`** in `recommended`. In a `*.page.browser.spec.ts` / `*.layout.browser.spec.ts` under the routes directory, the subject of every `expect.element(<subject>).toMatchScreenshot(...)` (or `expect(<subject>)`) is the whole page: a member named in `wholePage` (default `['frame', 'routeNativeElement']`) that is not chained further (`opened.frame`), `page.elementLocator(<whole page>)`, a `const` / `let` bound to one (awaited or not) or destructured under a `wholePage` key (`const { frame } = await shown()`), or a call to a function of the same file whose every return is one. Reported, on the subject: anything else (`getByRole(...)`, `querySelector` / `closest` results, `opened.page`, other helper calls, parameters). A part of the page goes in its component's own browser spec.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `qits/route-matches-directory`               | In a route table, every route with `component` or `loadComponent` (and every `loadChildren`) imports from the directory its URL names: the `path`s from the top of the table through `children`, `''` skipped, `:param` as `[param]`, relative to the routes directory. `path: '**'` may render any page; `redirectTo` routes are skipped. A route table under the routes directory is mounted at its own directory. A `*.layout.ts` under the `$layout` alias directory is shared and not checked. Imports through a path alias and non-literal paths are not checked.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `qits/route-paths`                           | Keeps `src/app/route-paths.ts` (option `file`) generated from the route tables: `export type RoutePath`, every full path of a route with `component`, `loadComponent`, `children` or `loadChildren` (`''` included, `**`, `redirectTo` and non-literal paths left out, a nested `*.routes.ts` prefixed by its directory; sorted, no leading slash), and the `declare module '@qits/angular' { interface QitsApp { routePath: RoutePath } }` augmentation that makes `exit()` refuse other paths. Reports `stale` on that file when it differs; the fix rewrites it, so `eslint --fix src/app/route-paths.ts` is the generator. The file is opt-in: create it (empty is enough) and run that fix; a missing file is not reported. See [Where an interaction leads](#where-an-interaction-leads-outcomes).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -948,6 +948,8 @@ import { routes } from '../../app/app.routes';
 freezeScreenshots({ routes }); // routes: optional; sent once per spec file, no lazy route is loaded
 // with kinds required and the page specs shot at the preset widths (ticket qits-2046, below):
 // freezeScreenshots({ routes, requireKind: true, viewportSpecs: DEFAULT_ROUTE_SPECS });
+// and every shot in light and dark too (ticket qits-2083, below):
+// freezeScreenshots({ routes, viewportSpecs: DEFAULT_ROUTE_SPECS, colorSchemes: ['LIGHT', 'DARK'] });
 
 // vitest-browser.config.ts (Node side)
 plugins: [screenshotReferences({ freezes: true })];
@@ -1096,8 +1098,9 @@ await expect.element(view).toMatchScreenshot({ kind: 'NO_DATA' }); // unnamed: V
 | `ERROR`   | A read that failed, and a refused write: it shows a refusal, not the happy path. There is no fifth kind for it.                                                               |
 
 Importing `@qits/angular/testing/browser` augments Vitest's `ScreenshotMatcherOptions` (through
-`vitest/browser`) with `kind?: ScreenshotKind`, `viewports?: readonly ScreenshotViewport[]` and
-`reason?: string`. `freezeScreenshots()` takes the three keys out before it calls Vitest's matcher,
+`vitest/browser`) with `kind?: ScreenshotKind`, `viewports?: readonly ScreenshotViewport[]`,
+`colorSchemes?: readonly ColorScheme[]` and `reason?: string`. `freezeScreenshots()` takes the four
+keys out before it calls Vitest's matcher,
 so Vitest never sees them. A kind outside the enum fails the shot. The freeze records `kind`.
 
 **`freezeScreenshots({ requireKind: true })`** refuses a shot without a kind: it fails its test
@@ -1158,6 +1161,65 @@ it and non-empty. A `viewports` without a `reason`, or naming another width, fai
 shot outside `viewportSpecs`, `viewports` is ignored. The freeze HTML
 keeps every `@media` rule, so the three freezes of one shot differ mostly by the width they were
 laid out at; a reader draws each in a frame of its record's `viewport` width.
+
+### Light and dark: `colorSchemes`
+
+`freezeScreenshots({ colorSchemes: ['LIGHT', 'DARK'] })` (ticket qits-2083) takes every shot of
+every spec (no spec filter, unlike `viewportSpecs`) once per colour scheme (`ColorScheme`,
+`COLOR_SCHEMES`, LIGHT first). The option is a non-empty subset of the two; anything else throws
+from `freezeScreenshots()` at setup. The default is none: one shot, today's names, no switching,
+nothing new in the manifest. For each width (or the one shot at the test's own viewport), then for
+each scheme, the matcher:
+
+1. emulates `prefers-color-scheme` through the browser command `qitsColorScheme`
+   (`FREEZE_COLOR_SCHEME_COMMAND`), which calls Playwright's `page.emulateMedia({ colorScheme })` on
+   the Node side, so it needs the Playwright provider (any other fails the shot saying so).
+   `screenshotReferences({ freezes })` registers it with the other freeze commands;
+2. sets the theme attribute on `<html>` to `light` or `dark`: `themeAttribute`, default
+   `data-theme`, for a theme switched by attribute rather than by media query;
+3. settles as after a resize, runs Vitest's matcher and freezes the result.
+
+The scheme is the last suffix, on the PNG and on the freeze: `<name>[-<viewport>]-light` and
+`-dark` (`list-phone-dark` is `list-phone-dark-chromium-linux.png` and `<spec>/list-phone-dark.html`).
+Both schemes are suffixed. Afterwards the attribute goes back to what it was (removed when it was
+absent) and the emulation is reset, then the page settles again. A failure names the scheme after
+the width: `at TABLET (1024x768), DARK: …`, or `at DARK: …` at the test's own viewport.
+
+**Expect twice the references.** Turning the option on renames every reference and doubles them;
+regenerate them through the platform's `screenshot-baselines` job for the release request, as for
+any reference, never by hand. The old names become orphans that job's `--prune` deletes.
+
+A shot leaves a scheme out with the same `reason` key `viewports` uses; one reason covers both:
+
+```ts
+await expect.element(chart).toMatchScreenshot('chart', {
+  kind: 'DATA',
+  colorSchemes: ['LIGHT'],
+  reason: 'the chart has no dark palette yet',
+});
+```
+
+`colorSchemes` is a non-empty subset of `LIGHT` / `DARK`; without a `reason`, or naming another
+scheme, it fails the shot (and `qits/screenshot-kind` reports it). In an app without the option it
+is ignored. The freeze records `colorScheme`, and `colorSchemeReason` (the shot's `reason` when it
+gave its own `colorSchemes`, else `null`); the manifest records the option as a top-level
+`colorSchemes`. Without the option none of these keys is written, so the manifest stays byte for
+byte as before; a reader takes a missing one as `null`. A run that froze nothing keeps the previous
+manifest's `colorSchemes`. An outcome links to the first scheme its shot took (LIGHT unless left
+out), at DESKTOP.
+
+**The check.** With `colorSchemes` in the manifest, `qits-angular screenshots --check` groups the
+page and layout freezes (`route` set) by spec, test, name and viewport and fails (exit 1, not behind
+`--enforce-outcomes`; an update run only lists them) on each group missing a scheme that none of
+its freezes opted out of:
+
+```
+src/app/routes/projects/projects.page.browser.spec.ts 'list' [PHONE]: missing DARK
+```
+
+A freeze without a scheme in such a manifest (kept from a spec the run skipped) misses every scheme.
+The freeze HTML keeps the theme attribute on `<html>`, so an attribute-switched theme shows in it as
+it did in the shot; a `prefers-color-scheme` rule shows only when the reader opens it in that scheme.
 
 ## Releasing
 
