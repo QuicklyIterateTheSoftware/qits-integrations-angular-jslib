@@ -66,10 +66,16 @@ export declare const COLOR_SCHEMES: readonly FreezeColorScheme[];
 
 /**
  * `'qitsColorScheme'`: the browser command `freezeScreenshots({ colorSchemes })` emulates
- * `prefers-color-scheme` through (`'light'`, `'dark'`, `null` to reset; Playwright only).
- * `screenshotReferences({ freezes })` registers it.
+ * `prefers-color-scheme` through (`'light'`, `'dark'`, {@link RESET_COLOR_SCHEME} to reset;
+ * Playwright only). `screenshotReferences({ freezes })` registers it.
  */
 export declare const FREEZE_COLOR_SCHEME_COMMAND: string;
+
+/**
+ * `'reset'`: what the browser sends `qitsColorScheme` to reset the emulation. Never `null`: Vitest
+ * 5's browser tester throws on a `null` first argument of any command.
+ */
+export declare const RESET_COLOR_SCHEME: string;
 
 /**
  * The page and layout shots (`route` not `null`) that lack a scheme of `manifest.colorSchemes`,

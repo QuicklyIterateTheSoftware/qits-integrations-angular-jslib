@@ -26,6 +26,7 @@ import {
 } from './record.mjs';
 import {
   FREEZE_COLOR_SCHEME_COMMAND,
+  RESET_COLOR_SCHEME,
   FREEZE_COMMAND,
   FREEZE_ROUTES_COMMAND,
   OUTCOMES_COMMAND,
@@ -52,14 +53,19 @@ const vitestDefault = ({
 
 /**
  * The `qitsColorScheme` command (ticket qits-2083): emulates `prefers-color-scheme` on the page the
- * tests run in, `'light'` or `'dark'`, or resets it with `null`. Only the Playwright provider has a
- * `page` with `emulateMedia` (in Vitest 4 and 5 alike); any other fails the shot naming the fix.
+ * tests run in, `'light'` or `'dark'`, or resets it with `'reset'` ({@link RESET_COLOR_SCHEME}).
+ * Not with `null`: Vitest 5's browser tester reads `"selector" in args[0]` of every command whose
+ * first argument is an object, and `typeof null` is `'object'`, so a `null` throws a `TypeError` in
+ * the browser before it is sent. Vitest 4 sends it; refusing it here keeps the Vitest 4 runs
+ * (`vitest-run.test.mjs`) a guard for Vitest 5. Only the Playwright provider has a `page` with
+ * `emulateMedia` (in Vitest 4 and 5 alike); any other fails the shot naming the fix.
  */
 export async function emulateColorScheme(context, scheme) {
-  if (scheme !== null && scheme !== 'light' && scheme !== 'dark') {
+  if (scheme !== RESET_COLOR_SCHEME && scheme !== 'light' && scheme !== 'dark') {
     throw new Error(
-      `screenshot freezes: ${FREEZE_COLOR_SCHEME_COMMAND} takes 'light', 'dark' or null, not ` +
-        `${JSON.stringify(scheme)}.`,
+      `screenshot freezes: ${FREEZE_COLOR_SCHEME_COMMAND} takes 'light', 'dark' or ` +
+        `'${RESET_COLOR_SCHEME}', not ${JSON.stringify(scheme)}` +
+        (scheme === null ? " (Vitest 5's browser tester throws on a null command argument)." : '.'),
     );
   }
   const page = context?.page;
@@ -71,7 +77,7 @@ export async function emulateColorScheme(context, scheme) {
         'or drop the colorSchemes option.',
     );
   }
-  await page.emulateMedia({ colorScheme: scheme });
+  await page.emulateMedia({ colorScheme: scheme === RESET_COLOR_SCHEME ? null : scheme });
   return null;
 }
 

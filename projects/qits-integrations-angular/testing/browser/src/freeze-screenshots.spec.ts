@@ -5,6 +5,7 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import {
   DEFAULT_ROUTE_SPECS,
   FREEZE_COLOR_SCHEME_COMMAND,
+  RESET_COLOR_SCHEME,
   freezeScreenshots,
   renderedThroughRoutes,
 } from './freeze-screenshots';
@@ -204,6 +205,7 @@ describe('the colour schemes', () => {
     expect(COLOR_SCHEMES).toEqual(['LIGHT', 'DARK']);
     expect(Object.isFrozen(COLOR_SCHEMES)).toBe(true);
     expect(FREEZE_COLOR_SCHEME_COMMAND).toBe('qitsColorScheme');
+    expect(RESET_COLOR_SCHEME).toBe('reset');
   });
 
   it('reads the option in scheme order, and refuses anything but a non-empty list of them', () => {

@@ -68,10 +68,19 @@ export const FREEZE_ROUTES_COMMAND = 'qitsFreezeRoutes';
 
 /**
  * The browser command that emulates `prefers-color-scheme` (ticket qits-2083): `'light'`, `'dark'`,
- * or `null` to reset. Playwright only (`page.emulateMedia`); `screenshotReferences({ freezes })`
- * registers it.
+ * or {@link RESET_COLOR_SCHEME} to reset. Playwright only (`page.emulateMedia`);
+ * `screenshotReferences({ freezes })` registers it.
  */
 export const FREEZE_COLOR_SCHEME_COMMAND = 'qitsColorScheme';
+
+/**
+ * What {@link FREEZE_COLOR_SCHEME_COMMAND} is sent to reset the emulation: a string, never `null`.
+ * Vitest 5's browser tester looks at every command's first argument before sending it
+ * (`typeof args[0] === "object" && "selector" in args[0]`, for its trace view), and `typeof null`
+ * is `'object'`: a `null` first argument throws `TypeError: Cannot use 'in' operator to search for
+ * 'selector' in null` in the browser, before the command reaches the Node side. Vitest 4 sends it.
+ */
+export const RESET_COLOR_SCHEME = 'reset';
 
 /**
  * The specs whose shots must show the app's routes: the page and layout specs under
@@ -446,7 +455,7 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
           } finally {
             if (before === null) html.removeAttribute(themeAttribute);
             else html.setAttribute(themeAttribute, before);
-            await emulate(null);
+            await emulate(RESET_COLOR_SCHEME);
             await settle();
           }
         };

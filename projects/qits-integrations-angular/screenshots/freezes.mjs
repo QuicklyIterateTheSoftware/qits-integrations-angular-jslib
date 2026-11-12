@@ -112,6 +112,12 @@ export const FREEZE_ROUTES_COMMAND = 'qitsFreezeRoutes';
 export const OUTCOMES_COMMAND = 'qitsOutcomes';
 export const FREEZE_COLOR_SCHEME_COMMAND = 'qitsColorScheme';
 
+/**
+ * What the browser sends `qitsColorScheme` to reset the emulation (`RESET_COLOR_SCHEME` there): a
+ * string, because Vitest 5's browser tester throws on a `null` first argument of any command.
+ */
+export const RESET_COLOR_SCHEME = 'reset';
+
 /** What a same-origin URL is in the HTML the browser sends (`FREEZE_ASSET_PREFIX` there). */
 const ASSET = /qits-freeze-asset:(\/[^"'\s),?#]*)/g;
 

@@ -11,6 +11,7 @@ import { screenshots } from '../cli.mjs';
 import {
   COLOR_SCHEMES,
   FREEZE_COLOR_SCHEME_COMMAND,
+  RESET_COLOR_SCHEME,
   colorSchemeGaps,
   completeForFreezes,
   declaredOutcomes,
@@ -769,6 +770,7 @@ describe('screenshot freezes', () => {
     assert.equal(freezeFile(CARD, 'list', null, 'LIGHT'), `${CARD}/list-light.html`);
     assert.deepEqual(COLOR_SCHEMES, BOTH);
     assert.equal(FREEZE_COLOR_SCHEME_COMMAND, 'qitsColorScheme');
+    assert.equal(RESET_COLOR_SCHEME, 'reset');
   });
 
   it('keeps the colour-scheme option across a run that froze nothing, and drops it with the option', () => {
@@ -799,13 +801,20 @@ describe('screenshot freezes', () => {
     const calls = [];
     const page = { emulateMedia: async (options) => calls.push(options) };
     assert.equal(await emulateColorScheme({ page }, 'dark'), null);
-    await emulateColorScheme({ page }, null);
+    await emulateColorScheme({ page }, 'reset');
     assert.deepEqual(calls, [{ colorScheme: 'dark' }, { colorScheme: null }]);
     await assert.rejects(
       emulateColorScheme({ provider: { name: 'webdriverio' } }, 'dark'),
       /provider 'webdriverio' has no page to emulate it on\. Use the playwright provider/,
     );
-    await assert.rejects(emulateColorScheme({ page }, 'DARK'), /takes 'light', 'dark' or null/);
+    await assert.rejects(emulateColorScheme({ page }, 'DARK'), /takes 'light', 'dark' or 'reset'/);
+    // Vitest 5's tester throws on a null first argument before the command is sent (qits-2083):
+    // refused here too, so the browser half's Vitest 4 runs fail the same way if it sends one.
+    await assert.rejects(
+      emulateColorScheme({ page }, null),
+      /not null \(Vitest 5's browser tester throws on a null command argument\)/,
+    );
+    assert.equal(calls.length, 2);
   });
 
   it('reads a manifest written before kind and viewport, and writes its kept entries back with null', () => {
