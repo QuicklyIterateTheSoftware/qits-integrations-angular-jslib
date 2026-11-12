@@ -748,3 +748,241 @@ it('an Angular view', async () => {
     assert.deepEqual(Object.keys(again), [REFUSALS]);
   });
 });
+
+// Colour schemes (ticket qits-2083): freezeScreenshots({ colorSchemes }) in a real run. The page
+// is styled differently under [data-theme="dark"] and under @media (prefers-color-scheme: dark),
+// and prints what the media query says, so each PNG and each freeze tells its scheme. The same
+// specs in an app without the option take exactly the shots they took before.
+describe('colour schemes in a Vitest browser run', { timeout: 300_000 }, () => {
+  const LIBRARY = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const PAGE = 'src/pages/scheme.page.browser.spec.ts';
+  const OWN = 'src/own/own.browser.spec.ts';
+  const SETUP_IMPORTS = `import '@angular/compiler';
+import { freezeScreenshots } from ${JSON.stringify(join(LIBRARY, 'testing/browser/src/freeze-screenshots.ts'))};
+`;
+  const VIEWPORT_SPECS = '/\\/src\\/pages\\/.*\\.page\\.browser\\.spec\\.ts$/';
+  const BOX = `const CSS = '.box { width: 80px; height: 30px; background: rgb(255, 255, 255); color: rgb(0, 0, 0); }' +
+  ' [data-theme="dark"] .box { background: rgb(0, 0, 0); }' +
+  ' @media (prefers-color-scheme: dark) { .box { color: rgb(255, 255, 0); } }';
+const box = () => {
+  document.head.querySelector('style[data-scheme-test]')?.remove();
+  const style = document.createElement('style');
+  style.dataset.schemeTest = '';
+  style.textContent = CSS;
+  document.head.append(style);
+  document.body.innerHTML = '<div data-testid="box" class="box"></div>';
+  const el = document.querySelector('[data-testid="box"]')!;
+  const query = matchMedia('(prefers-color-scheme: dark)');
+  const show = () => (el.textContent = query.matches ? 'dark' : 'light');
+  show();
+  query.addEventListener('change', show);
+  return page.getByTestId('box');
+};
+const restored = (theme: string | null) => {
+  expect(document.documentElement.getAttribute('data-theme')).toBe(theme);
+  expect(matchMedia('(prefers-color-scheme: dark)').matches).toBe(false);
+};
+`;
+  /** A throwaway app with both specs, `options` given to freezeScreenshots(). */
+  const makeApp = (prefix, options) => {
+    const app = mkdtempSync(join(process.cwd(), 'tmp', prefix));
+    const put = (path, content) => {
+      mkdirSync(dirname(join(app, path)), { recursive: true });
+      writeFileSync(join(app, path), content);
+    };
+    put('vitest.config.mjs', freezesConfig(app));
+    put(
+      'src/qits-angular.ts',
+      `export * from ${JSON.stringify(join(LIBRARY, 'src/lib/route-telemetry.ts'))};
+export * from ${JSON.stringify(join(LIBRARY, 'src/lib/outcomes/outcome-recorder.ts'))};
+`,
+    );
+    put('src/setup.ts', `${SETUP_IMPORTS}\nfreezeScreenshots(${options});\n`);
+    put(
+      PAGE,
+      `import { expect, it } from 'vitest';
+import { page } from 'vitest/browser';
+
+${BOX}
+it('both schemes', async () => {
+  await expect.element(box()).toMatchScreenshot('scheme', { kind: 'DATA' });
+  restored(null);
+});
+
+it('an opt-out', async () => {
+  document.documentElement.setAttribute('data-theme', 'sepia');
+  await expect.element(box()).toMatchScreenshot('chart', {
+    kind: 'DATA',
+    colorSchemes: ['LIGHT'],
+    reason: 'the chart has no dark palette yet',
+  });
+  restored('sepia');
+  document.documentElement.removeAttribute('data-theme');
+});
+`,
+    );
+    put(
+      OWN,
+      `import { expect, it } from 'vitest';
+import { page } from 'vitest/browser';
+
+${BOX}
+it('at its own viewport', async () => {
+  await expect.element(box()).toMatchScreenshot('own', { kind: 'DATA' });
+  restored(null);
+});
+`,
+    );
+    return app;
+  };
+  const withSchemes = makeApp(
+    'schemes-run-',
+    `{ colorSchemes: ['LIGHT', 'DARK'], viewportSpecs: ${VIEWPORT_SPECS} }`,
+  );
+  const without = makeApp('no-schemes-run-', `{ viewportSpecs: ${VIEWPORT_SPECS} }`);
+  after(() => {
+    rmSync(withSchemes, { recursive: true, force: true });
+    rmSync(without, { recursive: true, force: true });
+  });
+  const freezesOf = (app) => join(app, 'src/testing/browser/freezes');
+  const manifestOf = (app) =>
+    JSON.parse(readFileSync(join(freezesOf(app), 'manifest.json'), 'utf8'));
+  const png = (app, spec, name) =>
+    join(
+      app,
+      dirname(spec),
+      '__screenshots__',
+      spec.slice(spec.lastIndexOf('/') + 1),
+      `${name}-chromium-${platform()}.png`,
+    );
+  /** The PNG names under a spec's screenshot directory, without the browser and platform. */
+  const pngs = (app, spec) =>
+    readdirSync(dirname(png(app, spec, 'x')))
+      .map((file) => file.replace(`-chromium-${platform()}.png`, ''))
+      .sort();
+  const freezeHtml = (app, spec, name) =>
+    readFileSync(join(freezesOf(app), spec, `${name}.html`), 'utf8');
+
+  /** One update run's failure messages, per spec (relative to the app). */
+  async function failuresOf(app, { update = true } = {}) {
+    const vitest = await startVitest('test', [], {
+      root: app,
+      watch: false,
+      update,
+      reporters: ['dot'],
+    });
+    const failures = {};
+    const collect = (task, spec) => {
+      for (const error of task.result?.errors ?? []) {
+        (failures[spec] ??= []).push(`${task.name}: ${error.message}`);
+      }
+      for (const child of task.tasks ?? []) collect(child, spec);
+    };
+    for (const file of vitest.state.getFiles()) collect(file, file.filepath.slice(app.length + 1));
+    await vitest.close();
+    process.exitCode = 0;
+    return failures;
+  }
+
+  let failures;
+  before(async () => {
+    failures = await failuresOf(withSchemes);
+  });
+
+  it('takes each shot in both schemes at each width: two PNGs and two freezes per width', () => {
+    assert.deepEqual(failures, {});
+    const widths = ['desktop', 'phone', 'tablet'];
+    assert.deepEqual(pngs(withSchemes, PAGE), [
+      ...widths.map((width) => `chart-${width}-light`),
+      ...widths.flatMap((width) => [`scheme-${width}-dark`, `scheme-${width}-light`]),
+    ]);
+    assert.deepEqual(pngs(withSchemes, OWN), ['own-dark', 'own-light']);
+    const { colorSchemes, freezes } = manifestOf(withSchemes);
+    assert.deepEqual(colorSchemes, ['LIGHT', 'DARK']);
+    assert.deepEqual(
+      freezes
+        .filter((f) => f.name === 'scheme' || f.name === 'own')
+        .map((f) => [f.file, f.viewport, f.colorScheme, f.colorSchemeReason]),
+      [
+        [`${OWN}/own-dark.html`, null, 'DARK', null],
+        [`${OWN}/own-light.html`, null, 'LIGHT', null],
+        ...widths.flatMap((width) =>
+          ['dark', 'light'].map((scheme) => [
+            `${PAGE}/scheme-${width}-${scheme}.html`,
+            width.toUpperCase(),
+            scheme.toUpperCase(),
+            null,
+          ]),
+        ),
+      ],
+    );
+  });
+
+  it('emulates the media query and sets the theme attribute for each scheme', () => {
+    for (const [spec, name] of [
+      [PAGE, 'scheme-phone'],
+      [PAGE, 'scheme-desktop'],
+      [OWN, 'own'],
+    ]) {
+      const light = readFileSync(png(withSchemes, spec, `${name}-light`));
+      const dark = readFileSync(png(withSchemes, spec, `${name}-dark`));
+      assert.ok(!light.equals(dark), `${name}: the two schemes' pixels differ`);
+      assert.match(freezeHtml(withSchemes, spec, `${name}-dark`), /<html[^>]* data-theme="dark"/);
+      assert.match(freezeHtml(withSchemes, spec, `${name}-dark`), /class="box">dark</);
+      assert.match(freezeHtml(withSchemes, spec, `${name}-light`), /<html[^>]* data-theme="light"/);
+      assert.match(freezeHtml(withSchemes, spec, `${name}-light`), /class="box">light</);
+    }
+    // The tests asserted the attribute (absent, or the one they set) and the emulation (reset)
+    // back after each shot: no failure above.
+  });
+
+  it('takes an opt-out in its own schemes only, recording its reason', () => {
+    const chart = manifestOf(withSchemes).freezes.filter((f) => f.name === 'chart');
+    assert.deepEqual(
+      chart.map((f) => [f.file, f.colorScheme, f.colorSchemeReason]),
+      ['desktop', 'phone', 'tablet'].map((width) => [
+        `${PAGE}/chart-${width}-light.html`,
+        'LIGHT',
+        'the chart has no dark palette yet',
+      ]),
+    );
+  });
+
+  it('passes against its own references on the next run', async () => {
+    assert.deepEqual(await failuresOf(withSchemes, { update: false }), {});
+  });
+
+  it('takes exactly the shots of today without the option', async () => {
+    assert.deepEqual(await failuresOf(without), {});
+    const widths = ['desktop', 'phone', 'tablet'];
+    assert.deepEqual(pngs(without, PAGE), [
+      ...widths.map((width) => `chart-${width}`),
+      ...widths.map((width) => `scheme-${width}`),
+    ]);
+    assert.deepEqual(pngs(without, OWN), ['own']);
+    const written = manifestOf(without);
+    assert.deepEqual(Object.keys(written), ['routes', 'freezes', 'byRoute', 'outcomes']);
+    assert.deepEqual(Object.keys(written.freezes[0]), [
+      'file',
+      'spec',
+      'test',
+      'name',
+      'kind',
+      'viewport',
+      'route',
+      'records',
+      'triggers',
+    ]);
+    assert.deepEqual(
+      written.freezes.map((f) => f.file),
+      [
+        `${OWN}/own.html`,
+        ...widths.map((width) => `${PAGE}/chart-${width}.html`),
+        ...widths.map((width) => `${PAGE}/scheme-${width}.html`),
+      ],
+    );
+    // No switching: the page stays light, and no theme attribute is set.
+    assert.doesNotMatch(freezeHtml(without, OWN, 'own'), /data-theme/);
+    assert.match(freezeHtml(without, OWN, 'own'), /class="box">light</);
+  });
+});
