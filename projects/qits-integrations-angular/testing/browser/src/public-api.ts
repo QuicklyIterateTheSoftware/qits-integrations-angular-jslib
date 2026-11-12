@@ -18,10 +18,12 @@ export {
 } from './freeze-shot';
 export * from './freeze-screenshots';
 // Importing the entry also brings the `toMatchScreenshot` options' augmentation (kind, viewports,
-// reason) into the program.
+// colorSchemes, reason) into the program.
 export {
+  COLOR_SCHEMES,
   SCREENSHOT_KINDS,
   SCREENSHOT_VIEWPORTS,
+  type ColorScheme,
   type ScreenshotKind,
   type ScreenshotViewport,
   type ScreenshotViewportSize,

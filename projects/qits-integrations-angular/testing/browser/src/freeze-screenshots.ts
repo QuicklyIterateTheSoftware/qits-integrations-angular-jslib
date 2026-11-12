@@ -19,6 +19,12 @@
  * refuses that). A shot in a spec {@link FreezeScreenshotsOptions.viewportSpecs} matches is taken at
  * each preset width ({@link SCREENSHOT_VIEWPORTS}): one PNG and one freeze per width, named
  * `<name>-phone`, `-tablet`, `-desktop`, after which the test's own viewport is restored.
+ *
+ * An app that gives {@link FreezeScreenshotsOptions.colorSchemes} (ticket qits-2083) takes every
+ * shot, at each width, once per scheme: `prefers-color-scheme` emulated through the
+ * `qitsColorScheme` command and the theme attribute set on `<html>`, one PNG and one freeze each,
+ * the scheme the last suffix (`<name>[-<viewport>]-light`, `-dark`). Afterwards the attribute is
+ * put back as it was and the emulation reset.
  */
 import { ApplicationRef } from '@angular/core';
 import { TestBed, getTestBed } from '@angular/core/testing';
@@ -39,9 +45,13 @@ import {
 } from './golden-master-guard';
 import { outcomeRecords } from './record-outcomes';
 import {
+  type ColorScheme,
+  colorSchemesOption,
   SCREENSHOT_KINDS,
   type ScreenshotKind,
   type ScreenshotViewport,
+  atShot,
+  shotColorSchemes,
   shotRequest,
   shotViewports,
   viewportName,
@@ -55,6 +65,13 @@ export const FREEZE_COMMAND = 'qitsFreeze';
 
 /** The browser command the route tree is sent to, once per spec file. */
 export const FREEZE_ROUTES_COMMAND = 'qitsFreezeRoutes';
+
+/**
+ * The browser command that emulates `prefers-color-scheme` (ticket qits-2083): `'light'`, `'dark'`,
+ * or `null` to reset. Playwright only (`page.emulateMedia`); `screenshotReferences({ freezes })`
+ * registers it.
+ */
+export const FREEZE_COLOR_SCHEME_COMMAND = 'qitsColorScheme';
 
 /**
  * The specs whose shots must show the app's routes: the page and layout specs under
@@ -92,6 +109,19 @@ export interface ScreenshotFreezePayload {
    * `<name>-<viewport>.html`, as Vitest names the PNG `<name>-<viewport>-<browser>-<platform>.png`.
    */
   readonly viewport: ScreenshotViewport | null;
+  /**
+   * The colour scheme the shot was taken in (ticket qits-2083), `null` in an app without
+   * {@link FreezeScreenshotsOptions.colorSchemes}. The Node side suffixes the freeze's file with it,
+   * after the viewport, as the PNG is.
+   */
+  readonly colorScheme: ColorScheme | null;
+  /** The app's {@link FreezeScreenshotsOptions.colorSchemes}, or `null` without the option. */
+  readonly colorSchemes: readonly ColorScheme[] | null;
+  /**
+   * The shot's `reason` when it gave its own `colorSchemes` (an opt-out of a scheme), else `null`;
+   * always `null` without the option.
+   */
+  readonly colorSchemeReason: string | null;
 }
 
 /** Options for {@link freezeScreenshots}. */
@@ -137,7 +167,25 @@ export interface FreezeScreenshotsOptions {
    * decides, not the element: every page shot is an element shot of the shell's frame.
    */
   readonly viewportSpecs?: RegExp;
+  /**
+   * The colour schemes every shot is taken in (ticket qits-2083), a non-empty subset of
+   * {@link COLOR_SCHEMES}; anything else throws here, at setup. For every shot of every spec (no
+   * spec filter, unlike `viewportSpecs`), at each width, in {@link COLOR_SCHEMES} order:
+   * `prefers-color-scheme` is emulated, {@link themeAttribute} set on `<html>`, and one PNG and one
+   * freeze taken, named `<name>[-<viewport>]-light` / `-dark`. A shot narrows it with its own
+   * `colorSchemes` and a `reason`. Default none: one shot, as before, with no switching. Needs the
+   * Playwright provider.
+   */
+  readonly colorSchemes?: readonly ColorScheme[];
+  /**
+   * The attribute set on `document.documentElement` to `light` / `dark` for each scheme, for a theme
+   * switched by attribute rather than by media query. Default `'data-theme'`.
+   */
+  readonly themeAttribute?: string;
 }
+
+/** The default {@link FreezeScreenshotsOptions.themeAttribute}. */
+const DEFAULT_THEME_ATTRIBUTE = 'data-theme';
 
 /** The key Angular gives a named outlet's componentless route (`standardizeConfig`). */
 const PRIMARY_OUTLET = 'primary';
@@ -266,6 +314,8 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
   const dropInlineStyles = options.dropInlineStyles ?? DEFAULT_DROPPED_INLINE_STYLES;
   const routeSpecs = options.routeSpecs ?? DEFAULT_ROUTE_SPECS;
   const viewportSpecs = options.viewportSpecs;
+  const appSchemes = colorSchemesOption(options.colorSchemes);
+  const themeAttribute = options.themeAttribute ?? DEFAULT_THEME_ATTRIBUTE;
   beforeEach(() => clearTestRecords());
   if (options.routes) {
     const routes: RouteDescription[] = describeRoutes(options.routes);
@@ -306,8 +356,9 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
         if (request.problem) {
           throw await refuse(
             `with malformed options: ${request.problem}`,
-            `Give a kind from ${SCREENSHOT_KINDS.join(', ')}, and leave widths out only with ` +
-              "{ viewports: ['DESKTOP'], reason: '…' } (PHONE, TABLET, DESKTOP).",
+            `Give a kind from ${SCREENSHOT_KINDS.join(', ')}, and leave widths or schemes out ` +
+              "only with a reason: { viewports: ['DESKTOP'], reason: '…' } (PHONE, TABLET, " +
+              "DESKTOP), { colorSchemes: ['LIGHT'], reason: '…' } (LIGHT, DARK).",
           );
         }
         if (options.requireKind && request.kind === null) {
@@ -318,9 +369,15 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
           );
         }
         const viewports = shotViewports(request, viewportSpecs?.test(testPath) ?? false);
+        const schemes = shotColorSchemes(request, appSchemes);
+        const colorSchemeReason = schemes && request.colorSchemes ? (request.reason ?? null) : null;
 
         /** Vitest's matcher on the shot `as` names, then the route check, then the freeze. */
-        const shoot = async (as: string | undefined, viewport: ScreenshotViewport | null) => {
+        const shoot = async (
+          as: string | undefined,
+          viewport: ScreenshotViewport | null,
+          colorScheme: ColorScheme | null,
+        ) => {
           await original.apply(this, vitestArgs(as, request.options));
           const why = routeSpecs.test(testPath) ? notThroughRoutes(options.routes) : undefined;
           if (why) {
@@ -347,14 +404,55 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
             triggers,
             kind: request.kind,
             viewport,
+            colorScheme,
+            colorSchemes: appSchemes ?? null,
+            colorSchemeReason,
           };
           await (
             await command(FREEZE_COMMAND)
           )(payload);
         };
 
+        /**
+         * The shot at the current width (`viewport`, `null` for the test's own), once per scheme
+         * when the app takes them, the theme attribute and the emulation put back afterwards.
+         */
+        const shootSchemes = async (
+          viewport: ScreenshotViewport | null,
+          size: { width: number; height: number } | null,
+        ) => {
+          if (!schemes) {
+            try {
+              await shoot(viewport ? viewportName(name, viewport) : request.name, viewport, null);
+            } catch (error) {
+              throw viewport && size ? atShot(error, { viewport, size }) : error;
+            }
+            return;
+          }
+          const html = document.documentElement;
+          const before = html.getAttribute(themeAttribute);
+          const emulate = await command(FREEZE_COLOR_SCHEME_COMMAND);
+          try {
+            for (const scheme of schemes) {
+              await emulate(scheme.toLowerCase());
+              html.setAttribute(themeAttribute, scheme.toLowerCase());
+              await settle();
+              try {
+                await shoot(viewportName(name, viewport, scheme), viewport, scheme);
+              } catch (error) {
+                throw atShot(error, { viewport, size, scheme });
+              }
+            }
+          } finally {
+            if (before === null) html.removeAttribute(themeAttribute);
+            else html.setAttribute(themeAttribute, before);
+            await emulate(null);
+            await settle();
+          }
+        };
+
         if (!viewports) {
-          await shoot(request.name, null);
+          await shootSchemes(null, null);
           return;
         }
         const { page } = await import('vitest/browser');
@@ -364,11 +462,7 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
             const size = viewportSize(viewport, own);
             await page.viewport(size.width, size.height);
             await settle();
-            try {
-              await shoot(viewportName(name, viewport), viewport);
-            } catch (error) {
-              throw atWidth(error, viewport, size);
-            }
+            await shootSchemes(viewport, size);
           }
         } finally {
           await page.viewport(own.width, own.height);
@@ -376,24 +470,6 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
         }
       },
   );
-}
-
-/** The error a failure at one preset width throws: the same error, its message naming the width. */
-function atWidth(
-  error: unknown,
-  viewport: ScreenshotViewport,
-  size: { width: number; height: number },
-): unknown {
-  const prefix = `at ${viewport} (${size.width}x${size.height}): `;
-  if (error instanceof Error) {
-    try {
-      error.message = prefix + error.message;
-      return error;
-    } catch {
-      // a read-only message: wrap it instead
-    }
-  }
-  return new Error(prefix + String(error), { cause: error });
 }
 
 /**

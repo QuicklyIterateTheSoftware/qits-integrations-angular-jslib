@@ -2,10 +2,19 @@ import { Component } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter, Router, RouterOutlet, type Routes } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
-import { DEFAULT_ROUTE_SPECS, renderedThroughRoutes } from './freeze-screenshots';
 import {
+  DEFAULT_ROUTE_SPECS,
+  FREEZE_COLOR_SCHEME_COMMAND,
+  freezeScreenshots,
+  renderedThroughRoutes,
+} from './freeze-screenshots';
+import {
+  atShot,
+  COLOR_SCHEMES,
+  colorSchemesOption,
   SCREENSHOT_KINDS,
   SCREENSHOT_VIEWPORTS,
+  shotColorSchemes,
   shotRequest,
   shotViewports,
   viewportName,
@@ -185,5 +194,101 @@ describe('the screenshot options', () => {
     expect(viewportSize('TABLET', { height: 3400 })).toEqual({ width: 1024, height: 3400 });
     expect(viewportName('menu/open', 'PHONE')).toBe('menu/open-phone');
     expect(viewportName('list', 'DESKTOP')).toBe('list-desktop');
+  });
+});
+
+// Ticket qits-2083: the colour schemes an app takes its shots in, and a shot's opt-out of one. The
+// switching itself needs a browser run: vitest-run.test.mjs (screenshots/test) takes the shots.
+describe('the colour schemes', () => {
+  it('names the schemes, LIGHT first, and the command', () => {
+    expect(COLOR_SCHEMES).toEqual(['LIGHT', 'DARK']);
+    expect(Object.isFrozen(COLOR_SCHEMES)).toBe(true);
+    expect(FREEZE_COLOR_SCHEME_COMMAND).toBe('qitsColorScheme');
+  });
+
+  it('reads the option in scheme order, and refuses anything but a non-empty list of them', () => {
+    expect(colorSchemesOption(undefined)).toBeUndefined();
+    expect(colorSchemesOption(['DARK', 'LIGHT'])).toEqual(['LIGHT', 'DARK']);
+    expect(colorSchemesOption(['DARK'])).toEqual(['DARK']);
+    expect(() => colorSchemesOption([])).toThrow(
+      "freezeScreenshots: the option colorSchemes must be a non-empty list of 'LIGHT', 'DARK', " +
+        "such as colorSchemes: ['LIGHT', 'DARK'].",
+    );
+    expect(() => colorSchemesOption('DARK')).toThrow(/non-empty list/);
+    expect(() => colorSchemesOption(['light'])).toThrow(
+      /the option colorSchemes name "light", not one of 'LIGHT', 'DARK'/,
+    );
+  });
+
+  it('refuses a bad option at setup, before it registers anything', () => {
+    expect(() =>
+      freezeScreenshots({ colorSchemes: ['SEPIA'] as unknown as readonly ['LIGHT'] }),
+    ).toThrow(/freezeScreenshots: the option colorSchemes name "SEPIA"/);
+  });
+
+  it('takes an opt-out with a reason, strips it for Vitest, and refuses one without', () => {
+    const optOut = shotRequest([
+      'chart',
+      {
+        kind: 'DATA',
+        colorSchemes: ['DARK', 'LIGHT'],
+        reason: 'no dark palette yet',
+        scale: 'css',
+      },
+    ]);
+    expect(optOut.problem).toBeUndefined();
+    expect(optOut.colorSchemes).toEqual(['LIGHT', 'DARK']);
+    expect(optOut.reason).toBe('no dark palette yet');
+    expect(optOut.options).toEqual({ scale: 'css' });
+    expect(shotRequest(['x', { kind: 'DATA' }]).colorSchemes).toBeUndefined();
+    expect(shotRequest(['x', { kind: 'DATA', colorSchemes: ['LIGHT'] }]).problem).toBe(
+      'its colorSchemes leave schemes out without a reason (give { reason: "…" })',
+    );
+    // One reason covers both lists; without it, one problem names both.
+    expect(
+      shotRequest(['x', { kind: 'DATA', viewports: ['DESKTOP'], colorSchemes: ['LIGHT'] }]).problem,
+    ).toBe(
+      'its viewports and colorSchemes leave widths and schemes out without a reason (give { reason: "…" })',
+    );
+    const both = shotRequest([
+      'x',
+      { kind: 'DATA', viewports: ['DESKTOP'], colorSchemes: ['LIGHT'], reason: 'r' },
+    ]);
+    expect([both.problem, both.viewports, both.colorSchemes]).toEqual([
+      undefined,
+      ['DESKTOP'],
+      ['LIGHT'],
+    ]);
+    expect(shotRequest(['x', { colorSchemes: [], reason: 'r' }]).problem).toBe(
+      "its colorSchemes must be a non-empty list of 'LIGHT', 'DARK'",
+    );
+    expect(shotRequest(['x', { colorSchemes: ['DUSK'], reason: 'r' }]).problem).toBe(
+      `its colorSchemes name "DUSK", not one of 'LIGHT', 'DARK'`,
+    );
+  });
+
+  it("takes the app's schemes, the shot's own in their place, and none without the option", () => {
+    expect(shotColorSchemes({ colorSchemes: undefined }, ['LIGHT', 'DARK'])).toEqual([
+      'LIGHT',
+      'DARK',
+    ]);
+    expect(shotColorSchemes({ colorSchemes: ['DARK'] }, ['LIGHT', 'DARK'])).toEqual(['DARK']);
+    // In an app without the option, an opt-out is ignored: one shot, no switching.
+    expect(shotColorSchemes({ colorSchemes: ['DARK'] }, undefined)).toBeUndefined();
+  });
+
+  it('names a shot with the scheme last, and a failure by width and scheme', () => {
+    expect(viewportName('list', 'PHONE', 'DARK')).toBe('list-phone-dark');
+    expect(viewportName('list', null, 'LIGHT')).toBe('list-light');
+    expect(viewportName('list', 'TABLET')).toBe('list-tablet');
+    const size = { width: 1024, height: 768 };
+    const message = (at: Parameters<typeof atShot>[1]) =>
+      (atShot(new Error('differs'), at) as Error).message;
+    expect(message({ viewport: 'TABLET', size, scheme: 'DARK' })).toBe(
+      'at TABLET (1024x768), DARK: differs',
+    );
+    expect(message({ viewport: 'TABLET', size })).toBe('at TABLET (1024x768): differs');
+    expect(message({ scheme: 'DARK' })).toBe('at DARK: differs');
+    expect((atShot('text', { scheme: 'LIGHT' }) as Error).message).toBe('at LIGHT: text');
   });
 });
