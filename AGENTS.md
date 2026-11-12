@@ -462,11 +462,14 @@ viewportSpecs, colorSchemes })`, all off by default so a bump changes nothing un
   Colour schemes (ticket qits-2083): `freezeScreenshots({ colorSchemes, themeAttribute })` takes
   every shot of every spec (no spec filter) at each width once per scheme, LIGHT then DARK: the
   fourth command, `qitsColorScheme` (`FREEZE_COLOR_SCHEME_COMMAND` in both halves), calls
-  `context.page.emulateMedia({ colorScheme })` (Playwright only; `null` resets), the harness sets
+  `context.page.emulateMedia({ colorScheme })` (Playwright only; `'reset'`, `RESET_COLOR_SCHEME`,
+  resets). **Never send a command `null` as its first argument**: Vitest 5's browser tester reads
+  `"selector" in args[0]` of every command (`typeof null` is `'object'`) and throws a `TypeError`
+  before sending; the Node side refuses `null`, so the Vitest 4 runs guard it. The harness sets
   `themeAttribute` (default `data-theme`) on `<html>` to `light` / `dark`, then `settle()` and the
   shot, named `<name>[-<viewport>]-light` / `-dark` (PNG and freeze; `viewportName()`,
   `freezeFile(spec, name, viewport, colorScheme)`). A `finally` puts the attribute back (removed
-  when absent) and the emulation to `null`. A shot opts out with `colorSchemes` and the `reason`
+  when absent) and the emulation reset. A shot opts out with `colorSchemes` and the `reason`
   `viewports` uses (an `OWN_KEYS` entry, stripped for Vitest); without the app option it is ignored.
   The payload carries `colorScheme`, `colorSchemes` (the option) and `colorSchemeReason`. **Without
   the option the manifest is byte-identical to before**: the top-level `colorSchemes` and each
