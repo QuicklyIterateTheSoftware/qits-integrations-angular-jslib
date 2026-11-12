@@ -275,7 +275,11 @@ export interface Orphan {
   directory: string;
   /** The spec that owns it by place, or `null` when none does. */
   spec: string | null;
-  reason: 'spec-gone' | 'no-spec' | 'unused';
+  /**
+   * `unschemed`: a spec whose other tests skipped themselves, in a run that took its shots in colour
+   * schemes, did not ask for it, and its name ends in none of those schemes.
+   */
+  reason: 'spec-gone' | 'no-spec' | 'unused' | 'unschemed';
 }
 
 export declare function findOrphans(options: { root: string; record: string }): {
@@ -291,7 +295,21 @@ export declare const DEFAULT_RECORD: string;
 export interface ScreenshotRecord {
   version: 1;
   screenshotDirectory: string;
-  specs: Record<string, { sha256: string | null; complete: boolean; references: string[] }>;
+  /**
+   * The colour schemes (lower case) the run's freeze payloads carried, `null` for none; absent when
+   * the run sent no freeze payload or the plugin has no `freezes` option.
+   */
+  colorSchemes?: string[] | null;
+  specs: Record<
+    string,
+    {
+      sha256: string | null;
+      complete: boolean;
+      /** On a spec whose tests that did not pass all skipped themselves: how many skipped. */
+      skipped?: number;
+      references: string[];
+    }
+  >;
 }
 
 export declare function readRecord(

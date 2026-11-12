@@ -58,16 +58,25 @@ const shot = (spec, name) => {
   return `${spec.slice(0, slash)}/__screenshots__/${spec.slice(slash + 1)}/${name}-chromium-linux.png`;
 };
 
-/** Writes the record a run would write: `specs` maps a spec to its references (or options). */
-function writeRecord(root, specs, path = DEFAULT_RECORD) {
-  const record = { version: 1, screenshotDirectory: '__screenshots__', specs: {} };
+/**
+ * Writes the record a run would write: `specs` maps a spec to its references (or options), `top`
+ * adds top-level fields (`colorSchemes`).
+ */
+function writeRecord(root, specs, path = DEFAULT_RECORD, top = {}) {
+  const record = { version: 1, screenshotDirectory: '__screenshots__', ...top, specs: {} };
   for (const [spec, entry] of Object.entries(specs)) {
     const {
       references,
       complete = true,
+      skipped,
       sha256 = fileHash(join(root, spec)),
     } = Array.isArray(entry) ? { references: entry } : entry;
-    record.specs[spec] = { sha256, complete, references };
+    record.specs[spec] = {
+      sha256,
+      complete,
+      ...(skipped === undefined ? {} : { skipped }),
+      references,
+    };
   }
   mkdirSync(dirname(join(root, path)), { recursive: true });
   writeFileSync(join(root, path), JSON.stringify(record));
@@ -143,6 +152,94 @@ describe('findOrphans', () => {
       { spec: other, why: 'it changed since the recorded browser run' },
       { spec: third, why: 'the recorded browser run did not run it' },
     ]);
+  });
+
+  // Ticket qits-2107: a spec whose other tests skipped themselves.
+  /** SPEC with references a-light, a-dark, a and b-light; the run asked for a-light and a-dark. */
+  function skipping(entry = {}, top) {
+    const root = app({
+      [SPEC]: 'spec',
+      [shot(SPEC, 'a-light')]: 'png',
+      [shot(SPEC, 'a-dark')]: 'png',
+      [shot(SPEC, 'a')]: 'png',
+      [shot(SPEC, 'b-light')]: 'png',
+    });
+    writeRecord(
+      root,
+      {
+        [SPEC]: {
+          references: [shot(SPEC, 'a-light'), shot(SPEC, 'a-dark')],
+          complete: false,
+          skipped: 1,
+          ...entry,
+        },
+      },
+      DEFAULT_RECORD,
+      top,
+    );
+    return findOrphans({ root, record: DEFAULT_RECORD });
+  }
+
+  it('finds a reference without a colour scheme in a spec whose other tests skip themselves', () => {
+    const { orphans, unchecked } = skipping({}, { colorSchemes: ['light', 'dark'] });
+    assert.deepEqual(orphans, [
+      {
+        path: shot(SPEC, 'a'),
+        directory: 'src/app/card/__screenshots__',
+        spec: SPEC,
+        reason: 'unschemed',
+      },
+    ]);
+    // b-light ends in a scheme: the skipped test may take it.
+    assert.deepEqual(unchecked, [{ spec: SPEC, why: '1 skipped test(s) may own 1 reference(s)' }]);
+    // Every reference unused is unschemed: no spec left unchecked.
+    const root = app({
+      [SPEC]: 'spec',
+      [shot(SPEC, 'a-light')]: 'png',
+      [shot(SPEC, 'old')]: 'png',
+      [shot(SPEC, 'menu/old')]: 'png',
+    });
+    writeRecord(
+      root,
+      { [SPEC]: { references: [shot(SPEC, 'a-light')], complete: false, skipped: 3 } },
+      DEFAULT_RECORD,
+      { colorSchemes: ['light'] },
+    );
+    const found = findOrphans({ root, record: DEFAULT_RECORD });
+    assert.deepEqual(
+      found.orphans.map((o) => [o.path, o.reason]),
+      [
+        [shot(SPEC, 'menu/old'), 'unschemed'],
+        [shot(SPEC, 'old'), 'unschemed'],
+      ],
+    );
+    assert.deepEqual(found.unchecked, []);
+  });
+
+  it('does not judge the unused references of a skipping spec in a run without colour schemes', () => {
+    for (const top of [{}, { colorSchemes: null }, { colorSchemes: [] }]) {
+      const { orphans, unchecked } = skipping({ skipped: 5 }, top);
+      assert.deepEqual(orphans, [], JSON.stringify(top));
+      assert.deepEqual(unchecked, [
+        { spec: SPEC, why: '5 skipped test(s) may own 2 reference(s)' },
+      ]);
+    }
+  });
+
+  it('does not judge a skipping spec that changed, nor an incomplete one without skipped', () => {
+    const colorSchemes = { colorSchemes: ['light', 'dark'] };
+    const changed = skipping({ sha256: 'a different file' }, colorSchemes);
+    assert.deepEqual(changed.orphans, []);
+    assert.deepEqual(changed.unchecked, [
+      { spec: SPEC, why: 'it changed since the recorded browser run' },
+    ]);
+    for (const entry of [{ skipped: undefined }, { skipped: 0 }]) {
+      const incomplete = skipping(entry, colorSchemes);
+      assert.deepEqual(incomplete.orphans, []);
+      assert.deepEqual(incomplete.unchecked, [
+        { spec: SPEC, why: 'not every test in it passed in the recorded browser run' },
+      ]);
+    }
   });
 
   it('finds a file that lies directly in a screenshot directory', () => {
@@ -243,6 +340,29 @@ describe('qits-angular screenshots', () => {
     assert.ok(existsSync(join(root, shot(SPEC, 'card'))));
   });
 
+  it('--prune deletes a reference without a colour scheme of a spec whose other tests skip themselves', () => {
+    const root = app({
+      [SPEC]: 'spec',
+      [shot(SPEC, 'card-light')]: 'png',
+      [shot(SPEC, 'card')]: 'png',
+      [shot(SPEC, 'held-dark')]: 'png',
+    });
+    writeRecord(
+      root,
+      { [SPEC]: { references: [shot(SPEC, 'card-light')], complete: false, skipped: 1 } },
+      DEFAULT_RECORD,
+      { colorSchemes: ['light', 'dark'] },
+    );
+    const { code, out } = run(root, ['--prune', '--verbose']);
+    assert.equal(code, 0);
+    assert.match(out, /deleted 1 reference\(s\)/);
+    assert.match(out, /takes every screenshot in a colour scheme, and this name ends in none/);
+    assert.match(out, /card\.browser\.spec\.ts: 1 skipped test\(s\) may own 1 reference\(s\)/);
+    assert.ok(!existsSync(join(root, shot(SPEC, 'card'))));
+    assert.ok(existsSync(join(root, shot(SPEC, 'card-light'))));
+    assert.ok(existsSync(join(root, shot(SPEC, 'held-dark'))));
+  });
+
   it('--verbose lists the specs it did not judge', () => {
     const root = app({ [SPEC]: 'spec', [shot(SPEC, 'card')]: 'png' });
     writeRecord(root, {});
@@ -317,6 +437,7 @@ describe('screenshotReferences', () => {
         [other]: {
           sha256: fileHash(join(root, other)),
           complete: false,
+          skipped: 1,
           references: [shot(other, 'x')],
         },
       },
@@ -335,6 +456,30 @@ describe('screenshotReferences', () => {
     const record = JSON.parse(readFileSync(join(root, 'out/r.json'), 'utf8'));
     assert.deepEqual(record.specs[SPEC].references, []);
     assert.equal(record.specs[SPEC].complete, false);
+    assert.equal('skipped' in record.specs[SPEC], false);
+    // Without the freezes option the record has no colour schemes.
+    assert.equal('colorSchemes' in record, false);
+  });
+
+  it('counts the skipped tests of a module whose other tests skip themselves (qits-2107)', () => {
+    const root = app({ [SPEC]: "it.skip('held', () => {});" });
+    const { vitest, project } = vitestLike(root);
+    screenshotReferences().configureVitest({ vitest, project });
+    const [reporter] = vitest.config.reporters;
+    reporter.onTestRunStart();
+    reporter.onTestRunEnd([module(root, SPEC, ['passed', 'skipped', 'skipped', 'passed'])]);
+    const record = JSON.parse(readFileSync(join(root, DEFAULT_RECORD), 'utf8'));
+    assert.deepEqual(record.specs[SPEC], {
+      sha256: fileHash(join(root, SPEC)),
+      complete: false,
+      skipped: 2,
+      references: [],
+    });
+    // Skipped and failed: not written.
+    reporter.onTestRunStart();
+    reporter.onTestRunEnd([module(root, SPEC, ['skipped', 'failed'], 'failed')]);
+    const failed = JSON.parse(readFileSync(join(root, DEFAULT_RECORD), 'utf8'));
+    assert.equal('skipped' in failed.specs[SPEC], false);
   });
 
   it("wraps the app's own resolver, and keeps its screenshot directory", () => {
@@ -413,6 +558,8 @@ describe('screenshot freezes', () => {
   const manifest = (root, dir = DIR) =>
     JSON.parse(readFileSync(join(root, dir, 'manifest.json'), 'utf8'));
   const read = (root, path) => readFileSync(join(root, DIR, path), 'utf8');
+  /** The orphan record the same run wrote. */
+  const recorded = (root) => JSON.parse(readFileSync(join(root, DEFAULT_RECORD), 'utf8'));
 
   it('slugs a name as Vitest slugs a screenshot name', () => {
     assert.equal(freezeSlug('loading'), 'loading');
@@ -590,6 +737,9 @@ describe('screenshot freezes', () => {
     });
     assert.equal(read(root, `${CARD}/a.html`), '<p>2</p>');
     assert.ok(!existsSync(join(root, DIR, CARD, 'old.html')));
+    // The orphan record counts the tests that skipped themselves (ticket qits-2107).
+    assert.equal(recorded(root).specs[CARD].complete, false);
+    assert.equal(recorded(root).specs[CARD].skipped, 1);
     // A module whose only test is skipped is complete too, and has no shots.
     assert.equal(completeForFreezes(module(root, CARD, 'skipped', ['skipped'])), true);
   });
@@ -613,7 +763,15 @@ describe('screenshot freezes', () => {
       });
       assert.equal(read(root, `${CARD}/a.html`), '<p>1</p>', JSON.stringify(narrowed));
       assert.ok(existsSync(join(root, DIR, CARD, 'b.html')));
+      // A narrowed run skips tests that may own references: the record does not count them.
+      assert.equal('skipped' in recorded(root).specs[CARD], false, JSON.stringify(narrowed));
     }
+    const only = app({ [CARD]: "it.only('a', () => {});" });
+    run(only, {
+      shots: { [CARD]: { a: '<p>1</p>' } },
+      modules: [module(only, CARD, 'passed', ['passed', 'skipped'])],
+    });
+    assert.equal('skipped' in recorded(only).specs[CARD], false, '.only');
     const root = app({ [CARD]: "it.only('a', () => {});", [PAGE]: 'spec' });
     assert.equal(completeForFreezes(module(root, CARD, 'passed', ['passed', 'skipped'])), false);
     assert.equal(completeForFreezes(module(root, PAGE, 'failed', ['passed', 'failed'])), false);
@@ -795,6 +953,28 @@ describe('screenshot freezes', () => {
       written.freezes.map((f) => [f.file, 'colorScheme' in f]),
       [[`${CARD}/list.html`, false]],
     );
+  });
+
+  it('records the colour schemes the payloads carried in the orphan record (qits-2107)', () => {
+    const root = app({ [CARD]: 'spec' });
+    const shot = { name: 'list', kind: 'DATA', colorSchemes: BOTH, colorSchemeReason: null };
+    send(
+      root,
+      BOTH.map((colorScheme) => ({ ...shot, colorScheme })),
+    );
+    assert.deepEqual(recorded(root).colorSchemes, ['light', 'dark']);
+    assert.deepEqual(Object.keys(recorded(root)), [
+      'version',
+      'screenshotDirectory',
+      'colorSchemes',
+      'specs',
+    ]);
+    // Payloads without the option: null.
+    send(root, [{ name: 'list', kind: 'DATA', colorScheme: null, colorSchemes: null }]);
+    assert.equal(recorded(root).colorSchemes, null);
+    // A run that sent no payload: absent (the manifest keeps its own).
+    send(root, [], []);
+    assert.equal('colorSchemes' in recorded(root), false);
   });
 
   it('emulates prefers-color-scheme on the Playwright page, and refuses without one', async () => {

@@ -947,10 +947,17 @@ A reference is an orphan when:
 
 - its spec file is gone (found without a test run, so `--check` is useful in `lint` too);
 - or the recorded run ran its spec completely (every test passed, nothing skipped or filtered), the
-  spec has not changed since, and no test asked for that reference.
+  spec has not changed since, and no test asked for that reference;
+- or, in a spec whose tests that did not pass all skipped themselves (`it.skip`, `it.todo`, a false
+  `skipIf`/`runIf`, `ctx.skip()`; nothing failed, nothing filtered or `.only`), unchanged since, the
+  run took its shots in colour schemes (`freezeScreenshots({ colorSchemes })`), no test asked for
+  that reference, and its name ends in none of the schemes (`-light-<browser>-<platform>.png`,
+  `-dark-…`): every shot of such a run, a skipped test's too, is named with its scheme.
 
 A spec that the record does not cover that way is not judged, so a partial run never reports a
-false orphan. With `UPDATE_SNAPSHOT` set (an update run, as Vitest reads it), `--check` lists the
+false orphan. In a spec with self-skipped tests, a reference no test asked for that does end in a
+scheme (or any such reference, in an app without `colorSchemes`) is not judged either: a skipped
+test may own it, and `--verbose` says how many (`2 skipped test(s) may own 3 reference(s)`). With `UPDATE_SNAPSHOT` set (an update run, as Vitest reads it), `--check` lists the
 orphans and exits 0: the job that runs it prunes them next. The command understands Vitest's
 default reference layout only.
 
@@ -1052,7 +1059,7 @@ no test takes any more loses its file); a spec file that no longer exists loses 
 that failed, did not run, or that the run narrowed (`-t`, tags, line or id filters, `.only` in the
 file) keeps the freezes it had. Its fired outcomes follow the same rules: a complete spec replaces
 them, a gone spec drops them, any other keeps them. The orphan record keeps its stricter rule (every test ran and
-passed). Never edit a freeze by hand.
+passed), and judges a spec with self-skipped tests only by colour scheme. Never edit a freeze by hand.
 
 The same bytes on every machine and in every test order, so a freeze is a DOM, never pixels:
 

@@ -9,15 +9,36 @@
  * - `no-spec`: it lies directly in the screenshot directory, so no spec owns it.
  * - `unused`: the record of a browser run says the owner ran completely (every test passed), its
  *   file has not changed since, and it did not ask for this reference.
+ * - `unschemed` (ticket qits-2107): the record says every test of the owner that did not pass
+ *   skipped itself (`skipped` in the record), its file has not changed since, the run did not ask
+ *   for this reference, and the run took its shots in colour schemes (the record's `colorSchemes`)
+ *   while this reference's name ends in none of them (`-<scheme>-<browser>-<platform>.png`). With
+ *   `freezeScreenshots({ colorSchemes })` every shot, a skipped test's too, ends in a scheme, so a
+ *   reference without one is dead whoever owned it.
  *
  * A reference whose owner exists but has no such record is not judged: its spec is `unchecked`.
+ * So is every other reference the run did not ask for in a spec with self-skipped tests: one of
+ * those tests may own it.
  */
 import { existsSync, readdirSync, rmdirSync, rmSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 import { DEFAULT_SCREENSHOT_DIRECTORY, fileHash, readRecord } from './record.mjs';
 
 /** Directories never searched: dependencies, build output, and dot-directories (`.git`, …). */
 const SKIP = new Set(['node_modules', 'dist', 'tmp', 'out-tsc', 'coverage']);
+
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Whether a reference's file name ends `-<scheme>-<browser>-<platform>.png` for one of `schemes`,
+ * browser and platform each one segment without a hyphen.
+ */
+function hasScheme(path, schemes) {
+  const pattern = new RegExp(
+    `-(?:${schemes.map((scheme) => escapeRegExp(String(scheme))).join('|')})-[^-/]+-[^-/]+\\.png$`,
+  );
+  return pattern.test(basename(path));
+}
 
 /** Every file under `dir`, relative to it, with `/` separators. */
 function filesUnder(dir, prefix = '') {
@@ -50,7 +71,7 @@ function screenshotDirectories(root, name, prefix = '') {
  *     path: string,
  *     directory: string,
  *     spec: string | null,
- *     reason: 'spec-gone' | 'no-spec' | 'unused',
+ *     reason: 'spec-gone' | 'no-spec' | 'unused' | 'unschemed',
  *   }[],
  *   unchecked: { spec: string, why: string }[],
  *   recordProblem: string | null,
@@ -85,11 +106,17 @@ export function findOrphans({ root, record: recordPath }) {
         continue;
       }
       const entry = record?.specs?.[spec];
+      // Every test that did not pass skipped itself: those tests may own references the run did
+      // not ask for (ticket qits-2107).
+      const skipped =
+        entry && !entry.complete && Number.isInteger(entry.skipped) && entry.skipped > 0
+          ? entry.skipped
+          : 0;
       const why = !record
         ? problem
         : !entry
           ? 'the recorded browser run did not run it'
-          : !entry.complete
+          : !entry.complete && !skipped
             ? 'not every test in it passed in the recorded browser run'
             : entry.sha256 !== fileHash(join(root, spec))
               ? 'it changed since the recorded browser run'
@@ -99,8 +126,26 @@ export function findOrphans({ root, record: recordPath }) {
         continue;
       }
       const used = new Set(entry.references);
-      for (const path of paths) {
-        if (!used.has(path)) orphans.push({ path, directory, spec, reason: 'unused' });
+      const unused = paths.filter((path) => !used.has(path));
+      if (!skipped) {
+        for (const path of unused) orphans.push({ path, directory, spec, reason: 'unused' });
+        continue;
+      }
+      const schemes =
+        Array.isArray(record.colorSchemes) && record.colorSchemes.length > 0
+          ? record.colorSchemes
+          : null;
+      let unjudged = 0;
+      for (const path of unused) {
+        if (schemes && !hasScheme(path, schemes)) {
+          orphans.push({ path, directory, spec, reason: 'unschemed' });
+        } else unjudged++;
+      }
+      if (unjudged > 0) {
+        unchecked.push({
+          spec,
+          why: `${skipped} skipped test(s) may own ${unjudged} reference(s)`,
+        });
       }
     }
   }

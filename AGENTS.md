@@ -417,9 +417,16 @@ viewportSpecs, colorSchemes })`, all off by default so a bump changes nothing un
   every comparison, with the real spec path even under the Angular builder) and pushes a reporter
   onto `vitest.config.reporters` (Vitest builds its reporters from that array after the hooks).
   The reporter writes the record at `onTestRunEnd`: per spec, the resolved references, whether
-  every test passed, and the spec's sha256. `qits-angular screenshots --check | --prune` judges a
-  reference by place (spec gone: no run needed) or by that record (spec ran completely and is
-  unchanged); anything else is not judged, so a partial run never reports a false orphan. Not an
+  every test passed, and the spec's sha256; `skipped` (the count) on a spec that is not complete
+  but `completeForFreezes` with the freezes' `filtered` value (self-skipped tests only), and at the
+  top `colorSchemes` (lower case, from the freeze writer's `colorSchemes()`, read before
+  `freezes.end`; `null` for payloads without the option, absent without payloads or the `freezes`
+  option; ticket qits-2107). `qits-angular screenshots --check | --prune` judges a reference by
+  place (spec gone: no run needed) or by that record (spec ran completely and is unchanged; or, in
+  an unchanged spec with `skipped`, a reference the run did not ask for whose name ends in none of
+  the record's `colorSchemes`: `unschemed`); anything else is not judged (a skipping spec's other
+  unused references are `unchecked`, `N skipped test(s) may own M reference(s)`), so a partial run
+  never reports a false orphan. Not an
   ESLint rule: ESLint visits source files, and an orphan's spec may not exist. Unit tests
   (`pnpm test:screenshots`) drive the plugin with stand-ins; `vitest-run.test.mjs` (in
   `pnpm test:browser`, needs Chromium) proves it in a real Vitest run. If a Vitest upgrade moves

@@ -272,6 +272,14 @@ export function freezeWriter({
       runColorSchemes = undefined;
     },
 
+    /**
+     * The `colorSchemes` option this run's payloads carried, in {@link COLOR_SCHEMES} order (`null`:
+     * they carried none), or `undefined` when the run sent no freeze payload yet.
+     */
+    colorSchemes() {
+      return runColorSchemes;
+    },
+
     /** The `qitsFreezeRoutes` command: the app's route tree, as `describeRoutes()` gives it. */
     setRoutes(tree) {
       routes = tree;

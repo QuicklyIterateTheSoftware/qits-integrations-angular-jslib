@@ -6,14 +6,32 @@
  *   {
  *     "version": 1,
  *     "screenshotDirectory": "__screenshots__",
+ *     "colorSchemes": ["light", "dark"], // optional, see below
  *     "specs": {
  *       "src/app/x/x.browser.spec.ts": {
  *         "sha256": "<hash of the spec file when the run ended>",
  *         "complete": true,            // every test in the file ran and passed
  *         "references": ["src/app/x/__screenshots__/x.browser.spec.ts/a-chromium-linux.png"]
+ *       },
+ *       "src/app/y/y.browser.spec.ts": {
+ *         "sha256": "<hash>",
+ *         "complete": false,
+ *         "skipped": 2,                // optional, see below
+ *         "references": ["src/app/y/__screenshots__/y.browser.spec.ts/b-light-chromium-linux.png"]
  *       }
  *     }
  *   }
+ *
+ * Both optional fields came with ticket qits-2107; a record without them reads as before.
+ *
+ * - `skipped`, on a spec that is not `complete` but in which nothing failed, the run narrowed no
+ *   test, and every test that did not pass skipped itself (`it.skip`, `it.todo`, a false
+ *   `skipIf`/`runIf`, `ctx.skip()`; `completeForFreezes` in `plugin.mjs`): how many tests skipped.
+ *   Absent on every other spec.
+ * - `colorSchemes`: the colour schemes, lower case, the run's `freezeScreenshots({ colorSchemes })`
+ *   payloads carried, `null` when they carried none. Absent when the run sent no freeze payload or
+ *   the plugin has no `freezes` option. With schemes, every reference a run takes ends
+ *   `-<scheme>-<browser>-<platform>.png`.
  */
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';

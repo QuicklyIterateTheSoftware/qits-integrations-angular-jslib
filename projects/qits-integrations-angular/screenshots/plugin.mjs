@@ -93,6 +93,15 @@ function complete(testModule) {
   return true;
 }
 
+/** The number of tests in a module whose result is `skipped`. */
+function skippedTests(testModule) {
+  let skipped = 0;
+  for (const test of testModule.children.allTests()) {
+    if (test.result().state === 'skipped') skipped++;
+  }
+  return skipped;
+}
+
 /** `.only` in a module's source: it marks the module's other tests skipped, like a filter. */
 function declaresOnly(testModule) {
   const flag = testModule.task?.containsOnly; // Vitest 5 rolls it up on the file
@@ -199,29 +208,39 @@ export function screenshotReferences(options = {}) {
     },
     onTestRunEnd(testModules) {
       if (root === undefined) return;
+      const runFiltered =
+        filteredByConfig(vitestInstance?.config) ||
+        filteredByConfig(vitestInstance?.configOverride);
+      const forFreezes = (testModule) =>
+        completeForFreezes(testModule, {
+          filtered: runFiltered || narrowed.has(testModule.moduleId),
+        });
       const specs = {};
       for (const testModule of testModules) {
         const spec = toPosix(relative(root, testModule.moduleId));
+        const passed = complete(testModule);
         specs[spec] = {
           sha256: fileHash(testModule.moduleId),
-          complete: complete(testModule),
+          complete: passed,
+          // Every test that did not pass skipped itself (ticket qits-2107): the orphan check judges
+          // the references those tests cannot own, and leaves the rest to them.
+          ...(!passed && forFreezes(testModule) ? { skipped: skippedTests(testModule) } : {}),
           references: [...(seen.get(spec) ?? [])].sort(),
         };
       }
+      // The colour schemes this run's freeze payloads carried, read before the freezes are written.
+      const runSchemes = freezes?.colorSchemes();
+      const colorSchemes =
+        runSchemes === undefined
+          ? {}
+          : { colorSchemes: runSchemes && runSchemes.map((scheme) => scheme.toLowerCase()) };
       const file = isAbsolute(recordOption) ? recordOption : join(root, recordOption);
       mkdirSync(dirname(file), { recursive: true });
       writeFileSync(
         file,
-        `${JSON.stringify({ version: RECORD_VERSION, screenshotDirectory, specs }, null, 2)}\n`,
+        `${JSON.stringify({ version: RECORD_VERSION, screenshotDirectory, ...colorSchemes, specs }, null, 2)}\n`,
       );
-      const runFiltered =
-        filteredByConfig(vitestInstance?.config) ||
-        filteredByConfig(vitestInstance?.configOverride);
-      freezes?.end(testModules, (testModule) =>
-        completeForFreezes(testModule, {
-          filtered: runFiltered || narrowed.has(testModule.moduleId),
-        }),
-      );
+      freezes?.end(testModules, forFreezes);
     },
   };
 

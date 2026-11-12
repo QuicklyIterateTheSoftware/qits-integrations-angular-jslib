@@ -31,7 +31,11 @@ Finds reference screenshots (__screenshots__/) that no screenshot test uses.
 A reference whose spec file is gone is found without a test run. A reference
 whose spec exists is judged by the record of the last browser run, written by
 screenshotReferences() from @qits/angular/screenshots: only a spec in which
-every test ran and passed, and that has not changed since, is judged.
+every test ran and passed, and that has not changed since, is judged. In an
+unchanged spec whose other tests skipped themselves, a reference the run did
+not ask for is judged only when the run took its shots in colour schemes
+(freezeScreenshots({ colorSchemes })): one whose name ends in none of them is
+an orphan; the rest may belong to the skipped tests and are not judged.
 
 --check also reads the outcomes() declarations from the source and the
 freeze manifest, and names each declared outcome no browser test reaches,
@@ -63,6 +67,8 @@ const REASON = {
   'spec-gone': (orphan) => `its spec ${orphan.spec} is gone`,
   'no-spec': () => 'it is in no spec directory',
   unused: (orphan) => `${orphan.spec} takes no screenshot with this name`,
+  unschemed: (orphan) =>
+    `${orphan.spec} takes every screenshot in a colour scheme, and this name ends in none`,
 };
 
 /** An update run, as Vitest sees it: `UPDATE_SNAPSHOT` set to anything but `none`. */
