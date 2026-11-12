@@ -338,7 +338,13 @@ it('a shown box', async () => {
     assert.deepEqual(manifest(), {
       routes: [
         { path: '', fullPath: '', redirectTo: 'a' },
-        { path: 'a', fullPath: 'a', children: [{ path: 'b/:id', fullPath: 'a/b/:id' }] },
+        // Neither route has a component: both render nothing (qits-2076).
+        {
+          path: 'a',
+          fullPath: 'a',
+          rendersNothing: true,
+          children: [{ path: 'b/:id', fullPath: 'a/b/:id', rendersNothing: true }],
+        },
       ],
       freezes: [
         {
