@@ -60,7 +60,7 @@ More entry points (the package's own), all documented in the repository README:
   page shot missing a scheme; expect twice the references, regenerated through the
   screenshot-baselines job) and `recordOutcomes()` for browser specs.
 - `@qits/angular/eslint`: lint rules (`client-only-in-stores`, `store-has-pact`, `pact-names`, the route rules,
-  `page-has-screenshots`, `page-screenshots-through-routes`, `page-screenshot-whole-page`, `screenshot-kind`, and `route-paths`, which generates `src/app/route-paths.ts`) as
+  `page-has-screenshots`, `page-screenshots-through-routes`, `page-screenshot-whole-page`, `screenshot-kind`, `route-paths`, which generates `src/app/route-paths.ts`, and `theme-colors`, off until an app turns it on) as
   a flat-config plugin: `export default [...yourConfig, ...qits.configs.recommended];`
 
 The rest of the consumer contract — the backend endpoints, the capture and state-snapshot APIs,

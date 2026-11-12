@@ -393,6 +393,16 @@ viewportSpecs, colorSchemes })`, all off by default so a bump changes nothing un
   name), or a call to a function of the same file whose every return is one (arguments not read).
   Anything else is reported once, on the subject. It stays `warn` until qits-landing-app fixes its
   crops, in its own ticket, and turns it to `error` there.
+  `theme-colors` (ticket qits-2084) is registered but **not** in `recommended` (an app turns it on;
+  every unthemed app would be red otherwise, the qits-2010 rule below). It reads templates the way
+  `navigation-through-outcomes` does (an inline `template` with each `${}` filled with `_` of the
+  same length, so offsets hold and a touching token names no colour), styles with a hand-rolled CSS
+  scan (`scanCss`, no dependency), and every other string for utilities only. The theme (`theme`,
+  default `src/styles.css`) is followed through `@import`s (not `tailwindcss`; packages through
+  `exports`, `style` then `default`) and cached per root and path for the process; `@theme`
+  `--color-*` names decide what exists, light declarations (no dark selector, media or variant)
+  decide the suggestion. The Tailwind default palette is hard-coded in the rule (4.1's mauve, olive,
+  mist, taupe included); `white` / `black` resolve to `#fff` / `#000`. Suggestions only, never a fix.
   **A rule added to `configs.recommended` must pass on a consumer that has not adopted it yet**: it
   is `error` on every consumer's whole codebase the moment the library bumps, so it may only report
   on something a consumer opts into by a file existing (as `route-paths` now does) or something

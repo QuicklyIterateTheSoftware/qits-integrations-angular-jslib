@@ -21,6 +21,7 @@ import routeMatchesDirectory from './rules/route-matches-directory.mjs';
 import routePaths from './rules/route-paths.mjs';
 import screenshotKind from './rules/screenshot-kind.mjs';
 import storeHasPact from './rules/store-has-pact.mjs';
+import themeColors from './rules/theme-colors.mjs';
 
 const plugin = {
   meta: { name: '@qits/angular/eslint' },
@@ -39,6 +40,8 @@ const plugin = {
     'navigation-through-outcomes': navigationThroughOutcomes,
     'browser-spec-data-from-golden-masters': browserSpecDataFromGoldenMasters,
     'screenshot-kind': screenshotKind,
+    // Off in recommended: an app turns it on once its theme has the semantic tokens.
+    'theme-colors': themeColors,
   },
   configs: {},
 };
