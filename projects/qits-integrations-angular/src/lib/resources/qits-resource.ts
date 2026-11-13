@@ -248,12 +248,13 @@ export function qitsResource<Params, Value, Err>(
   }
 
   if (options.refreshOn) {
-    // Angular refuses a reload during the first load, and that load may already have been answered
-    // before the change the event announces: reload once it settles instead of dropping the event.
+    // Angular refuses a reload during any read in flight, a first load or a reload, and that
+    // read may already have been answered before the change the event announces: reload once it
+    // settles instead of dropping the event.
     const owed = signal(false);
     effect(
       () => {
-        if (owed() && ref.status() !== 'loading') {
+        if (owed() && !ref.isLoading()) {
           owed.set(false);
           ref.reload();
         }
@@ -261,7 +262,7 @@ export function qitsResource<Params, Value, Err>(
       { injector },
     );
     refreshOnEvents(injector, options.refreshOn, () => {
-      if (!ref.reload() && untracked(ref.status) === 'loading') owed.set(true);
+      if (!ref.reload() && untracked(ref.isLoading)) owed.set(true);
     });
   }
 

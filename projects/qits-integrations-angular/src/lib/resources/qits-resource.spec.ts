@@ -254,6 +254,29 @@ describe('qitsResource', () => {
       expect(ref.value()?.name).toBe('two');
     });
 
+    it('reloads again when an event comes during a reload', async () => {
+      let answer!: (a: Answer) => void;
+      backend.mockResolvedValueOnce(ok({ id: 'a1', name: 'one' }));
+      backend.mockImplementationOnce(() => new Promise<Answer>((r) => (answer = r)));
+      backend.mockResolvedValueOnce(ok({ id: 'a1', name: 'three' }));
+      const ref = create(() =>
+        qitsResource(read, () => ({ path: { id: 'a1' } }), {
+          refreshOn: { names: ['AgentChanged'], debounceMs: 0 },
+        }),
+      );
+      await stable();
+      expect(ref.value()?.name).toBe('one');
+      ref.reload();
+      await vi.waitFor(() => expect(backend).toHaveBeenCalledTimes(2));
+      expect(ref.status()).toBe('reloading');
+      events.next({ name: 'AgentChanged' });
+      await new Promise((r) => setTimeout(r, 5));
+      answer(ok({ id: 'a1', name: 'two' }));
+      await vi.waitFor(() => expect(backend).toHaveBeenCalledTimes(3));
+      await stable();
+      expect(ref.value()?.name).toBe('three');
+    });
+
     it('unsubscribes when its injector is destroyed', () => {
       const { reload } = refreshing();
       expect(events.observed).toBe(true);
