@@ -532,11 +532,13 @@ viewportSpecs, colorSchemes })`, all off by default so a bump changes nothing un
 - **`@qits/angular/pwa`** (`projects/qits-integrations-angular/pwa/`, an ng-packagr secondary
   entry; ticket qits-2152) and the **`qits-angular pwa`** command (`pwa/*.mjs`, plain ESM copied as
   assets by the `pwa` glob, top level only so `test/` stays out). The entry is separate because it
-  imports `@angular/service-worker`, an **optional peer** (root devDependency); the main entry must
-  never import it, and `check-exports` fails if its bundle names it. `provideQitsPwa()` is
-  `provideServiceWorker` plus an environment initializer starting `QitsPwaUpdates`, which **never
-  reloads, assigns `location` or activates on its own** (not even on `unrecoverable`, which only
-  sets `broken`): the owner ruled the silent reload out, since it drops qits-2149's outbox mid-send.
+  imports `@angular/service-worker`, which is **not** a declared peer (qits-2208; root
+  devDependency) — an app importing this entry must add it itself, at the same version as its
+  `@angular/core`; the main entry must never import it, and `check-exports` fails if its bundle
+  names it. `provideQitsPwa()` is `provideServiceWorker` plus an environment initializer starting
+  `QitsPwaUpdates`, which **never reloads, assigns `location` or activates on its own** (not even on
+  `unrecoverable`, which only sets `broken`): the owner ruled the silent reload out, since it drops
+  qits-2149's outbox mid-send.
   `apply()` is the only reload, behind every `QITS_PWA_RELOAD_GUARDS` entry (run in the root
   injection context; a throw refuses). `SwUpdate` is injected optionally, so the service is inert
   without the worker. The prompt is held to `qits/theme-colors` by the library's own

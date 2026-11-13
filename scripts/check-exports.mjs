@@ -68,7 +68,7 @@ for (const key of ['types', 'default']) {
 
 // The ng-packagr secondary entries: each one's export is generated from its ng-package.json, so a
 // missing one means the entry was not built at all. `./pwa` (ticket qits-2152) is the one that
-// imports the optional @angular/service-worker peer, which the main entry must never do.
+// imports `@angular/service-worker`, which the main entry must never do — the app provides it.
 for (const subpath of ['./testing', './testing/browser', './pwa']) {
   if (!dist.exports?.[subpath]) fail(`${DIST}/package.json exports["${subpath}"] is missing`);
 }
@@ -76,8 +76,17 @@ const mainBundle = dist.exports?.['.']?.default;
 if (mainBundle && existsSync(join(DIST, mainBundle))) {
   if (readFileSync(join(DIST, mainBundle), 'utf8').includes('@angular/service-worker')) {
     fail(
-      `${mainBundle} imports @angular/service-worker — only the ./pwa entry may; it is an optional peer`,
+      `${mainBundle} imports @angular/service-worker — only the ./pwa entry may; the app provides it`,
     );
+  }
+}
+
+// qits-2208: an optional Angular-family peer a consumer lacks is resolved by npm at its newest
+// patch in range, whose exact @angular/core peer conflicts with any consumer's own lock a step
+// behind it — failing every such consumer's install with ERESOLVE. None may be declared optional.
+for (const pkg of Object.keys(dist.peerDependencies ?? {})) {
+  if (pkg.startsWith('@angular/') && dist.peerDependenciesMeta?.[pkg]?.optional) {
+    fail(`${DIST}/package.json declares ${pkg} as an optional peer (qits-2208) — remove it`);
   }
 }
 

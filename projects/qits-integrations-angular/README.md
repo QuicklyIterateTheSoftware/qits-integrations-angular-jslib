@@ -74,7 +74,8 @@ More entry points (the package's own), all documented in the repository README:
 - `@qits/angular/pwa`: the installable offline shell, opt-in per app (`qits-pwa.json`):
   `provideQitsPwa()` registers Angular's service worker, `QitsPwaUpdates` watches for a new version
   and never reloads on its own, and `<qits-pwa-update-prompt />` lets the person reload, past every
-  `QITS_PWA_RELOAD_GUARDS` entry. Needs the optional peer `@angular/service-worker`.
+  `QITS_PWA_RELOAD_GUARDS` entry. `@angular/service-worker` is not a declared peer (qits-2208);
+  the app adds it itself, at the same version as its `@angular/core`.
   `qits-angular pwa --write` writes the web manifest from the theme tokens, and
   `qits-angular pwa --check --dist <dir>` fails a build that does not install or start offline.
 - `@qits/angular/eslint`: lint rules (`client-only-in-stores`, `store-has-pact`, `pact-names`, the route rules,

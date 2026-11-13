@@ -76,10 +76,13 @@ hook, no `pnpm.onlyBuiltDependencies` allowlist, no Angular toolchain in the con
 (`^7.4.0`), and
 `@ngrx/signals` (`^21.0.0 || ^22.0.1`). The ngrx peer is required even if you never call
 `withQitsSnapshot` — the library's single bundle imports it statically, so it must be resolvable in
-every consumer. `@angular/service-worker` (`^21.2.0 || ^22.1.0`) is an **optional** peer: only the
-`@qits/angular/pwa` entry imports it, so only an app that opts in to the
-[installable offline shell](#installable-offline-shell-qitsangularpwa) installs it. The bundle is partial-compiled (`ɵɵngDeclare*` with a `minVersion` of at most
-17.0.0), so an Angular 21.2 application's linker links it like any other library.
+every consumer. `@angular/service-worker` is **not** a declared peer (qits-2208): an optional peer
+a consumer lacks is resolved by npm at its newest patch in range, whose exact `@angular/core` peer
+then clashes with the consumer's own lock — so an app that imports
+[`@qits/angular/pwa`](#installable-offline-shell-qitsangularpwa) must add
+`@angular/service-worker` itself, at the same version as its `@angular/core`. The bundle is
+partial-compiled (`ɵɵngDeclare*` with a `minVersion` of at most 17.0.0), so an Angular 21.2
+application's linker links it like any other library.
 
 An Angular 21 consumer that does not already depend on `@ngrx/signals` has to name it itself
 (`npm install -D @qits/angular @ngrx/signals@^21`): npm auto-installs a missing peer at the newest
@@ -824,13 +827,13 @@ app's theme and fails a build that would not install or start offline.
 
 It is **opt-in per repository**, like the light/dark screenshots: an app without `qits-pwa.json`
 gets nothing new, and the qits landing app does not opt in. It is a separate entry point because it
-imports `@angular/service-worker`, an **optional peer** (`^21.2.0 || ^22.1.0`) the main entry never
-imports, so the ~28 apps that never opt in need not install it (the main entry's own `@ngrx/signals`
-peer shows the cost of the other way round).
+imports `@angular/service-worker`, which the main entry never imports and which is **not** a
+declared peer (qits-2208): the ~28 apps that never opt in need not install it (the main entry's own
+`@ngrx/signals` peer shows the cost of the other way round).
 
 To opt in, an app:
 
-1. installs `@angular/service-worker` (the same version as its `@angular/core`);
+1. installs `@angular/service-worker` itself (the same version as its `@angular/core`);
 2. provides the shell and places the prompt in its shell component:
 
    ```ts
