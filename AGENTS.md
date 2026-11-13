@@ -512,7 +512,18 @@ viewportSpecs, colorSchemes })`, all off by default so a bump changes nothing un
   (real `navigator.onLine` back, every `qits-offline:*` database deleted: a real IndexedDB outlives
   a test) and puts `connectivity` on each payload (`shotConnectivity()`, `offline-shots.ts`: the
   network from `navigator.onLine`, the outbox upper-cased, the live `cache` resources and `queue`
-  mutations as `<provider>#<operationId>`). It reads them through the main entry's ɵ hook
+  mutations as `<provider>#<operationId>`). Ticket qits-2153 added `cached` (after
+  `cacheResources`: `[{operation, cachedAt}]`, the operations a live `cache` resource shows from the
+  store now, i.e. `qitsStatus()` `cached` — `addLive` takes the resource's shown-`cachedAt` getter,
+  `liveCachedReads()` keeps the latest per operation, sorted; ISO strings) and, on each outbox
+  entry, `recordId` (string or `null`) plus `currentVersion` on a `CONFLICT` entry only (string or
+  `null`, numbers stringified). Freezes must be byte-stable, so `seedOfflineStore(…, { cachedAt })`
+  defaults to `SEEDED_CACHED_AT` (`2026-01-01T00:00:00.000Z`) and `resetOfflineState()` pins every
+  cache write's stamp to it (`ɵpinQitsOfflineCacheClock`, a module-level clock in
+  `offline-sync.ts`; `enqueuedAt` keeps the real clock, and nothing pins it outside tests).
+  `connectivityOf` drops malformed `cached` entries and nulls a malformed `recordId` /
+  `currentVersion` (an old manifest's entry gains `recordId: null`, `cached: []`). It reads them
+  through the main entry's ɵ hook
   (`src/lib/offline/offline-testing.ts`: `ɵqitsOfflineState(injector)`, `null` without
   `provideQitsOffline`; `ɵdeleteQitsOfflineStores()`), so `OfflineSync` stays internal; the sync
   tracks live `queue` mutations itself (`addQueueMutation`), since every mutation registers its

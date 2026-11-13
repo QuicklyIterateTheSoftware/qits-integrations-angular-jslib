@@ -1972,35 +1972,54 @@ nothing below happens and the manifest stays byte for byte as it is. With it:
 - **Every test starts online with an empty store.** Before each test the real `navigator.onLine`
   is put back and every `qits-offline:*` IndexedDB database is deleted: in a real browser IndexedDB
   survives from one test to the next, so a stored answer or a queued write would otherwise leak.
+  Every answer the page stores itself (a flushed read, a landed write, a conflict's record) is
+  stamped `2026-01-01T00:00:00.000Z` (`SEEDED_CACHED_AT`) rather than the real time, so `cached`
+  below is the same on every run (ticket qits-2153); outside these tests the store keeps the real
+  clock.
 - **Every freeze says what the page's offline layer was.** The payload and the manifest's freeze
   carry `connectivity`, read at the shot (never declared by the spec, so it cannot say otherwise
   than the page):
 
   ```json
   "connectivity": {
-    "network": "OFFLINE",
-    "outbox": [{ "operation": "qits-notes-service#renameNote", "state": "PENDING" }],
+    "network": "ONLINE",
+    "outbox": [
+      {
+        "operation": "qits-notes-service#renameNote",
+        "state": "CONFLICT",
+        "recordId": "n1",
+        "currentVersion": "2"
+      }
+    ],
     "cacheResources": ["qits-notes-service#getNote"],
+    "cached": [{ "operation": "qits-notes-service#getNote", "cachedAt": "2026-01-01T00:00:00.000Z" }],
     "queueMutations": ["qits-notes-service#renameNote"]
   }
   ```
 
   `network` is `ONLINE` or `OFFLINE`, from `navigator.onLine`; `outbox` the outbox's entries, oldest
-  first (`PENDING`, `SENDING`, `CONFLICT`, `FAILED`); `cacheResources` and `queueMutations` the live
-  `offline: 'cache'` resources and `offline: 'queue'` mutations on the page, as
-  `<provider>#<operationId>`. The manifest also gets a top-level `"offline": true` (a run that froze
-  nothing keeps the previous value) and `"offlineOptOuts"`. `kind` stays what the page shows: an
+  first (`PENDING`, `SENDING`, `CONFLICT`, `FAILED`), each with the `recordId` it touches (a string,
+  or `null`) and, on a `CONFLICT` entry only, the server's `currentVersion` (a string, or `null`
+  when it named none: a 404); `cacheResources` and `queueMutations` the live `offline: 'cache'`
+  resources and `offline: 'queue'` mutations on the page, as `<provider>#<operationId>`. `cached`
+  (ticket qits-2153) lists the operations whose shown value came from the local store at the shot
+  (the resource is `cached`, for instance offline, or with a queued write laid over the stored
+  answer), each with the ISO instant it was stored: one entry per operation, the latest `cachedAt`
+  when several resources show it, sorted by operation, and `[]` when the page shows nothing from
+  the store. The operation is spelled as the `data-qits-source` mark and the outbox spell it. The
+  manifest also gets a top-level `"offline": true` (a run that froze nothing keeps the previous
+  value) and `"offlineOptOuts"`. `kind` stays what the page shows: an
   offline page showing stored data is `DATA`, a queued write is not a request in flight, and a
   conflict shows the server's record.
 
 The helpers, all in `@qits/angular/testing/browser`:
 
-| Helper                                | What it does                                                                                                                                                                                                                                                                                                                                                        |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `goOffline()` / `goOnline()`          | Overrides `navigator.onLine` on the page and dispatches `offline` / `online`, which the offline layer listens to. Not Playwright's `context.setOffline`: that also cuts the Vite module server, so a lazy `loadComponent` would fail. The real value is back after every test.                                                                                      |
-| `seedOfflineStore(op, params, body)`  | Stores `body` as the answer of `op` for `params`: what a `cache` resource with those params shows (an open page reads it at once). `body` must be a golden-master recording (refused with the guard's message otherwise), and is named in the test's records, as a flush is. Needs `provideQitsOffline` and a user. Flushing online, then `goOffline()`, works too. |
-| `conflictAnswer(request, current)`    | Answers a queued write's `TestRequest` with qits-2148's 412: `urn:qits:problem:stale-version` with `current` and `currentVersion` (`current.version`). `current` must be a recording; the 412 itself is never recorded by a pact.                                                                                                                                   |
-| `offlineShotsNotTaken({ reason, … })` | Says, once per spec, why it takes none of the shots below: `network: true` covers the offline shot, `operations: ['<provider>#<operationId>']` those mutations' shots, neither covers all. Sent through the browser command `qitsOfflineOptOut`, which `screenshotReferences({ freezes })` registers.                                                               |
+| Helper                                              | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `goOffline()` / `goOnline()`                        | Overrides `navigator.onLine` on the page and dispatches `offline` / `online`, which the offline layer listens to. Not Playwright's `context.setOffline`: that also cuts the Vite module server, so a lazy `loadComponent` would fail. The real value is back after every test.                                                                                                                                                                                                                                                                                                     |
+| `seedOfflineStore(op, params, body, { cachedAt }?)` | Stores `body` as the answer of `op` for `params`: what a `cache` resource with those params shows (an open page reads it at once). `body` must be a golden-master recording (refused with the guard's message otherwise), and is named in the test's records, as a flush is. `cachedAt` (a `Date` or an ISO string) is when the entry says it was stored, what `cachedAt()` and the freeze's `cached` show; default `2026-01-01T00:00:00.000Z` (`SEEDED_CACHED_AT`), so freezes are stable. Needs `provideQitsOffline` and a user. Flushing online, then `goOffline()`, works too. |
+| `conflictAnswer(request, current)`                  | Answers a queued write's `TestRequest` with qits-2148's 412: `urn:qits:problem:stale-version` with `current` and `currentVersion` (`current.version`). `current` must be a recording; the 412 itself is never recorded by a pact.                                                                                                                                                                                                                                                                                                                                                  |
+| `offlineShotsNotTaken({ reason, … })`               | Says, once per spec, why it takes none of the shots below: `network: true` covers the offline shot, `operations: ['<provider>#<operationId>']` those mutations' shots, neither covers all. Sent through the browser command `qitsOfflineOptOut`, which `screenshotReferences({ freezes })` registers.                                                                                                                                                                                                                                                                              |
 
 A pending write needs no helper: run the page's own mutation after `goOffline()`. A route spec
 taking the three shots:
