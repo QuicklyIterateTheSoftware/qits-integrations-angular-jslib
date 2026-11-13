@@ -58,6 +58,11 @@ touch(
     '',
   ].join('\n'),
 );
+// The library's own `Consumed`, outside the clients: a mapped type that keeps no alias.
+touch(
+  'src/app/lib/consume.ts',
+  readFileSync(new URL('../../src/lib/consume.ts', import.meta.url), 'utf8'),
+);
 // External templates.
 touch(
   'src/app/routes/linked.html',
@@ -66,6 +71,10 @@ touch(
 touch(
   'src/app/routes/marked.html',
   '<ul [qitsEntityList]="agents">\n  @for (agent of agents.value()?.items ?? []; track agent.agentId) {\n    <li [qitsEntity]="agent" entityKey="agentId">\n      <span [fieldOf]="agent" qitsField="runtimeStatus">{{ agent.runtimeStatus }}</span>\n    </li>\n  }\n</ul>\n',
+);
+touch(
+  'src/app/routes/untraced.html',
+  '<ul [qitsEntityList]="crumbs()">\n  @for (crumb of crumbs(); track crumb.label) {\n    <li>{{ crumb.label }}</li>\n  }\n</ul>\n',
 );
 
 const tester = new RuleTester({
@@ -109,6 +118,14 @@ const rows = (row) =>
 /** A detail root holding `content`. */
 const detail = (content) =>
   `@if (detail.value(); as agent) {<section [qitsEntity]="agent" entityKey="agentId" [entitySource]="detail">${content}</section>}`;
+/** The real `Consumed`, and the paths a landing page reads, ahead of a fixture. */
+const CONSUMED = [
+  "import type { Consumed } from '../lib/consume';",
+  "const L = ['items[].agentId', 'items[].runtimeStatus'] as const;",
+  '',
+].join('\n');
+/** A local type, not API data, ahead of a fixture. */
+const CRUMB = 'interface Crumb {\n  label: string;\n}\n';
 /** Where `needle` sits in `code`, as ESLint's 1-based line and column. */
 const locOf = (code, needle) => {
   const before = code.slice(0, code.indexOf(needle)).split('\n');
@@ -270,14 +287,38 @@ tester.run('data-through-fields', rule, {
         'readonly agent = input.required<AgentDto>();',
       ),
     },
-    // An input of a local type is not API data.
+    // A Consumed<…> input and a landing row, traced by their fields, marked.
     {
       filename: CARD,
-      code: component(
-        '<p>{{ crumb().label }}</p><p>{{ count() }}</p>',
-        'readonly crumb = input.required<{ label: string }>();',
-        'readonly count = input(0);',
-      ),
+      code:
+        CONSUMED +
+        component(
+          '<article [qitsEntity]="agent()" entityKey="agentId"><h2 [fieldOf]="agent()" qitsField="agentId">{{ agent().agentId }}</h2></article><p [qitsEntity]="row()" entityKey="agentId"><b [fieldOf]="row()" qitsField="runtimeStatus">{{ row().runtimeStatus }}</b></p>',
+          "readonly agent = input.required<Consumed<AgentDto, ['agentId']>>();",
+          "readonly row = input.required<NonNullable<Consumed<AgentPageDto, typeof L>['items']>[number]>();",
+        ),
+    },
+    // An input of a local type is not API data, nor is it reported while nothing marks it an entity.
+    {
+      filename: CARD,
+      code:
+        CRUMB +
+        component(
+          '<p>{{ crumb().label }}</p><p>{{ count() }}</p><p>{{ named().label }}</p>',
+          'readonly crumb = input.required<{ label: string }>();',
+          'readonly count = input(0);',
+          'readonly named = input.required<Crumb>();',
+        ),
+    },
+    // A static entity mark has no value to trace.
+    {
+      filename: CARD,
+      code:
+        CRUMB +
+        component(
+          '<p qitsEntity entityKey="label">{{ crumb().label }}</p>',
+          'readonly crumb = input.required<Crumb>();',
+        ),
     },
     // A ui- component's inputs under a mark; the marks' own inputs are not renders.
     {
@@ -306,12 +347,6 @@ tester.run('data-through-fields', rule, {
       filename: PAGE,
       code: component(rows('<ui-chip [label]="agent.runtimeStatus" />'), LIST),
       options: [{ display: ['app-'] }],
-    },
-    // The resource function by another name.
-    {
-      filename: PAGE,
-      code: component(rows('{{ agent.runtimeStatus }}'), LIST),
-      options: [{ resource: 'appResource' }],
     },
     // An external template, marked.
     { filename: PAGE, code: linked('./marked.html', LIST) },
@@ -545,21 +580,24 @@ tester.run('data-through-fields', rule, {
         },
       ],
     },
-    // An API-typed input: the type itself, a union member, an array element, an alias argument.
+    // An API-typed input: the type itself, a union member, an array element, an alias argument,
+    // and the fields of the real Consumed<…> (alone, nullable, a list, landing's row).
     {
       filename: CARD,
-      code: component(
-        '<p>{{ agent().runtimeStatus }}</p><p>{{ maybe()?.agentId }}</p>@for (a of many(); track a.agentId) {<p>{{ a.owner?.name }}</p>}<p>{{ seen().agentId }}</p><p>{{ page().total }}</p><p>{{ picked().runtimeStatus }}</p>',
-        'readonly agent = input.required<AgentDto>();',
-        'readonly maybe = input<AgentDto | undefined>();',
-        'readonly many = input<readonly AgentDto[]>([]);',
-        "readonly seen = input.required<Consumed<AgentDto, ['agentId']>>();",
-        'readonly page = model.required<AgentPageDto>();',
-        "readonly picked = input(undefined as unknown as Pick<AgentDto, 'runtimeStatus'>);",
-      ).replace(
-        'declare const LIST_AGENTS',
-        'type Consumed<T, P extends readonly string[]> = { [K in keyof T & P[number]]: T[K] };\ndeclare const LIST_AGENTS',
-      ),
+      code:
+        CONSUMED +
+        component(
+          '<p>{{ agent().runtimeStatus }}</p><p>{{ maybe()?.agentId }}</p>@for (a of many(); track a.agentId) {<p>{{ a.owner?.name }}</p>}<p>{{ seen().agentId }}</p><p>{{ page().total }}</p><p>{{ picked().runtimeStatus }}</p><p>{{ row().runtimeStatus }}</p><p>{{ maybeSeen()?.agentId }}</p>@for (c of consumed(); track c.agentId) {<p>{{ c.agentId }}</p>}',
+          'readonly agent = input.required<AgentDto>();',
+          'readonly maybe = input<AgentDto | undefined>();',
+          'readonly many = input<readonly AgentDto[]>([]);',
+          "readonly seen = input.required<Consumed<AgentDto, ['agentId']>>();",
+          'readonly page = model.required<AgentPageDto>();',
+          "readonly picked = input(undefined as unknown as Pick<AgentDto, 'runtimeStatus'>);",
+          "readonly row = input.required<NonNullable<Consumed<AgentPageDto, typeof L>['items']>[number]>();",
+          "readonly maybeSeen = input<Consumed<AgentDto, ['agentId']> | null>(null);",
+          "readonly consumed = input<Consumed<AgentDto, ['agentId']>[]>([]);",
+        ),
       errors: [
         { messageId: 'unmarked', data: { expression: 'agent().runtimeStatus', where: '' } },
         { messageId: 'unmarked', data: { expression: 'maybe()?.agentId', where: '' } },
@@ -567,6 +605,28 @@ tester.run('data-through-fields', rule, {
         { messageId: 'unmarked', data: { expression: 'seen().agentId', where: '' } },
         { messageId: 'unmarked', data: { expression: 'page().total', where: '' } },
         { messageId: 'unmarked', data: { expression: 'picked().runtimeStatus', where: '' } },
+        { messageId: 'unmarked', data: { expression: 'row().runtimeStatus', where: '' } },
+        { messageId: 'unmarked', data: { expression: 'maybeSeen()?.agentId', where: '' } },
+        { messageId: 'unmarked', data: { expression: 'c.agentId', where: '' } },
+      ],
+    },
+    // An entity mark on a value of a local type: its fields would go unchecked.
+    {
+      filename: CARD,
+      code:
+        CRUMB +
+        component(
+          '<div [qitsEntity]="crumb()" entityKey="label"><p>{{ crumb().label }}</p></div><ul [qitsEntityList]="crumbs()">@for (c of crumbs(); track c.label) {<li [qitsEntity]="c" entityKey="label">{{ c.label }}</li>}</ul>',
+          'readonly crumb = input.required<Crumb>();',
+          'readonly crumbs = input<Crumb[]>([]);',
+        ),
+      errors: [
+        {
+          message:
+            "'crumb()' is marked as an entity, but data-through-fields cannot trace it to API data: type it from the generated clients (or Consumed<…> of them), or its fields go unchecked.",
+        },
+        { messageId: 'untraced', data: { expression: 'crumbs()', where: '' } },
+        { messageId: 'untraced', data: { expression: 'c', where: '' } },
       ],
     },
     // An input's marks are checked like any other.
@@ -621,7 +681,17 @@ tester.run('data-through-fields', rule, {
       options: [{ display: ['app-'] }],
       errors: [{ messageId: 'unmarked' }],
     },
-    // `resource` names the function a resource field is made with.
+    // `resource` names the function a resource field is made with: another is no root, so its
+    // entity marks trace to nothing and the row's text is not reported.
+    {
+      filename: PAGE,
+      code: component(rows('{{ agent.runtimeStatus }}'), LIST),
+      options: [{ resource: 'appResource' }],
+      errors: [
+        { messageId: 'untraced', data: { expression: 'agents', where: '' } },
+        { messageId: 'untraced', data: { expression: 'agent', where: '' } },
+      ],
+    },
     {
       filename: PAGE,
       code: component(
@@ -647,6 +717,16 @@ tester.run('data-through-fields', rule, {
         },
       ],
     },
+    {
+      filename: PAGE,
+      code: CRUMB + linked('./untraced.html', 'readonly crumbs = input<Crumb[]>([]);'),
+      errors: [
+        {
+          messageId: 'untraced',
+          data: { expression: 'crumbs()', where: ' (src/app/routes/untraced.html:1:5)' },
+        },
+      ],
+    },
   ],
 });
 
@@ -669,6 +749,15 @@ untyped.run('data-through-fields without typed linting', rule, {
           line: 10,
         },
       ],
+    },
+    // Without the types no entity mark is held to a root.
+    {
+      filename: CARD,
+      code: component(
+        '<div [qitsEntity]="crumb()" entityKey="label"><p>{{ crumb().label }}</p></div>',
+        'readonly crumb = input.required<{ label: string }>();',
+      ),
+      errors: [{ messageId: 'typedLinting' }],
     },
     // Reported once per component class; the resource roots are still traced.
     {

@@ -167,8 +167,9 @@ const marksEntity = (element) =>
  * - a class field initialised with `qitsResource(...)` (option `resource`): `x.value()` is the
  *   root value, its entity paths read after it;
  * - an `input<T>()` / `input.required<T>()` / `model<T>()` field whose `T` is an API type — the
- *   type, a union member, an array element or a type argument (of its alias too, so `Consumed<Agent,
- *   [...]>` counts) declared in a file under the `clients` globs. This takes the TypeScript type
+ *   type, a union member, an array element, a type argument (of its alias too) or one of its
+ *   properties declared in a file under the `clients` globs, so `Consumed<Agent, [...]>` (a mapped
+ *   type of its own, declared in `consume.ts`) counts by its fields. This takes the TypeScript type
  *   checker, so without typed linting the rule says so once per component class instead of passing.
  *
  * A plain path is a root followed only by property reads (`?.`, `!`, `['x']` included), ending in
@@ -186,8 +187,11 @@ const marksEntity = (element) =>
  * no `qitsField` at or above it (`unmarked`); a `qitsField` with no `qitsEntity` /
  * `qitsEntityList` at or above it in the same template (`noEntity`); derived data under a plain
  * path mark (`notDerived`); a plain path under a literal mark naming another path (`wrongField`);
- * and a read a literal `{ derived: [...] }` mark leaves out (`missingDerived`). A bound,
- * non-literal mark is trusted for the last two.
+ * a read a literal `{ derived: [...] }` mark leaves out (`missingDerived`); and, with typed
+ * linting, a bound `[qitsEntity]` / `[qitsEntityList]` whose value traces to no root (`untraced`):
+ * its fields would otherwise pass unchecked. A resource field itself (`[qitsEntityList]="agents"`)
+ * and its `value` are traced. A bound, non-literal mark is trusted for `wrongField` and
+ * `missingDerived`.
  *
  * An app turns it on route by route with a `files` glob, so it is not in `recommended`. Specs and
  * the generated clients are not read.
@@ -220,6 +224,8 @@ export default {
         "'{{expression}}'{{where}} shows '{{path}}', but the qitsField it sits under names '{{mark}}'.",
       missingDerived:
         "'{{expression}}'{{where}} reads {{missing}}, which the derived qitsField it sits under does not list.",
+      untraced:
+        "'{{expression}}'{{where}} is marked as an entity, but data-through-fields cannot trace it to API data: type it from the generated clients (or Consumed<…> of them), or its fields go unchecked.",
       typedLinting:
         'data-through-fields needs typed linting: set languageOptions.parserOptions.projectService',
     },
@@ -245,13 +251,19 @@ export default {
       return apiFiles.get(file);
     };
 
-    /** Whether a type is, holds as a union member / element / type argument, an API type. */
+    /** Whether a symbol is declared in a file under the clients globs. */
+    const declaredInApi = (symbol) =>
+      symbol?.declarations?.some((d) => inApi(d.getSourceFile().fileName)) ?? false;
+
+    /**
+     * Whether a type is, holds as a union member / element / type argument, or has a property of,
+     * an API type. The properties catch a mapped type such as `Consumed<…>`, which keeps no alias.
+     */
     const isApiType = (type, seen = new Set()) => {
       if (!type || seen.has(type)) return false;
       seen.add(type);
-      for (const symbol of [type.aliasSymbol, type.getSymbol?.()]) {
-        if (symbol?.declarations?.some((d) => inApi(d.getSourceFile().fileName))) return true;
-      }
+      if ([type.aliasSymbol, type.getSymbol?.()].some(declaredInApi)) return true;
+      if (checker.getPropertiesOfType(type).some(declaredInApi)) return true;
       const inner = [...(type.aliasTypeArguments ?? [])];
       if (type.isUnionOrIntersection?.()) inner.push(...type.types);
       if (type.target) inner.push(...checker.getTypeArguments(type));
@@ -424,7 +436,7 @@ export default {
      * Every finding in one template's text, as `{ start, end, messageId, data }` with offsets into
      * that text; none when it does not parse.
      */
-    const findings = (fields, text, url) => {
+    const findings = (fields, text, url, typed) => {
       let nodes;
       try {
         nodes = parseTemplate(text, url, { preserveWhitespaces: true }).nodes;
@@ -458,6 +470,19 @@ export default {
         }
         const missing = [...reads].filter((p) => !mark.derived.has(p));
         if (missing.length) report(span, 'missingDerived', { ...data, missing: quoted(missing) });
+      };
+
+      /** A bound `[qitsEntity]` / `[qitsEntityList]` whose value traces to no root. */
+      const untraced = (element, scope) => {
+        for (const bound of element.inputs) {
+          if (bound.type !== BindingType.Property) continue;
+          if (bound.name !== 'qitsEntity' && bound.name !== 'qitsEntityList') continue;
+          const value = expression(fields, scope, bound.value);
+          if (isData(value) || value?.field?.kind === 'resource' || value?.value) continue;
+          const span = offsets(bound.sourceSpan);
+          const shown = bound.value instanceof ASTWithSource ? bound.value.source?.trim() : '';
+          report(span, 'untraced', { expression: shown || source(span) });
+        }
       };
 
       /**
@@ -496,6 +521,7 @@ export default {
             const near = own ?? mark;
             const tag = node.name ?? node.tagName ?? '';
             const shows = display.some((prefix) => tag.startsWith(prefix));
+            if (typed) untraced(node, scope);
             const inner = entityScope(node, scope);
             for (const input of node.inputs) {
               if (input.type !== BindingType.Property && input.type !== BindingType.TwoWay)
@@ -565,7 +591,7 @@ export default {
         const raw =
           literal.type === 'Literal' ? literal.raw.slice(1, -1) : literal.quasis[0].value.raw;
         const start = literal.range[0] + 1;
-        for (const f of findings(fields, text, absolute)) {
+        for (const f of findings(fields, text, absolute, typed)) {
           const loc =
             raw === text
               ? {
@@ -592,7 +618,7 @@ export default {
           return; // the build reports a missing template
         }
         const name = relative(root, html).split(sep).join('/');
-        for (const f of findings(fields, content, html)) {
+        for (const f of findings(fields, content, html, typed)) {
           const before = content.slice(0, f.start).split('\n');
           const where = ` (${name}:${before.length}:${before.at(-1).length + 1})`;
           context.report({
