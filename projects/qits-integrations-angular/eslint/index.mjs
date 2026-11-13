@@ -17,6 +17,7 @@ import pageLocation from './rules/page-location.mjs';
 import pageScreenshotWholePage from './rules/page-screenshot-whole-page.mjs';
 import pageScreenshotsThroughRoutes from './rules/page-screenshots-through-routes.mjs';
 import pageSuffix from './rules/page-suffix.mjs';
+import readsThroughResources from './rules/reads-through-resources.mjs';
 import routeMatchesDirectory from './rules/route-matches-directory.mjs';
 import routePaths from './rules/route-paths.mjs';
 import screenshotKind from './rules/screenshot-kind.mjs';
@@ -42,6 +43,9 @@ const plugin = {
     'screenshot-kind': screenshotKind,
     // Off in recommended: an app turns it on once its theme has the semantic tokens.
     'theme-colors': themeColors,
+    // Off in recommended: an app turns it on with a `files` glob for each route that has moved to
+    // qitsResource / qitsMutation.
+    'reads-through-resources': readsThroughResources,
   },
   configs: {},
 };

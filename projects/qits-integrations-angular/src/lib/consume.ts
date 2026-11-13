@@ -56,7 +56,11 @@ type PickSteps<T, S> = T extends null | undefined
 export type Consumed<T, P extends readonly string[]> = PickSteps<T, Steps<P[number]>>;
 
 /** One outcome of a generated client call, narrowed: `data` to `P`, `error` to `E`. */
-type Narrowed<R, P extends readonly string[], E extends readonly string[]> = R extends unknown
+export type Narrowed<
+  R,
+  P extends readonly string[],
+  E extends readonly string[],
+> = R extends unknown
   ? Omit<R, 'data' | 'error'> &
       (R extends { data: infer D } ? { data: Consumed<D, P> } : unknown) &
       (R extends { error: infer X } ? { error: Consumed<X, E> } : unknown)

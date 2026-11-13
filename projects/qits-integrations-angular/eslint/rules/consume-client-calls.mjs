@@ -1,4 +1,4 @@
-import { CLIENTS_SCHEMA, clientMatcher, isStore } from '../project.mjs';
+import { CLIENTS_SCHEMA, clientMatcher, isOperations, isStore } from '../project.mjs';
 
 /**
  * In a store, every call to a generated client goes straight into `consume(call, paths)`: the
@@ -6,31 +6,46 @@ import { CLIENTS_SCHEMA, clientMatcher, isStore } from '../project.mjs';
  * store reads, and the store's pact spec binds the same paths, so what the store reads and what the
  * pact binds cannot drift. Any other use of a client function — awaited on its own, `.then`,
  * passed elsewhere, or a `…Resource` helper, which is no promise to wrap — is reported.
+ *
+ * In a `*.operations.ts` file a client function is never called at all: it is handed over as the
+ * `call` of `qitsOperation({ provider, operationId, method, call, consumes })`, and the library calls
+ * it with the operation's `consumes` paths, which the file's pact spec binds. So there the only
+ * accepted use is `call: getX` (or `call: api.getX`) in the object literal that is the first
+ * argument of `qitsOperation(...)`; calling it, wrapping it in `consume`, or passing it anywhere else
+ * is reported.
  */
 export default {
   meta: {
     type: 'problem',
     docs: {
       description:
-        'In a store, every generated client call is the first argument of consume(call, paths).',
+        'In a store, every generated client call is the first argument of consume(call, paths); in an operations file, every client function is the call of qitsOperation({ call }).',
     },
     schema: [
       {
         ...CLIENTS_SCHEMA,
-        properties: { ...CLIENTS_SCHEMA.properties, consume: { type: 'string' } },
+        properties: {
+          ...CLIENTS_SCHEMA.properties,
+          consume: { type: 'string' },
+          operation: { type: 'string' },
+        },
       },
     ],
     messages: {
       unwrapped:
         "'{{name}}' is a generated client function: call it as the first argument of {{consume}}(call, paths), so the store reads only what it lists.",
+      notOperationCall:
+        "'{{name}}' is a generated client function: in an operations file, pass it as the call of {{operation}}({ call: {{name}}, … }) and let the operation call it, not here.",
     },
   },
   create(context) {
     const file = context.physicalFilename ?? context.filename;
-    if (!isStore(file)) return {};
+    const operations = isOperations(file);
+    if (!isStore(file) && !operations) return {};
     const clients = clientMatcher(context);
     if (clients.inClients) return {};
     const wrapper = context.options[0]?.consume ?? 'consume';
+    const operation = context.options[0]?.operation ?? 'qitsOperation';
     const source = context.sourceCode;
 
     /** For `api.getX()` on a namespace import: the member expression stands where the id would. */
@@ -50,6 +65,23 @@ export default {
         outer.arguments[0] === call &&
         outer.callee.type === 'Identifier' &&
         outer.callee.name === wrapper
+      );
+    };
+
+    /** Whether `target` is the value of `call:` in the object literal that is `qitsOperation`'s first argument. */
+    const operationCall = (target) => {
+      const prop = target.parent;
+      if (prop?.type !== 'Property' || prop.value !== target || prop.computed) return false;
+      if (prop.key.type !== 'Identifier' ? prop.key.value !== 'call' : prop.key.name !== 'call')
+        return false;
+      const object = prop.parent;
+      const call = object?.parent;
+      return (
+        object.type === 'ObjectExpression' &&
+        call?.type === 'CallExpression' &&
+        call.arguments[0] === object &&
+        call.callee.type === 'Identifier' &&
+        call.callee.name === operation
       );
     };
 
@@ -73,8 +105,17 @@ export default {
           if (!member) continue;
           target = member;
         }
-        if (wrappedTarget(target)) continue;
         const name = namespace ? source.getText(target) : id.name;
+        if (operations) {
+          if (operationCall(target)) continue;
+          context.report({
+            node: target,
+            messageId: 'notOperationCall',
+            data: { name, operation },
+          });
+          continue;
+        }
+        if (wrappedTarget(target)) continue;
         context.report({ node: target, messageId: 'unwrapped', data: { name, consume: wrapper } });
       }
     };

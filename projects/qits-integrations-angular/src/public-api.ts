@@ -17,6 +17,33 @@ export { registerCaptureState } from './lib/capture-state';
 export type { CaptureStateSupplier } from './lib/capture-state';
 export { consume, NOTHING } from './lib/consume';
 export type { Consumed, ConsumedPaths } from './lib/consume';
+export { qitsOperation } from './lib/resources/operation';
+export type {
+  QitsAnswer,
+  QitsHttpMethod,
+  QitsOperation,
+  QitsOperationError,
+  QitsOperationIdentity,
+  QitsOperationKind,
+  QitsOperationSpec,
+  QitsOperationValue,
+} from './lib/resources/operation';
+export { QitsApiError } from './lib/resources/api-error';
+export { QITS_DOMAIN_EVENTS, REFRESH_DEBOUNCE_MS } from './lib/resources/domain-events';
+export type {
+  QitsDomainEvent,
+  QitsDomainEvents,
+  QitsRefreshOn,
+} from './lib/resources/domain-events';
+export { qitsResource } from './lib/resources/qits-resource';
+export type { QitsResourceOptions, QitsResourceRef } from './lib/resources/qits-resource';
+export { qitsMutation } from './lib/resources/qits-mutation';
+export type {
+  QitsMutation,
+  QitsMutationOptions,
+  QitsReloadable,
+} from './lib/resources/qits-mutation';
+export type { QitsMutationStatus, QitsResourceStatus } from './lib/resources/status';
 export { provideQitsBearerSignIn } from './lib/sign-in/provide-qits-bearer-sign-in';
 export {
   CALLBACK_PATH,

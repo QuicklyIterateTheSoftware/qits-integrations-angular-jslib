@@ -47,6 +47,9 @@ tester.run('client-only-in-stores', rules['client-only-in-stores'], {
     { filename: at('src/app/core/projects/projects.store.ts'), code: CLIENT },
     { filename: at('src/app/core/projects/projects.store.spec.ts'), code: CLIENT },
     { filename: at('src/app/core/projects/projects.store.pact.spec.ts'), code: CLIENT },
+    // An operations file hands the client function to qitsOperation.
+    { filename: at('src/app/core/projects/projects.operations.ts'), code: CLIENT },
+    { filename: at('src/app/core/projects/projects.operations.pact.spec.ts'), code: CLIENT },
     {
       filename: at('src/app/core/projects/card.ts'),
       code: "import { X } from './projects.store';",
@@ -83,6 +86,12 @@ tester.run('client-only-in-stores', rules['client-only-in-stores'], {
     {
       filename: at('src/app/auth/session.guard.ts'),
       code: "import { getProjectsApiProjects } from '../api/projects';",
+      errors: [{ messageId: 'notAStore', data: { specifier: '../api/projects' } }],
+    },
+    // Only the suffix makes an operations file.
+    {
+      filename: at('src/app/core/projects/operations.ts'),
+      code: CLIENT,
       errors: [{ messageId: 'notAStore' }],
     },
     {
@@ -109,9 +118,16 @@ tester.run('client-only-in-stores', rules['client-only-in-stores'], {
   ],
 });
 
+touch('src/app/core/agents/agents.operations.pact.spec.ts');
+
 tester.run('store-has-pact', rules['store-has-pact'], {
   valid: [
     { filename: at('src/app/core/projects/projects.store.ts'), code: CLIENT },
+    { filename: at('src/app/core/agents/agents.operations.ts'), code: CLIENT },
+    {
+      filename: at('src/app/core/other/other.operations.ts'),
+      code: "import { qitsOperation } from '@qits/angular';",
+    },
     {
       filename: at('src/app/core/other/other.store.ts'),
       code: "import { signalStore } from '@ngrx/signals';",
@@ -128,7 +144,25 @@ tester.run('store-has-pact', rules['store-has-pact'], {
       errors: [
         {
           messageId: 'noPact',
-          data: { specifier: '../../api/projects', pact: 'users.store.pact.spec.ts' },
+          data: {
+            kind: 'store',
+            specifier: '../../api/projects',
+            pact: 'users.store.pact.spec.ts',
+          },
+        },
+      ],
+    },
+    {
+      filename: at('src/app/core/users/users.operations.ts'),
+      code: CLIENT,
+      errors: [
+        {
+          messageId: 'noPact',
+          data: {
+            kind: 'operations file',
+            specifier: '../../api/projects',
+            pact: 'users.operations.pact.spec.ts',
+          },
         },
       ],
     },
@@ -208,6 +242,328 @@ tester.run('consume-client-calls', rules['consume-client-calls'], {
       errors: [{ messageId: 'unwrapped', data: { name: 'api.getProjects', consume: 'consume' } }],
     },
   ],
+});
+
+const OPERATIONS = at('src/app/core/projects/projects.operations.ts');
+const OP_HEAD = "import { qitsOperation } from '@qits/angular';\n";
+const operationOf = (call) =>
+  `${OP_HEAD}export const LIST = qitsOperation({ provider: 'qits-projects', operationId: 'getProjects', method: 'GET', call: ${call}, consumes: PATHS });`;
+
+tester.run('consume-client-calls in an operations file', rules['consume-client-calls'], {
+  valid: [
+    { filename: OPERATIONS, code: `${SDK}\n${operationOf('getProjects')}` },
+    {
+      filename: OPERATIONS,
+      code: `import * as api from '../../api/projects';\n${operationOf('api.getProjects')}`,
+    },
+    { filename: OPERATIONS, code: `${SDK}\n${OP_HEAD}qitsOperation({ 'call': getProjects });` },
+    // A type calls nothing.
+    { filename: OPERATIONS, code: `${SDK}\ntype F = typeof getProjects; let p: ProjectDto;` },
+    {
+      filename: OPERATIONS,
+      code: `${SDK}\nimport { op } from '@qits/angular';\nop({ call: getProjects });`,
+      options: [{ operation: 'op' }],
+    },
+  ],
+  invalid: [
+    {
+      filename: OPERATIONS,
+      code: `${SDK}\nconst r = await getProjects();`,
+      errors: [
+        {
+          messageId: 'notOperationCall',
+          data: { name: 'getProjects', operation: 'qitsOperation' },
+        },
+      ],
+    },
+    {
+      filename: OPERATIONS,
+      code: `${SDK}\nconst r = await consume(getProjects(), PATHS);`,
+      errors: [{ messageId: 'notOperationCall' }],
+    },
+    {
+      filename: OPERATIONS,
+      code: `import * as api from '../../api/projects';\nawait api.getProjects();`,
+      errors: [
+        {
+          messageId: 'notOperationCall',
+          data: { name: 'api.getProjects', operation: 'qitsOperation' },
+        },
+      ],
+    },
+    // Called rather than handed over, a wrong key, not the first argument, or another callee.
+    { filename: OPERATIONS, code: `${SDK}\n${operationOf('getProjects()')}`, errors: 1 },
+    {
+      filename: OPERATIONS,
+      code: `${SDK}\n${OP_HEAD}qitsOperation({ fetch: getProjects });`,
+      errors: [{ messageId: 'notOperationCall' }],
+    },
+    {
+      filename: OPERATIONS,
+      code: `${SDK}\n${OP_HEAD}qitsOperation(META, { call: getProjects });`,
+      errors: [{ messageId: 'notOperationCall' }],
+    },
+    {
+      filename: OPERATIONS,
+      code: `${SDK}\nregister({ call: getProjects });`,
+      errors: [{ messageId: 'notOperationCall' }],
+    },
+    {
+      filename: OPERATIONS,
+      code: `${SDK}\nconst f = getProjects;\n${operationOf('f')}`,
+      errors: [{ messageId: 'notOperationCall' }],
+    },
+  ],
+});
+
+describe('consume-client-calls messages', () => {
+  it('tells an operations file to hand the function to qitsOperation', () => {
+    const [message] = new Linter()
+      .verify(
+        `${SDK}\ngetProjects();`,
+        [
+          {
+            files: ['**/*.ts'],
+            languageOptions: { parser: tseslint.parser },
+            plugins: { qits },
+            rules: { 'qits/consume-client-calls': 'error' },
+          },
+        ],
+        OPERATIONS,
+      )
+      .map((m) => m.message);
+    assert.equal(
+      message,
+      "'getProjects' is a generated client function: in an operations file, pass it as the call of qitsOperation({ call: getProjects, … }) and let the operation call it, not here.",
+    );
+  });
+});
+
+// Stores on disk, for inject(X): one that calls a client, one that keeps UI state only, one that
+// takes nothing but a type from a client, one whose client import sits in a comment.
+touch(
+  'src/app/core/agents/agents.store.ts',
+  "import { signalStore } from '@ngrx/signals';\nimport { listAgents } from '../../api/agents';\nexport const AgentsStore = signalStore();\n",
+);
+touch(
+  'src/app/core/ui/ui.store.ts',
+  "import { signalStore } from '@ngrx/signals';\nexport class Panel {}\nimport type { AgentDto } from '../../api/agents';\nexport const UiStore = signalStore();\n",
+);
+touch(
+  'src/app/core/ui/filters.store.ts',
+  "// import { listAgents } from '../../api/agents';\nimport { type AgentDto } from '../../api/agents';\nexport const FiltersStore = signalStore();\n",
+);
+touch(
+  'src/app/core/ui/lazy.store.ts',
+  "export const LazyStore = signalStore();\nconst api = () => import('../../api/agents');\n",
+);
+
+// An app that imports its stores, and one store its client, through tsconfig path aliases.
+touch('stores/package.json', JSON.stringify({ name: 'qits-stores-app' }));
+touch(
+  'stores/tsconfig.json',
+  '/* app */\n{ "extends": "./tsconfig.base.json", "compilerOptions": { "strict": true, }, }',
+);
+touch(
+  'stores/tsconfig.base.json',
+  '{\n  // aliases\n  "compilerOptions": { "paths": { "$core/*": ["./src/app/core/*"], "$api/*": ["./src/app/api/*"], "$ui": ["./src/app/ui/ui.store.ts"] } }\n}',
+);
+const inStores = (path) => join(app, 'stores', path);
+touch(
+  'stores/src/app/core/agents/agents.store.ts',
+  "import { listAgents } from '$api/agents';\nexport const AgentsStore = signalStore();\n",
+);
+touch(
+  'stores/src/app/core/workspaces/workspaces.store.ts',
+  "import { listWorkspaces } from '../../api/workspaces';\nexport const WorkspacesStore = signalStore();\n",
+);
+touch(
+  'stores/src/app/ui/ui.store.ts',
+  "import { signalStore } from '@ngrx/signals';\nexport const UiStore = signalStore();\n",
+);
+touch(
+  'stores/src/app/core/ui/panel.store.ts',
+  "import type { AgentDto } from '$api/agents';\nexport const PanelStore = signalStore();\n",
+);
+const STORES_PAGE = inStores('src/app/routes/agents/agents.page.ts');
+
+const PAGE = at('src/app/routes/agents/agents.page.ts');
+const AGENTS = "import { listAgents, type AgentDto } from '../../api/agents';";
+const INJECT = "import { inject } from '@angular/core';\n";
+
+tester.run('reads-through-resources', rules['reads-through-resources'], {
+  valid: [
+    {
+      filename: PAGE,
+      code: `import { qitsResource } from '@qits/angular';\nimport { LIST } from '../../core/agents/agents.operations';\nconst agents = qitsResource(LIST, () => ({}));`,
+    },
+    // A type calls nothing.
+    {
+      filename: PAGE,
+      code: `${AGENTS}\nlet a: AgentDto; type F = typeof listAgents;`,
+    },
+    {
+      filename: PAGE,
+      code: "import type { listAgents } from '../../api/agents';\nlet f: typeof listAgents;",
+    },
+    // Operations files are consume-client-calls' business, and the place qitsOperation belongs.
+    {
+      filename: at('src/app/core/agents/agents.operations.ts'),
+      code: `${AGENTS}\nimport { qitsOperation } from '@qits/angular';\nexport const LIST = qitsOperation({ call: listAgents });`,
+    },
+    // Specs and the clients themselves are not covered.
+    { filename: at('src/app/routes/agents/agents.page.spec.ts'), code: `${AGENTS}\nlistAgents();` },
+    {
+      filename: at('src/app/api/agents/sdk.gen.ts'),
+      code: "import { client } from './client.gen';\nclient.get();",
+    },
+    // A store that calls no client keeps UI state, which is fine to inject.
+    {
+      filename: PAGE,
+      code: `${INJECT}import { UiStore } from '../../core/ui/ui.store';\nconst ui = inject(UiStore);`,
+    },
+    {
+      filename: PAGE,
+      code: `${INJECT}import { FiltersStore } from '../../core/ui/filters.store.ts';\nconst f = inject(FiltersStore);`,
+    },
+    // Not a store, a type-only import, or another callee.
+    {
+      filename: PAGE,
+      code: `${INJECT}import { Router } from '@angular/router';\nconst r = inject(Router);`,
+    },
+    {
+      filename: PAGE,
+      code: `${INJECT}import type { AgentsStore } from '../../core/agents/agents.store';\nconst s = inject(AgentsStore);`,
+    },
+    {
+      filename: PAGE,
+      code: "import { AgentsStore } from '../../core/agents/agents.store';\nconst s = provide(AgentsStore);",
+    },
+    // A local of the same name is not the import.
+    {
+      filename: PAGE,
+      code: `${INJECT}import { AgentsStore } from '../../core/agents/agents.store';\nfunction f(AgentsStore) { return inject(AgentsStore); }`,
+    },
+    // Through the tsconfig aliases: a store that keeps UI state, or takes only a type from a client.
+    {
+      filename: STORES_PAGE,
+      code: `${INJECT}import { PanelStore } from '$core/ui/panel.store';\nconst p = inject(PanelStore);`,
+    },
+    {
+      filename: STORES_PAGE,
+      code: `${INJECT}import { UiStore } from '$ui';\nconst u = inject(UiStore);`,
+    },
+    // An alias no tsconfig declares is not followed.
+    {
+      filename: STORES_PAGE,
+      code: `${INJECT}import { AgentsStore } from '$nowhere/agents/agents.store';\nconst s = inject(AgentsStore);`,
+    },
+    // The clients option moves where the clients are.
+    {
+      filename: PAGE,
+      code: `${INJECT}import { AgentsStore } from '../../core/agents/agents.store';\nconst s = inject(AgentsStore);`,
+      options: [{ clients: ['src/generated/**'] }],
+    },
+  ],
+  invalid: [
+    {
+      filename: PAGE,
+      code: `${AGENTS}\nconst r = await listAgents();`,
+      errors: [{ messageId: 'clientCall', data: { name: 'listAgents' } }],
+    },
+    {
+      filename: PAGE,
+      code: `${AGENTS}\nconst f = listAgents;\nuse({ call: listAgents });`,
+      errors: [{ messageId: 'clientCall' }, { messageId: 'clientCall' }],
+    },
+    {
+      filename: PAGE,
+      code: "import * as api from '../../api/agents';\nawait api.listAgents();\nconst all = api;",
+      errors: [
+        { messageId: 'clientCall', data: { name: 'api.listAgents' } },
+        { messageId: 'clientCall', data: { name: 'api' } },
+      ],
+    },
+    {
+      filename: PAGE,
+      code: "import { listAgents } from '@backend/agents';\nlistAgents();",
+      options: [{ clients: ['@backend/**'] }],
+      errors: [{ messageId: 'clientCall' }],
+    },
+    // A store is covered too: on a moved route the store's client calls become operations.
+    {
+      filename: at('src/app/routes/agents/agents.store.ts'),
+      code: `${AGENTS}\nawait consume(listAgents(), PATHS);`,
+      errors: [{ messageId: 'clientCall' }],
+    },
+    {
+      filename: PAGE,
+      code: "import { qitsOperation } from '@qits/angular';\nconst LIST = qitsOperation({ call: x });",
+      errors: [{ messageId: 'operationHere', data: { operation: 'qitsOperation' } }],
+    },
+    {
+      filename: PAGE,
+      code: "import { op } from '@qits/angular';\nconst LIST = op({ call: x });",
+      options: [{ operation: 'op' }],
+      errors: [{ messageId: 'operationHere', data: { operation: 'op' } }],
+    },
+    {
+      filename: PAGE,
+      code: `${INJECT}import { AgentsStore } from '../../core/agents/agents.store';\nconst s = inject(AgentsStore);`,
+      errors: [{ messageId: 'storeRead', data: { name: 'AgentsStore' } }],
+    },
+    {
+      filename: PAGE,
+      code: `${INJECT}import { AgentsStore as Agents } from '../../core/agents/agents.store.js';\nclass P { s = inject(Agents, { optional: true }); }`,
+      errors: [{ messageId: 'storeRead', data: { name: 'Agents' } }],
+    },
+    {
+      filename: PAGE,
+      code: `${INJECT}import { LazyStore } from '../../core/ui/lazy.store.ts';\nconst s = inject(LazyStore);`,
+      errors: [{ messageId: 'storeRead' }],
+    },
+    // Through the tsconfig aliases, to a store whose client import is itself an alias or relative.
+    {
+      filename: STORES_PAGE,
+      code: `${INJECT}import { AgentsStore } from '$core/agents/agents.store';\nconst s = inject(AgentsStore);`,
+      errors: [{ messageId: 'storeRead', data: { name: 'AgentsStore' } }],
+    },
+    {
+      filename: STORES_PAGE,
+      code: `${INJECT}import { WorkspacesStore } from '$core/workspaces/workspaces.store.js';\nconst s = inject(WorkspacesStore);`,
+      errors: [{ messageId: 'storeRead', data: { name: 'WorkspacesStore' } }],
+    },
+  ],
+});
+
+describe('reads-through-resources in recommended', () => {
+  const config = (rules) => [
+    {
+      files: ['**/*.ts'],
+      languageOptions: { parser: tseslint.parser },
+      ...qits.configs.recommended[0],
+    },
+    ...(rules ? [{ files: ['**/*.ts'], rules }] : []),
+  ];
+  const code = `${AGENTS}\n${INJECT}import { AgentsStore } from '../../core/agents/agents.store';\nimport { qitsOperation } from '@qits/angular';\nconst LIST = qitsOperation({ call: x });\nconst s = inject(AgentsStore);\nlistAgents();`;
+  const lint = (rules) =>
+    new Linter()
+      .verify(code, config(rules), PAGE)
+      .filter((m) => m.ruleId === 'qits/reads-through-resources');
+  it('is not enabled by recommended', () => {
+    assert.equal(qits.configs.recommended[0].rules['qits/reads-through-resources'], undefined);
+    assert.deepEqual(lint(), []);
+  });
+  it('reports with its messages once an app enables it', () => {
+    assert.deepEqual(
+      lint({ 'qits/reads-through-resources': 'error' }).map((m) => m.message),
+      [
+        'qitsOperation(...) declares an operation: declare it in a *.operations.ts file, beside its pact spec, and import it from there.',
+        "'AgentsStore' is a store that calls a generated client: read API data through qitsResource, not a store.",
+        "'listAgents' is a generated client function: read through qitsResource and write through qitsMutation, with an operation from a *.operations.ts file.",
+      ],
+    );
+  });
 });
 
 const SPEC = at('src/app/core/projects/projects.store.pact.spec.ts');

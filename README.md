@@ -306,6 +306,103 @@ data?.entries?.[0].project?.slug; // error: not listed
 argument lists paths. `NOTHING` is the empty list. At run time `consume` returns the answer
 unchanged. `qits/consume-client-calls` makes every client call in a store go through it.
 
+## API reads and writes: `qitsResource` and `qitsMutation`
+
+A store that reshapes API data into its own state hides its provenance: a value on the template
+no longer says which read produced it, and a store serving several components can mix reads with
+different lifetimes under one shape. A resource is the opposite shape (ticket qits-2145): one
+backend read per signal, carrying the operation's identity (`provider` + `operationId`), which the
+data marks (qits-2141) read to say where a rendered value came from. **Stores are no longer used for API reads** —
+a page reads with `qitsResource` and writes with `qitsMutation`, both over a `qitsOperation`; a
+store is UI state only now, and `qits/reads-through-resources` (below) reports a store that still
+calls a client.
+
+A `qitsOperation` is declared once, in an `x.operations.ts` file, beside the `x.consumes.ts`
+constants a store would have used:
+
+```ts
+// agents.operations.ts
+import { NOTHING, qitsOperation } from '@qits/angular';
+import { listAgents, stopAgent } from '../api';
+import { PROJECT_AGENTS } from './agents.consumes';
+
+export const LIST_PROJECT_AGENTS = qitsOperation({
+  provider: 'qits-workspaces-service',
+  operationId: 'listAgents',
+  method: 'GET',
+  call: listAgents,
+  consumes: PROJECT_AGENTS,
+});
+
+// illustrative: a write, picked for shape only
+export const STOP_PROJECT_AGENT = qitsOperation({
+  provider: 'qits-workspaces-service',
+  operationId: 'stopAgent',
+  method: 'POST',
+  call: stopAgent,
+  consumes: NOTHING,
+});
+```
+
+`method` decides `kind` — `GET` is `'read'`, everything else `'write'` — and the compiler holds
+to it: `qitsResource` refuses a write operation, `qitsMutation` refuses a read one. The operation's
+pact spec, `agents.operations.pact.spec.ts`, passes the same `OP.provider`, `OP.operationId` and
+`OP.consumes` straight to `addGoldenInteraction` instead of repeating the strings, so the pact and
+the operation cannot drift apart; `qits/consume-client-calls` holds the operations file to the one
+accepted shape (`call: listAgents` in the object literal `qitsOperation` takes, nothing else), and
+`qits/store-has-pact` requires the sibling spec exists.
+
+A page builds its resources and mutations as fields, over the operations it imports:
+
+```ts
+// agents.page.ts
+readonly agents = qitsResource(LIST_PROJECT_AGENTS, () =>
+  this.projectId() ? { query: { projectId: this.projectId(), state: 'ACTIVE' } } : undefined,
+  { refreshOn: { names: ['AgentStarted', 'AgentStopped'], when: (e) => e.payload?.projectId === this.projectId() } },
+);
+
+readonly stopAgent = qitsMutation(STOP_PROJECT_AGENT, { affects: [this.agents] });
+```
+
+`params()` returning `undefined` keeps the resource idle — here, until a project is picked.
+`refreshOn` needs the app's domain events: provide them once, in `app.config.ts`, as
+`{ provide: QITS_DOMAIN_EVENTS, useExisting: DomainEvents }` (or any class implementing
+`on(names)`). The library never opens a stream itself. `names` is an OR of event names; `when`
+narrows further. Matching events are debounced (`REFRESH_DEBOUNCE_MS`, 1 s) so a burst that
+touches ten rows costs one reload, not ten; an event that arrives during the resource's first
+load cannot reload it yet (Angular's `resource()` refuses a reload while loading), so it is
+remembered and fired once that load settles, rather than dropped. `refreshOn` throws at creation
+when the app provides no `QITS_DOMAIN_EVENTS` — a resource told to refresh that never would is a
+wiring mistake, better caught there than in production.
+
+A failed answer throws `QitsApiError` (`status`, the error body narrowed to `errorConsumes`, and
+the operation identity). On a resource, a failed _reload_ keeps the resource's current value and
+reports the failure through `reloadError()` instead of blanking the page — except a 404
+(the thing really is gone) and a load after a params change (there is no old value for the new
+params to keep), both of which go to Angular's own `error()` as usual. A mutation's `run()`
+always rejects on failure; it never keeps a stale value, because a write has none to keep.
+
+Each `run()` sends a fresh `Idempotency-Key` header, so retrying the same run cannot apply twice
+while a second, distinct run is still a second write. `affects` — resources to reload — runs only
+after a successful run, as a plain array or, when a later-created resource needs naming, a
+function evaluated at run time. `status()` and `error()` are latest-run-wins: an earlier run that
+settles after a later one has already started does not overwrite what the later run reported.
+
+`captureAs` puts a resource's value into feature captures (`registerCaptureState`) under a name;
+it is off by default because the obvious default name, `<provider>#<operationId>`, collides the
+moment two resources read the same operation, and the second registration would silently replace
+the first. Pass `true` for that default name or a string for your own, once you are sure it is
+the only resource using it.
+
+**The status sets are wider than what an online app reaches.** `qitsStatus()` is `QitsResourceStatus`
+— Angular's own `status()` plus `'cached'` (served from a local copy) and `'offline'` — because
+Angular's `status()` is a closed union a library cannot extend; `qitsResource` keeps mirroring
+`status()` online and never reaches the two extra values. `QitsMutationStatus` similarly adds
+`'pending'` (queued while offline) and `'conflict'` (the provider refused a queued write) beside
+the ordinary `'idle'` / `'running'` / `'done'` / `'error'`, equally unreached online. Both extra
+pairs exist now so that templates and the offline lint rules can be written against the full set
+ahead of time; the offline behaviour itself is qits-2149.
+
 ## Where an interaction leads: `outcomes`
 
 An interaction declares, once, where it can end (ticket qits-2001): each **exit** is a route of
@@ -810,9 +907,10 @@ export default [...yourConfig, ...qits.configs.recommended];
 
 | Rule                                         | What it enforces                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `qits/client-only-in-stores`                 | Only `*.store.ts` files and specs import a generated client, so every backend call goes through a store. Type-only imports are fine. Files in `allow` (default `src/app/app.config*.ts`, `src/main*.ts`) may import it to set the client up.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `qits/consume-client-calls`                  | In a store, every call to a generated client function is the first argument of `consume(call, paths)`. Awaiting it on its own, `.then`, passing the promise or the function elsewhere, and `…Resource` helpers (no promise to wrap) are reported. Option `consume` renames the wrapper.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `qits/store-has-pact`                        | A store that imports a generated client has `<name>.store.pact.spec.ts` beside it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `qits/client-only-in-stores`                 | Only `*.store.ts` files, `*.operations.ts` files and specs import a generated client, so every backend call goes through a store or through an operation declared in a `*.operations.ts` file. Type-only imports are fine. Files in `allow` (default `src/app/app.config*.ts`, `src/main*.ts`) may import it to set the client up.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `qits/consume-client-calls`                  | In a store, every call to a generated client function is the first argument of `consume(call, paths)`; awaiting it on its own, `.then`, passing the promise or the function elsewhere, and `…Resource` helpers (no promise to wrap) are reported. In a `*.operations.ts` file the client function is never called at all: the only accepted use is `call: getX` in the object literal passed to `qitsOperation({ ... })` — calling it, wrapping it in `consume`, or passing it anywhere else is reported there instead. Option `consume` renames the wrapper, `operation` renames `qitsOperation`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `qits/store-has-pact`                        | A store or operations file that imports a generated client has its pact spec beside it: `<name>.store.pact.spec.ts` for a store, `<name>.operations.pact.spec.ts` for an operations file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `qits/reads-through-resources`               | **Off** in `recommended`: an app turns it on, route by route, as it migrates (see [API reads and writes](#api-reads-and-writes-qitsresource-and-qitsmutation)). Reports three ways round `qitsResource` / `qitsMutation`: using a generated client function directly, called or not (a type-only import is fine); calling `qitsOperation(...)` anywhere but a `*.operations.ts` file, where no pact spec stands beside it; and `inject(X)` of a store whose own file imports a generated client, which means the data still arrives through the store's calls rather than through an operation (a store that imports no client — UI state only — is fine). `X`'s import is followed to a `*.store.ts` file on disk, relative or through a tsconfig path alias (`$core/…`). Specs and the generated clients themselves are not read, and inside an operations file the client function itself is `consume-client-calls`' business, not this rule's. Options `clients` / `operation` (default `qitsOperation`), shared with the other client rules.                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `qits/pact-names`                            | In a `*.pact.spec.ts`, `new PactV4({ consumer, provider })` and `addGoldenInteraction(…, { provider, trigger: { app } })`: the consumer and trigger app equal the nearest `package.json` `name`; the provider is a repository name ending in a role (`-service`, `-frontend`, `-app`, `-daemon`, `-oci`, `-cli`, `-javalib`, `-jslib`). Give names as string literals or consts, or the rule cannot check them.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `qits/page-location`                         | A `*.page.ts` or `*.layout.ts` file lives under the routes directory (a `*.layout.ts` also under the `$layout` alias directory, when the project has one), and every component class under the routes directory lives in such a file. Other files there (a resolver, a guard, a `*.routes.ts`) and specs are fine.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `qits/page-suffix`                           | The exported component in a `*.page.ts` ends in `Page`, the one in a `*.layout.ts` ends in `Layout`, and a component named `…Page` / `…Layout` lives in such a file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -827,8 +925,24 @@ export default [...yourConfig, ...qits.configs.recommended];
 | `qits/theme-colors`                          | **Off** in `recommended`: an app turns it on (`'qits/theme-colors': 'error'`) once its theme has semantic tokens. In a dark-mode-capable app, colours come from the theme's semantic tokens, never a palette step or a literal colour. Reported: a colour utility (`bg-`, `text-`, `border-*`, `ring-`, `fill-`, `from-`, `shadow-`, …) naming a palette colour — `white`, `black`, a Tailwind default step (`gray-500`) or a step the theme declares (`charcoal-brown-600`) — whatever its variants, `!`, `-` or opacity; an arbitrary value holding a raw colour (`bg-[#fff]`, `text-[oklch(…)]`) or a palette `var(--color-…)`, and `bg-(--color-<step>)`; in CSS, a hex, a colour function (`rgb()` … `oklch()`, `color()`, `color-mix()`), a named colour or a palette `var(--color-…)`. Allowed: semantic utilities and vars (`bg-surface`, `text-fg-muted/50`, `bg-(--color-surface)`), `current`, `transparent`, `inherit`, `initial`, `unset`, and non-colour suffixes (`text-sm`, `border-2`, `text-[13px]`). Option `theme`; where it reads and the suggestion are below.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 Generated clients are `src/app/api/**` (relative to the nearest `package.json`) unless you pass
-`{ clients: ['<glob>', …] }` to `client-only-in-stores`, `consume-client-calls` and `store-has-pact`. A path alias such as
-`@api/**` is matched as written.
+`{ clients: ['<glob>', …] }` to `client-only-in-stores`, `consume-client-calls`, `store-has-pact`
+and `reads-through-resources`. A path alias such as `@api/**` is matched as written.
+
+**`reads-through-resources` is off in `recommended`** for the same reason `theme-colors` is: an
+app migrates one route at a time, so it is turned on with a `files` override naming that route's
+files, not for the whole `src/app/**` at once:
+
+```js
+// eslint.config.mjs
+export default [
+  ...yourConfig,
+  ...qits.configs.recommended,
+  {
+    files: ['src/app/routes/projects/[slug]/agents/**/*.ts'],
+    rules: { 'qits/reads-through-resources': 'error' },
+  },
+];
+```
 
 `navigation-through-outcomes` reads the files matching `include` (default `['src/app/**']`) and not
 `exclude` (default `['src/app/api/**']`), both globs relative to the nearest `package.json`, so

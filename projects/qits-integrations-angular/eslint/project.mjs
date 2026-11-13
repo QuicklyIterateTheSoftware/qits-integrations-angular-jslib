@@ -1,5 +1,5 @@
 // Shared by the rules: where the app's project root is, and which imports are a generated client.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 /** Where the generated clients live, relative to the project root, unless a rule is told otherwise. */
@@ -61,9 +61,20 @@ export function globRegex(glob) {
  * importing file is itself part of a client (a generated client imports itself freely).
  */
 export function clientMatcher(context) {
-  const globs = (context.options[0]?.clients ?? DEFAULT_CLIENTS).map(globRegex);
-  const file = context.physicalFilename ?? context.filename;
-  const root = nearestPackage(file)?.dir ?? context.cwd;
+  return clientMatcherFor(
+    context.physicalFilename ?? context.filename,
+    context.options[0]?.clients,
+    context.cwd,
+  );
+}
+
+/**
+ * The same matcher for any file on disk, not only the one being linted: a rule that follows an
+ * import into another file asks with that file's own path, so its relative imports resolve from it.
+ */
+export function clientMatcherFor(file, clients = DEFAULT_CLIENTS, cwd = process.cwd()) {
+  const globs = clients.map(globRegex);
+  const root = nearestPackage(file)?.dir ?? cwd;
   const asProjectPath = (path) => relative(root, path).split(sep).join('/');
   const matches = (path) =>
     globs.some((g) => g.test(path) || g.test(path.replace(/\.[mc]?[jt]sx?$/, '')));
@@ -107,7 +118,83 @@ export function importVisitors(onImport) {
 }
 
 export const isStore = (file) => /\.store\.[mc]?[jt]s$/.test(file);
+export const isOperations = (file) => /\.operations\.[mc]?[jt]s$/.test(file);
 export const isSpec = (file) => /\.(spec|test)\.[mc]?[jt]sx?$/.test(file);
+
+/**
+ * The specifiers a source file on disk imports, read with a regex rather than a parser: a store
+ * named by `inject(X)` is a different file from the one being linted, and parsing it would tie the
+ * rule to whichever parser the app configured. Comments are stripped first; type-only imports and
+ * re-exports (`import type`, or braces holding nothing but `type` names) are left out, as
+ * importVisitors leaves them out. A string that merely looks like an import can still be read as
+ * one, which errs towards reporting.
+ */
+export function importedSpecifiers(text) {
+  const code = text.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
+  const found = [];
+  // The clause may not run on into a later import/export: `export class X {}` followed by an
+  // `import type` would otherwise read as one value import.
+  const statement =
+    /\b(?:import|export)\s+(type\s+)?((?:(?!\b(?:import|export)\b)[^'";])*?)\s*from\s*['"]([^'"]+)['"]/g;
+  for (const [, type, clause, specifier] of code.matchAll(statement)) {
+    const names = /^\{([^}]*)\}$/
+      .exec(clause.trim())?.[1]
+      .split(',')
+      .map((n) => n.trim())
+      .filter((n) => n);
+    if (type || (names?.length && names.every((n) => /^type\s/.test(n)))) continue;
+    found.push(specifier);
+  }
+  for (const [, specifier] of code.matchAll(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+    found.push(specifier);
+  }
+  for (const [, specifier] of code.matchAll(/\bimport\s+['"]([^'"]+)['"]/g)) found.push(specifier);
+  return found;
+}
+
+/**
+ * The `*.store.ts` file a specifier names, as an absolute path, or undefined when it names none.
+ * A relative specifier resolves against the importing file, a bare one through the tsconfig path
+ * aliases (aliasTargets); `x.store`, `x.store.ts` and the ESM-style `x.store.js` all find
+ * `x.store.ts`.
+ */
+export function resolveStore(fromFile, specifier) {
+  const bases = specifier.startsWith('.')
+    ? [resolve(dirname(fromFile), specifier)]
+    : aliasTargets(fromFile, specifier);
+  for (const base of bases) {
+    const stem = base.replace(/\.[mc]?[jt]s$/, '');
+    const candidates = [base, `${stem}.ts`, `${stem}.mts`, `${base}.ts`, `${base}.mts`];
+    const store = candidates.find(
+      (path) => isStore(path) && existsSync(path) && statSync(path).isFile(),
+    );
+    if (store) return store;
+  }
+  return undefined;
+}
+
+const storeClients = new Map();
+
+/**
+ * Whether a store file on disk imports a generated client, by the same globs the linting rule was
+ * given. A bare specifier counts when it matches the globs as written (as clientMatcher has it) or
+ * when one of its tsconfig alias targets lies in them, so `$api/agents` finds `src/app/api/agents`. Remembered per path for as long as the file is unchanged (its mtime), so a lint run reads
+ * each store once and an editor's long-lived ESLint still sees an edit.
+ */
+export function storeImportsClient(store, clients = DEFAULT_CLIENTS, cwd = process.cwd()) {
+  const mtime = statSync(store).mtimeMs;
+  const key = JSON.stringify(clients);
+  const known = storeClients.get(store);
+  if (known && known.mtime === mtime && known.key === key) return known.result;
+  const matcher = clientMatcherFor(store, clients, cwd);
+  const result = importedSpecifiers(readFileSync(store, 'utf8')).some(
+    (s) =>
+      matcher.isClient(s) ||
+      (!s.startsWith('.') && aliasTargets(store, s).some((path) => matcher.isClient(path))),
+  );
+  storeClients.set(store, { mtime, key, result });
+  return result;
+}
 
 /** Where the routed components live, relative to the project root, unless a rule is told otherwise. */
 export const DEFAULT_ROUTES = 'src/app/routes';
@@ -161,16 +248,32 @@ const layoutDirs = new Map();
  */
 export function layoutAliasDir(root) {
   if (layoutDirs.has(root)) return layoutDirs.get(root);
+  const { paths, base } = compilerPaths(resolve(root, 'tsconfig.json'));
+  const target = paths?.[`${LAYOUT_ALIAS}/*`]?.[0];
+  const dir =
+    typeof target === 'string' && target.endsWith('/*')
+      ? resolve(base, target.slice(0, -2))
+      : undefined;
+  layoutDirs.set(root, dir);
+  return dir;
+}
+
+/**
+ * A tsconfig's `compilerOptions.paths` and the directory its targets are relative to (`baseUrl`
+ * when set, otherwise the config that holds `paths`), following relative `extends`: the nearest
+ * config that sets a value wins. `files` lists every config read, for a cache to watch.
+ */
+function compilerPaths(start) {
   let paths;
   let pathsBase;
   let baseUrl;
   const seen = new Set();
-  for (let config = resolve(root, 'tsconfig.json'); config && !seen.has(config);) {
+  for (let config = start; config && !seen.has(config);) {
     seen.add(config);
     const json = existsSync(config) ? parseJsonc(readFileSync(config, 'utf8')) : undefined;
     if (!json) break;
     const options = json.compilerOptions ?? {};
-    // The nearest config that sets a value wins; a relative path is relative to that config.
+    // A relative path is relative to the config that sets it.
     if (paths === undefined && options.paths) [paths, pathsBase] = [options.paths, dirname(config)];
     if (baseUrl === undefined && typeof options.baseUrl === 'string')
       baseUrl = resolve(dirname(config), options.baseUrl);
@@ -178,13 +281,58 @@ export function layoutAliasDir(root) {
     if (!parent?.startsWith('.')) break;
     config = resolve(dirname(config), parent.endsWith('.json') ? parent : `${parent}.json`);
   }
-  const target = paths?.[`${LAYOUT_ALIAS}/*`]?.[0];
-  const dir =
-    typeof target === 'string' && target.endsWith('/*')
-      ? resolve(baseUrl ?? pathsBase, target.slice(0, -2))
-      : undefined;
-  layoutDirs.set(root, dir);
-  return dir;
+  return { paths, base: baseUrl ?? pathsBase, files: [...seen] };
+}
+
+const aliasConfigs = new Map();
+
+/** The nearest tsconfig.json at or above `file`'s directory, not looking past its package root. */
+function nearestTsconfig(file) {
+  const stop = nearestPackage(file)?.dir;
+  for (let dir = dirname(resolve(file)); ; dir = dirname(dir)) {
+    const config = `${dir}${sep}tsconfig.json`;
+    if (existsSync(config)) return config;
+    if (dir === stop || dirname(dir) === dir) return undefined;
+  }
+}
+
+const mtimeOf = (path) => (existsSync(path) ? statSync(path).mtimeMs : -1);
+
+/**
+ * The absolute paths a path-alias specifier may stand for, by the `paths` of the tsconfig nearest
+ * to `fromFile`: `$core/x/y.store` under `"$core/*": ["./src/app/core/*"]` is
+ * `<config dir>/src/app/core/x/y.store`, an exact pattern maps as written, and every target of a
+ * matching pattern is a candidate. Empty when no pattern matches or there is no tsconfig. The
+ * config is read again only when it, or one it extends, changes.
+ */
+export function aliasTargets(fromFile, specifier) {
+  const config = nearestTsconfig(fromFile);
+  if (!config) return [];
+  let known = aliasConfigs.get(config);
+  if (!known || known.files.some(([path, mtime]) => mtimeOf(path) !== mtime)) {
+    const { paths, base, files } = compilerPaths(config);
+    known = { paths: paths ?? {}, base, files: files.map((path) => [path, mtimeOf(path)]) };
+    aliasConfigs.set(config, known);
+  }
+  const found = [];
+  for (const [pattern, targets] of Object.entries(known.paths)) {
+    if (!Array.isArray(targets)) continue;
+    const star = pattern.indexOf('*');
+    let rest;
+    if (star < 0) {
+      if (pattern !== specifier) continue;
+      rest = '';
+    } else {
+      const [prefix, suffix] = [pattern.slice(0, star), pattern.slice(star + 1)];
+      if (!specifier.startsWith(prefix) || !specifier.endsWith(suffix)) continue;
+      if (specifier.length < prefix.length + suffix.length) continue;
+      rest = specifier.slice(prefix.length, specifier.length - suffix.length);
+    }
+    for (const target of targets) {
+      if (typeof target === 'string') found.push(resolve(known.base, target.replace('*', rest)));
+    }
+  }
+  return found;
 }
 
 const inside = (dir) => (path) => dir !== undefined && (path === dir || path.startsWith(`${dir}/`));
