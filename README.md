@@ -397,13 +397,147 @@ the first. Pass `true` for that default name or a string for your own, once you 
 the only resource using it.
 
 **The status sets are wider than what an online app reaches.** `qitsStatus()` is `QitsResourceStatus`
-— Angular's own `status()` plus `'cached'` (served from a local copy) and `'offline'` — because
-Angular's `status()` is a closed union a library cannot extend; `qitsResource` keeps mirroring
-`status()` online and never reaches the two extra values. `QitsMutationStatus` similarly adds
-`'pending'` (queued while offline) and `'conflict'` (the provider refused a queued write) beside
-the ordinary `'idle'` / `'running'` / `'done'` / `'error'`, equally unreached online. Both extra
-pairs exist now so that templates and the offline lint rules can be written against the full set
-ahead of time; the offline behaviour itself is qits-2149.
+— Angular's own `status()` plus `'cached'` (served from the local store) and `'offline'` (no network,
+nothing stored) — because Angular's `status()` is a closed union a library cannot extend.
+`QitsMutationStatus` similarly adds `'pending'` (queued in the outbox) and `'conflict'` (the server
+refused the write because the record changed) beside the ordinary `'idle'` / `'running'` / `'done'` /
+`'error'`. An online-only resource or mutation, and every one in an app without `provideQitsOffline`,
+never reaches the extra values; the next section says when the others do.
+
+### Offline mode: `provideQitsOffline`
+
+Opt-in per app (ticket qits-2149), for offline-first PWAs. The server stays authoritative: a queued
+write that meets a record someone else changed is refused with a conflict for the person to resolve,
+never last-write-wins. It targets the conventions of `qits-offline-core` (qits-2148, in
+`qits-integrations-quarkus-javalib`): `ETag` / `If-Match: "<version>"`, `Idempotency-Key` replay,
+`ChangesPage` collection reads with `since` cursors and tombstones, and problem bodies with
+`current` / `currentVersion`.
+
+```ts
+// app.config.ts
+providers: [
+  provideQitsBearerSignIn({ clientId: 'my-app' }),
+  provideQitsOffline({ project: 'my-project', operations: [RENAME_THING, DELETE_THING] }),
+];
+```
+
+- **The store** is IndexedDB, one database per user, `qits-offline:<project>:<user>`, opened at
+  start-up. `user` defaults to the `sub` claim of `QitsTokens`' access token (`QitsTokens.subject()`);
+  pass `user: () => …` without the bearer sign-in. No user means no store: `cache` resources act
+  `online-only` and `queue` mutations refuse with `QitsOfflineError('signed-out')`. Another user
+  signing in switches to their database.
+- **`operations`** lists every write the outbox may replay after a page reload; a `qitsMutation`
+  registers its own operation as it is created. An entry whose operation nobody registered waits,
+  and shows `waiting: 'unknown-operation'` in `outbox()`.
+
+Without `provideQitsOffline` every `offline` option below is inert, and resources and mutations behave
+exactly as described above.
+
+**Resources: `offline: 'cache' | 'online-only'`** (default `'online-only'`).
+
+```ts
+readonly thing = qitsResource(GET_THING, () => ({ path: { id: this.id() } }), { offline: 'cache' });
+readonly things = qitsResource(LIST_THINGS, () => ({}), { offline: 'cache' });
+```
+
+A `cache` resource answers the stored value at once, `qitsStatus()` `'cached'` and `cachedAt()` its
+time, then fetches; the fresh answer is stored and the resource becomes `'resolved'`. When the fetch
+fails on the network (it rejects with anything but a `QitsApiError`, or `navigator.onLine` is `false`)
+the stored value stays at `'cached'`, with `reloadError()` saying why; with nothing stored the resource
+is `'offline'`, its value undefined and no `error()`. A `QitsApiError` behaves as it does online. The
+`online` window event reloads every live `cache` resource.
+
+An answer of the `ChangesPage` shape (`items[]`, `deleted[]`, `nextCursor`, `hasMore`) is kept as
+records by `id` and `version`. The next load sends `query.since` with the stored cursor and follows
+`hasMore` until it is `false`; an item replaces a stored record only at the same or a higher
+version, and a tombstone deletes one at the same or a higher version. The resource's value is the
+page shape over the whole merged collection: every record in id order (numbers before strings, as
+IndexedDB orders keys), `deleted: []`, `hasMore: false`, `nextCursor` the stored cursor. A 410
+`urn:qits:problem:cursor-expired` drops the stored collection and reads it again from scratch.
+
+**Mutations: `offline: 'queue' | 'online-only'`** (default `'online-only'`), and `record`.
+
+```ts
+readonly rename = qitsMutation(RENAME_THING, {
+  offline: 'queue',
+  affects: () => [this.thing, this.things],
+  record: (p) => ({ change: 'update', id: p.path.id, fields: p.body }),
+});
+```
+
+`record(params)` says which record a run touches: `{ change: 'create', fields }`,
+`{ change: 'update', id, fields }` or `{ change: 'delete', id }`. With it, an update or a delete sends
+`If-Match: "<version>"` with the version the `affects` resources have stored for that id (unless the
+params carry an `If-Match` already), in either mode: a qits-2148 operation answers 428 to an update
+without one. Each run makes one `Idempotency-Key`, and every send of that write carries it, so a
+lost answer cannot apply twice.
+
+A `queue` run goes to the outbox when the browser is offline, when the outbox already holds entries
+(order is kept), or when the direct send fails on the network. `run()` then resolves `undefined` at
+once and `status()` is `'pending'`. An `online-only` run while `navigator.onLine` is `false` rejects
+with `QitsOfflineError('offline')`.
+
+While an entry is `pending` (or `sending`) it is laid over the stored answers of the `affects`
+resources: they show the change at once, still `'cached'`, and keep showing it across a page reload.
+A create appears under the id `local:<key>` until the server's answer replaces it. The store itself
+only ever holds what the server answered, so a refused or dropped write vanishes from the page by
+itself and an optimistic change never overwrites the server.
+
+The outbox sends one entry at a time, oldest first: at start-up, after each enqueue, on the `online`
+event, and after a backoff (1 s, doubling to 60 s) following a network failure or a 5xx. One tab sends
+at a time (`navigator.locks`, where the browser has it). An entry waits behind an earlier `conflict` or
+`failed` entry for the same record; other records go on. What the server answers:
+
+| Answer                                     | The entry                                 | The store and the mutation                                     |
+| ------------------------------------------ | ----------------------------------------- | -------------------------------------------------------------- |
+| 2xx                                        | removed                                   | the answer is stored, `affects` reload, the run is `'done'`    |
+| 412 `urn:qits:problem:stale-version`       | `conflict`, `{ current, currentVersion }` | the record reverts to `current`, the run is `'conflict'`       |
+| 404 to an update or a delete               | `conflict`, `current: null`               | the record is removed locally, the run is `'conflict'`         |
+| 401                                        | stays `pending`                           | the outbox pauses until the next token refresh or sign-in      |
+| any other 4xx (428, 422, a validation 400) | `failed`, with its `QitsApiError`         | the change is reverted, `affects` reload, the run is `'error'` |
+| 5xx, or the network                        | stays `pending`                           | sent again after the backoff, with the same key                |
+
+A later write to a record is re-based when an earlier one lands: its `If-Match` moves to the version
+the server answered, and a write to a `local:<key>` record gets the created id.
+
+**Resolving a conflict.** `QitsOffline` holds the outbox:
+
+- `outbox()`: every queued write, `QitsOutboxEntry` (`seq`, `key`, `operation`, `params` as plain
+  JSON, `recordId`, `change`, `baseVersion`, `enqueuedAt`, `state`, `conflict`, `error`, `waiting`);
+  `sending()`: whether one is on the wire;
+- `retry(seq)`: a `conflict` entry is re-based on `currentVersion` (a new `If-Match`), laid over the
+  store again and sent; it keeps its key, which the server freed when it refused. A `failed` entry is
+  resent as it is;
+- `drop(seq)`: removes the entry and reloads its resources, so the server's record stays.
+
+A mutation's `conflict()` is its latest run's conflict, a direct send's (online) included.
+
+```ts
+readonly offline = inject(QitsOffline);
+readonly conflicts = computed(() => this.offline.outbox().filter((e) => e.state === 'conflict'));
+// "Theirs: {{ e.conflict.current.name }}" with buttons calling offline.retry(e.seq) / offline.drop(e.seq)
+```
+
+**Sign-out.** `QitsOffline.signOut()` answers `{ signedOut: false, pending: n }` and changes nothing
+while the outbox holds entries: show that as the warning, and call `signOut({ discardPending: true })`
+once the person agrees to lose them. Otherwise it deletes the user's database (stored answers and
+outbox), calls `QitsTokens.logout()` when the bearer sign-in is provided, and answers
+`{ signedOut: true, pending: n }`. `QitsTokens.logout()` on its own, which also runs when the idp
+refuses a refresh, clears nothing: an expired refresh token offline must not throw the outbox away.
+
+**The PWA reload guard.** A reload while a write is on the wire can lose its answer. With
+`@qits/angular/pwa`, add the guard (the main entry does not import the pwa entry; the guard is a plain
+function of the same shape):
+
+```ts
+{ provide: QITS_PWA_RELOAD_GUARDS, multi: true, useFactory: qitsOfflineReloadGuard },
+```
+
+It refuses with `'the outbox is sending'` while `sending()` is true.
+
+Not covered yet: caching API answers in the service worker, and a sign-in on an offline relaunch
+(`QitsTokens` keeps the tokens in `sessionStorage`, so a PWA started fresh while offline knows no user;
+qits-2169).
 
 ## What a page shows: data marks
 
@@ -580,7 +714,8 @@ reloads unless the person presses Reload:
 }
 ```
 
-qits-2149's outbox will provide a guard that refuses while it is sending.
+`qitsOfflineReloadGuard` (see [Offline mode](#offline-mode-provideqitsoffline)) is the outbox's own:
+it refuses while a queued write is on the wire.
 
 `<qits-pwa-update-prompt />` shows that state. It is hidden while `current`; at `ready` it shows
 "A new version is ready" with **Reload** (`apply()`) and **Later**, which hides it until the next

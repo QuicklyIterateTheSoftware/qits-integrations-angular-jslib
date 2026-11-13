@@ -44,6 +44,27 @@ export type {
   QitsReloadable,
 } from './lib/resources/qits-mutation';
 export type { QitsMutationStatus, QitsResourceStatus } from './lib/resources/status';
+export {
+  provideQitsOffline,
+  QitsOffline,
+  qitsOfflineReloadGuard,
+} from './lib/offline/qits-offline';
+export { QitsOfflineError } from './lib/offline/offline-types';
+export type {
+  QitsConflict,
+  QitsMutationOfflinePolicy,
+  QitsOfflineFailure,
+  QitsOfflineOperation,
+  QitsOfflineOptions,
+  QitsOutboxEntry,
+  QitsOutboxParams,
+  QitsOutboxState,
+  QitsRecordChange,
+  QitsRecordId,
+  QitsResourceOfflinePolicy,
+  QitsSignOutOptions,
+  QitsSignOutResult,
+} from './lib/offline/offline-types';
 export { provideQitsBearerSignIn } from './lib/sign-in/provide-qits-bearer-sign-in';
 export {
   CALLBACK_PATH,

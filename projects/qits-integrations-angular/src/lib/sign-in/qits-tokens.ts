@@ -6,6 +6,8 @@ import {
   Injectable,
   InjectionToken,
   PLATFORM_ID,
+  signal,
+  type Signal,
 } from '@angular/core';
 import { randomToken, s256Challenge } from './pkce';
 import { CALLBACK_PATH, QITS_SIGN_IN } from './sign-in-settings';
@@ -89,7 +91,10 @@ interface TokenAnswer {
  *   flight: a second caller gets the first one's answer.
  * - The tokens live in memory and in `sessionStorage`, so a reload keeps them. A refresh runs on
  *   its own {@link REFRESH_AHEAD_MS} before the access token expires.
- * - `logout()` forgets the tokens.
+ * - `logout()` forgets the tokens. It runs on its own when the idp refuses a refresh, so it is not a
+ *   sign-out: the offline store (`QitsOffline.signOut`) stays where it is.
+ * - `subject()` is the access token's `sub` claim, and `renewals()` counts the tokens the idp has
+ *   issued on this page (a sign-in or a refresh): the offline outbox resumes on it after a 401.
  */
 @Injectable()
 export class QitsTokens {
@@ -105,6 +110,14 @@ export class QitsTokens {
   private inflight: Promise<string | null> | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private redirecting = false;
+  readonly #accessToken = signal<string | null>(null);
+  readonly #renewals = signal(0);
+
+  /**
+   * How many times the idp issued tokens on this page, a sign-in or a refresh. Tokens read back
+   * from `sessionStorage` do not count.
+   */
+  readonly renewals: Signal<number> = this.#renewals.asReadonly();
 
   constructor() {
     inject(DestroyRef).onDestroy(() => clearTimeout(this.timer));
@@ -206,10 +219,21 @@ export class QitsTokens {
     return this.inflight;
   }
 
+  /**
+   * The `sub` claim of the access token held now, decoded without verification (the token is
+   * only ever checked by the services it is sent to); null with no token or no claim. A signal
+   * read, so it is reactive.
+   */
+  subject(): string | null {
+    const token = this.#accessToken();
+    return token ? subjectOf(token) : null;
+  }
+
   /** Forgets the tokens, here and in `sessionStorage`. */
   logout(): void {
     clearTimeout(this.timer);
     this.tokens = null;
+    this.#accessToken.set(null);
     if (this.browser) remove(this.tokensKey);
   }
 
@@ -255,6 +279,7 @@ export class QitsTokens {
     if (!tokens) return null;
     this.keep(tokens);
     write(this.tokensKey, tokens);
+    this.#renewals.update((n) => n + 1);
     return tokens;
   }
 
@@ -265,9 +290,28 @@ export class QitsTokens {
       return;
     }
     this.tokens = tokens;
+    this.#accessToken.set(tokens.accessToken);
     if (!tokens.refreshToken) return;
     const wait = Math.max(0, tokens.accessExpiresAt - REFRESH_AHEAD_MS - Date.now());
     this.timer = setTimeout(() => void this.refresh(), wait);
+  }
+}
+
+/** The `sub` claim of a JWT's payload, unverified; null when it does not decode. */
+function subjectOf(token: string): string | null {
+  const payload = token.split('.')[1];
+  if (!payload) return null;
+  try {
+    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const json = new TextDecoder().decode(
+      Uint8Array.from(atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')), (c) =>
+        c.charCodeAt(0),
+      ),
+    );
+    const sub = (JSON.parse(json) as { sub?: unknown }).sub;
+    return typeof sub === 'string' && sub ? sub : null;
+  } catch {
+    return null;
   }
 }
 
