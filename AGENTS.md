@@ -120,7 +120,10 @@ sign-in, `core/auth/dev-*.ts`, with the `dev` naming dropped):
   interceptors only enter through `provideHttpClient(withInterceptors([...]))`.
 - `qits-tokens.ts` — PKCE flow, `sessionStorage` store keyed by client id, refresh ahead of
   expiry, **one refresh in flight** (the idp rotates refresh tokens and revokes the family on
-  reuse), one sign-in redirect per page.
+  reuse), one sign-in redirect per page. The `sub` alone is remembered in `localStorage`
+  (`userKey`, qits-2169) on every issue; `user()` falls back to it, so an offline relaunch opens the
+  offline store and `QitsSession` admits offline, signing in on `online`. `logout()` keeps it (a
+  refused refresh is not a sign-out); only `forgetUser()` (`QitsOffline.signOut`) drops it.
 - `sign-in-settings.ts` — `platformDomainOf()` (first label `qits` = apex) and `isPlatformUrl()`
   (same origin, or `https` at/under the platform domain): the only hosts that see the bearer.
 - `bearer-web-socket.ts` / `fetch-event-source.ts` — the `qits.bearer` subprotocol offer and the

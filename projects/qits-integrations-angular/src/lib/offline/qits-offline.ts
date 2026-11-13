@@ -63,10 +63,11 @@ export class QitsOffline {
    * Signs out on this device. With writes in the outbox and no `discardPending`, it changes
    * nothing and answers `{ signedOut: false, pending }`: show that as the warning, and call again
    * with `discardPending: true` once the person agrees to lose them. Otherwise it deletes the
-   * user's store (stored answers and outbox), forgets the tokens when `provideQitsBearerSignIn`
-   * is there, and answers `{ signedOut: true, pending }`.
+   * user's store (stored answers and outbox), forgets the tokens and the remembered user when
+   * `provideQitsBearerSignIn` is there, and answers `{ signedOut: true, pending }`.
    *
-   * `QitsTokens.logout()` alone, which also runs when the idp refuses a refresh, clears nothing.
+   * `QitsTokens.logout()` alone, which also runs when the idp refuses a refresh, clears nothing:
+   * the remembered user keeps the store open.
    */
   async signOut(options: QitsSignOutOptions = {}): Promise<QitsSignOutResult> {
     await this.sync.database();
@@ -74,6 +75,7 @@ export class QitsOffline {
     if (pending > 0 && options.discardPending !== true) return { signedOut: false, pending };
     await this.sync.deleteStore();
     this.tokens?.logout();
+    this.tokens?.forgetUser();
     return { signedOut: true, pending };
   }
 

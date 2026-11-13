@@ -8,12 +8,21 @@ import {
   QitsTokens,
   REFRESH_AHEAD_MS,
   tokensKey,
+  userKey,
 } from './qits-tokens';
 import { QITS_SIGN_IN } from './sign-in-settings';
 
 const CLIENT_ID = 'qits-landing-dev';
 const TOKENS_KEY = tokensKey(CLIENT_ID);
 const PENDING_PREFIX = pendingKey(CLIENT_ID, '');
+const USER_KEY = userKey(CLIENT_ID);
+
+/** An unsigned JWT with the `sub` claim, as the idp's access token carries it. */
+function jwt(sub: string): string {
+  const part = (value: object) =>
+    btoa(JSON.stringify(value)).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+  return `${part({ alg: 'RS256' })}.${part({ sub, exp: 4102444800 })}.signature`;
+}
 
 /** The idp's token answer, as the idp sends it (fields per the idp's `/idp/token`). */
 function answer(access: string, refresh: string, expiresIn = 900): Response {
@@ -82,10 +91,13 @@ describe('QitsTokens', () => {
 
   beforeEach(() => {
     sessionStorage.clear();
+    localStorage.clear();
     assign.mockReset();
     posts = [];
     replies = [];
   });
+
+  afterEach(() => localStorage.clear());
 
   it('sends the visitor to the authorize page with an S256 challenge of the kept verifier', async () => {
     const authorize = await login(tokens(), '/projects/qits/work');
@@ -270,5 +282,70 @@ describe('QitsTokens', () => {
     service.logout();
     expect(await service.accessToken()).toBeNull();
     expect(sessionStorage.getItem(TOKENS_KEY)).toBeNull();
+  });
+
+  it('remembers the sub alone in localStorage when the idp issues tokens, on sign-in and refresh', async () => {
+    const service = tokens();
+    await signIn(service, jwt('alice'), 'R1');
+    expect(localStorage.getItem(USER_KEY)).toBe('alice');
+    expect(service.user()).toBe('alice');
+    localStorage.clear();
+    replies.push(async () => answer(jwt('alice'), 'R2'));
+    await service.refresh();
+    expect(localStorage.getItem(USER_KEY)).toBe('alice');
+  });
+
+  it("replaces the remembered sub with another user's", async () => {
+    const service = tokens();
+    await signIn(service, jwt('alice'), 'R1');
+    replies.push(async () => answer(jwt('bob'), 'R2'));
+    await service.refresh();
+    expect(localStorage.getItem(USER_KEY)).toBe('bob');
+    expect(service.user()).toBe('bob');
+  });
+
+  it('keeps the remembered sub when the idp refuses the refresh', async () => {
+    const service = tokens();
+    await signIn(service, jwt('alice'), 'R1');
+    replies.push(async () => new Response('{"error":"invalid_grant"}', { status: 400 }));
+    expect(await service.refresh()).toBeNull();
+    expect(service.subject()).toBeNull();
+    expect(service.user()).toBe('alice');
+    expect(localStorage.getItem(USER_KEY)).toBe('alice');
+  });
+
+  it('answers the remembered sub as the user without tokens, after a relaunch', async () => {
+    await signIn(tokens(), jwt('alice'), 'R1');
+    TestBed.resetTestingModule();
+    sessionStorage.clear();
+    const service = tokens();
+    expect(await service.accessToken()).toBeNull();
+    expect(service.subject()).toBeNull();
+    expect(service.user()).toBe('alice');
+  });
+
+  it('answers no user with neither a token nor a remembered sub', () => {
+    expect(tokens().user()).toBeNull();
+  });
+
+  it('forgets the remembered sub on forgetUser, and keeps the tokens', async () => {
+    const service = tokens();
+    await signIn(service, jwt('alice'), 'R1');
+    service.forgetUser();
+    expect(localStorage.getItem(USER_KEY)).toBeNull();
+    expect(sessionStorage.getItem(TOKENS_KEY)).not.toBeNull();
+    expect(service.user()).toBe('alice');
+    service.logout();
+    expect(service.user()).toBeNull();
+  });
+
+  it('never writes a token to localStorage', async () => {
+    const service = tokens();
+    await signIn(service, jwt('alice'), 'R1');
+    replies.push(async () => answer(jwt('alice'), 'R2'));
+    await service.refresh();
+    const stored = Object.keys(localStorage).map((key) => [key, localStorage.getItem(key)]);
+    expect(stored).toEqual([[USER_KEY, 'alice']]);
+    expect(JSON.stringify(stored)).not.toMatch(/R1|R2|signature/);
   });
 });
