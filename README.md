@@ -632,7 +632,65 @@ only when non-empty; a manifest without it, or an older one written before this 
 `[]`. See [the manifest](#screenshots-frozen-as-html-freezescreenshots-and-the-freezes-option)
 below.
 
-A lint rule that holds an app's templates to marking what it shows is qits-2142, not released yet.
+### Holding a page to its marks: `qits/data-through-fields`
+
+The compiler checks that a mark names a real field; it cannot see data rendered with no mark at all,
+a mark naming a field the element does not show, or a computed value marked as a plain field. The
+lint rule `qits/data-through-fields` (ticket qits-2142, see [the rules table](#lint-rules-qitsangulareslint))
+does: it traces each component template's API data from its roots — a `qitsResource` field's
+`value()`, or an `input()` / `model()` whose type comes from the generated clients — and wants
+every rendered piece of it under a `qitsField` that names it, inside a `qitsEntity` or
+`qitsEntityList`:
+
+```ts
+@Component({
+  template: `
+    <ul [qitsEntityList]="agents">
+      @for (agent of items(); track agent.agentId) {
+        <li [qitsEntity]="agent" entityKey="agentId">
+          <span [fieldOf]="agent" qitsField="owner.name">{{ agent.owner?.name }}</span>
+          <span [fieldOf]="agent" [qitsField]="{ derived: ['createdAt'] }">
+            {{ agent.createdAt | date }}
+          </span>
+        </li>
+      }
+    </ul>
+  `,
+})
+export class AgentsPage {
+  readonly agents = qitsResource(LIST_AGENTS, () => ({}));
+  // A computed over one plain path is that path: its items are still the list's entities.
+  readonly items = computed(() => this.agents.value()?.items ?? []);
+}
+```
+
+`agent.owner?.name` is a plain path, so its mark is the field path `owner.name`; the pipe makes
+`createdAt` derived, so its mark lists the paths it reads. A bound mark the rule cannot read
+(`[qitsField]="mark()"`) is trusted for the path. It is off in `recommended`: an app turns it on
+for the routes whose templates carry the marks, and it needs typed linting (the `input()` roots
+are found by their type), so the same override sets `projectService`; without it the rule reports
+that once per component instead of passing:
+
+```js
+// eslint.config.mjs
+import tseslint from 'typescript-eslint';
+export default [
+  ...yourConfig,
+  ...qits.configs.recommended,
+  {
+    files: ['src/app/routes/agents/**/*.ts'],
+    languageOptions: {
+      parser: tseslint.parser,
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+    },
+    rules: { 'qits/data-through-fields': 'error' },
+  },
+];
+```
+
+Its options: `clients` (the generated clients' globs, as the other client rules take them),
+`resource` (default `qitsResource`) and `display` (the tag prefixes whose inputs show their value,
+default `['ui-']`).
 
 ## Installable offline shell: `@qits/angular/pwa`
 
@@ -1313,6 +1371,7 @@ export default [...yourConfig, ...qits.configs.recommended];
 | `qits/consume-client-calls`                  | In a store, every call to a generated client function is the first argument of `consume(call, paths)`; awaiting it on its own, `.then`, passing the promise or the function elsewhere, and `…Resource` helpers (no promise to wrap) are reported. In a `*.operations.ts` file the client function is never called at all: the only accepted use is `call: getX` in the object literal passed to `qitsOperation({ ... })` — calling it, wrapping it in `consume`, or passing it anywhere else is reported there instead. Option `consume` renames the wrapper, `operation` renames `qitsOperation`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `qits/store-has-pact`                        | A store or operations file that imports a generated client has its pact spec beside it: `<name>.store.pact.spec.ts` for a store, `<name>.operations.pact.spec.ts` for an operations file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `qits/reads-through-resources`               | **Off** in `recommended`: an app turns it on, route by route, as it migrates (see [API reads and writes](#api-reads-and-writes-qitsresource-and-qitsmutation)). Reports three ways round `qitsResource` / `qitsMutation`: using a generated client function directly, called or not (a type-only import is fine); calling `qitsOperation(...)` anywhere but a `*.operations.ts` file, where no pact spec stands beside it; and `inject(X)` of a store whose own file imports a generated client, which means the data still arrives through the store's calls rather than through an operation (a store that imports no client — UI state only — is fine). `X`'s import is followed to a `*.store.ts` file on disk, relative or through a tsconfig path alias (`$core/…`). Specs and the generated clients themselves are not read, and inside an operations file the client function itself is `consume-client-calls`' business, not this rule's. Options `clients` / `operation` (default `qitsOperation`), shared with the other client rules.                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `qits/data-through-fields`                   | **Off** in `recommended`: an app turns it on, route by route, once its templates carry the data marks, with typed linting (see [Holding a page to its marks](#holding-a-page-to-its-marks-qitsdata-through-fields)). In a component's template (inline or `templateUrl`), the API data it renders — read from a `qitsResource` field's `value()` (option `resource`) or from an `input()` / `model()` whose type, a union member, an array element or a type argument of it, is declared under `clients` — sits under a `qitsField` inside a `qitsEntity` / `qitsEntityList`. Interpolations, `[textContent]` / `[innerText]` / `[innerHTML]`, and every input of an element whose tag starts with a `display` prefix (default `['ui-']`) render; class, style, `attr.*`, the marks' own inputs and control-flow conditions do not. Reported: rendered data with no `qitsField` at or above it; a `qitsField` with no entity mark at or above it in the same template; a pipe, call, operator, template literal, ternary or non-alias `computed` under a plain path mark (it needs `{ derived: [...] }`); a literal path naming another field than the plain path shown; a literal `{ derived: [...] }` missing a path the expression reads. A `computed(() => <plain path>)` (or `linkedSignal`) is that path, an `@for` item an entity of its own. Without typed linting it says so once per component class. Options `clients` / `resource` (default `qitsResource`) / `display`.                                  |
 | `qits/pact-names`                            | In a `*.pact.spec.ts`, `new PactV4({ consumer, provider })` and `addGoldenInteraction(…, { provider, trigger: { app } })`: the consumer and trigger app equal the nearest `package.json` `name`; the provider is a repository name ending in a role (`-service`, `-frontend`, `-app`, `-daemon`, `-oci`, `-cli`, `-javalib`, `-jslib`). Give names as string literals or consts, or the rule cannot check them.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `qits/page-location`                         | A `*.page.ts` or `*.layout.ts` file lives under the routes directory (a `*.layout.ts` also under the `$layout` alias directory, when the project has one), and every component class under the routes directory lives in such a file. Other files there (a resolver, a guard, a `*.routes.ts`) and specs are fine.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `qits/page-suffix`                           | The exported component in a `*.page.ts` ends in `Page`, the one in a `*.layout.ts` ends in `Layout`, and a component named `…Page` / `…Layout` lives in such a file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |

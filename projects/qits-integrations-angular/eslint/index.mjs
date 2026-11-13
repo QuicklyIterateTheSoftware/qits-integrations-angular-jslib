@@ -10,6 +10,7 @@
 import browserSpecDataFromGoldenMasters from './rules/browser-spec-data-from-golden-masters.mjs';
 import clientOnlyInStores from './rules/client-only-in-stores.mjs';
 import consumeClientCalls from './rules/consume-client-calls.mjs';
+import dataThroughFields from './rules/data-through-fields.mjs';
 import navigationThroughOutcomes from './rules/navigation-through-outcomes.mjs';
 import pactNames from './rules/pact-names.mjs';
 import pageHasScreenshots from './rules/page-has-screenshots.mjs';
@@ -46,6 +47,9 @@ const plugin = {
     // Off in recommended: an app turns it on with a `files` glob for each route that has moved to
     // qitsResource / qitsMutation.
     'reads-through-resources': readsThroughResources,
+    // Off in recommended: an app turns it on with a `files` glob for each route whose templates
+    // carry the data marks, and it needs typed linting (parserOptions.projectService).
+    'data-through-fields': dataThroughFields,
   },
   configs: {},
 };
