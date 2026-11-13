@@ -24,6 +24,7 @@ import type { TestRequest } from '@angular/common/http/testing';
 import { TestBed, getTestBed } from '@angular/core/testing';
 import {
   ɵdeleteQitsOfflineStores,
+  ɵpinQitsOfflineCacheClock,
   ɵqitsOfflineState,
   type QitsOperationIdentity,
   type ɵQitsOfflineState,
@@ -47,15 +48,56 @@ export type ShotNetwork = 'ONLINE' | 'OFFLINE';
 export type ShotOutboxState = 'PENDING' | 'SENDING' | 'CONFLICT' | 'FAILED';
 
 /**
+ * The instant a {@link seedOfflineStore} entry says it was stored when the spec names none, and
+ * the one every cache write stamps under `freezeScreenshots({ offline: true })` (ticket qits-2153):
+ * fixed, so a freeze's `cached` list is the same on every run.
+ */
+export const SEEDED_CACHED_AT = '2026-01-01T00:00:00.000Z';
+
+/** One outbox entry at a shot (ticket qits-2151; `recordId`, `currentVersion` qits-2153). */
+export interface ShotOutboxEntry {
+  /** `<provider>#<operationId>`. */
+  readonly operation: string;
+  readonly state: ShotOutboxState;
+  /** The record the write touches, as a string; null when it names none. */
+  readonly recordId: string | null;
+  /**
+   * Only on a `CONFLICT` entry: the version the server answered with, as a string; null when it
+   * named none (a 404 to an update or a delete).
+   */
+  readonly currentVersion?: string | null;
+}
+
+/** One operation whose shown value came from the local store at a shot (ticket qits-2153). */
+export interface ShotCachedRead {
+  /** `<provider>#<operationId>`. */
+  readonly operation: string;
+  /** When the shown value was stored, an ISO instant; the latest when several resources show it. */
+  readonly cachedAt: string;
+}
+
+/**
  * The page's offline layer at a shot (`freezeScreenshots({ offline: true })`): the network, the
- * outbox, and which `cache` resources and `queue` mutations were live. Operations are named
- * `<provider>#<operationId>`. Without `provideQitsOffline` the lists are empty.
+ * outbox, which `cache` resources and `queue` mutations were live, and which operations' shown
+ * values came from the store. Operations are named `<provider>#<operationId>`. Without
+ * `provideQitsOffline` the lists are empty.
  */
 export interface ShotConnectivity {
   readonly network: ShotNetwork;
-  readonly outbox: readonly { readonly operation: string; readonly state: ShotOutboxState }[];
+  readonly outbox: readonly ShotOutboxEntry[];
   readonly cacheResources: readonly string[];
+  /** Sorted by operation; empty when no resource shows a stored value. */
+  readonly cached: readonly ShotCachedRead[];
   readonly queueMutations: readonly string[];
+}
+
+/** What {@link seedOfflineStore} takes beside the recording. */
+export interface SeedOfflineStoreOptions {
+  /**
+   * When the entry says it was stored: what the page's `cachedAt()` and the freeze's `cached`
+   * show. Default {@link SEEDED_CACHED_AT}.
+   */
+  readonly cachedAt?: Date | string;
 }
 
 /** What {@link offlineShotsNotTaken} takes. */
@@ -121,11 +163,14 @@ export function restoreNetwork(): void {
 }
 
 /**
- * Deletes every `qits-offline:*` database and puts the real network back: what
- * `freezeScreenshots({ offline: true })` does before every test.
+ * Deletes every `qits-offline:*` database, puts the real network back and pins the instant cache
+ * writes stamp to {@link SEEDED_CACHED_AT}: what `freezeScreenshots({ offline: true })` does before
+ * every test. The pin keeps a freeze's `cached` the same on every run when the page stored an
+ * answer itself (a flushed read, a conflict's record), not only through {@link seedOfflineStore}.
  */
 export async function resetOfflineState(): Promise<void> {
   restoreNetwork();
+  ɵpinQitsOfflineCacheClock(new Date(SEEDED_CACHED_AT));
   await ɵdeleteQitsOfflineStores();
 }
 
@@ -151,15 +196,27 @@ const operationName = (op: QitsOperationIdentity) => `${op.provider}#${op.operat
  * a recording is named in the current test's records, so the freeze names it as it names a flushed
  * one. Needs `provideQitsOffline` in the TestBed (it creates the test module) and a signed-in user.
  *
+ * `options.cachedAt` (a `Date` or an ISO string) is when the entry says it was stored, what the
+ * page's `cachedAt()` and the freeze's `cached` show; without it the fixed
+ * {@link SEEDED_CACHED_AT}, so the freeze is the same on every run.
+ *
  * Seeding by flushing the recordings online and then calling {@link goOffline} works as well.
  */
 export async function seedOfflineStore(
   operation: QitsOperationIdentity,
   params: unknown,
   body: unknown,
+  options: SeedOfflineStoreOptions = {},
 ): Promise<void> {
+  const given = options.cachedAt ?? SEEDED_CACHED_AT;
+  const cachedAt = given instanceof Date ? new Date(given.getTime()) : new Date(given);
+  if (Number.isNaN(cachedAt.getTime())) {
+    throw new Error(
+      `seedOfflineStore: cachedAt must be a Date or an ISO instant, not ${JSON.stringify(given)}.`,
+    );
+  }
   ɵnoteShownRecording(body, `body seedOfflineStore stores for ${operationName(operation)}`);
-  await testBedOffline('seedOfflineStore').store(operation, params, body);
+  await testBedOffline('seedOfflineStore').store(operation, params, body, cachedAt);
 }
 
 /**
@@ -264,20 +321,26 @@ function testBedInjector(): Injector | undefined {
 
 /**
  * The page's offline layer now, as a freeze records it: the network from `navigator.onLine` (not
- * declared by the spec, so it cannot say otherwise than the page), and the TestBed's outbox and
- * live `cache` resources and `queue` mutations; empty lists without a test module or without
- * `provideQitsOffline`.
+ * declared by the spec, so it cannot say otherwise than the page), and the TestBed's outbox, live
+ * `cache` resources and `queue` mutations, and the operations whose shown value the store answered
+ * (`cached`); empty lists without a test module or without `provideQitsOffline`.
  */
 export function shotConnectivity(): ShotConnectivity {
   const injector = testBedInjector();
   const state = injector ? ɵqitsOfflineState(injector) : null;
   return {
     network: navigator.onLine === false ? 'OFFLINE' : 'ONLINE',
-    outbox: (state?.outbox ?? []).map(({ operation, state: s }) => ({
+    outbox: (state?.outbox ?? []).map(({ operation, state: s, recordId, currentVersion }) => ({
       operation,
       state: s.toUpperCase() as ShotOutboxState,
+      recordId,
+      ...(s === 'conflict' ? { currentVersion: currentVersion ?? null } : {}),
     })),
     cacheResources: [...(state?.cacheResources ?? [])],
+    cached: (state?.cached ?? []).map(({ operation, cachedAt }) => ({
+      operation,
+      cachedAt: cachedAt.toISOString(),
+    })),
     queueMutations: [...(state?.queueMutations ?? [])],
   };
 }

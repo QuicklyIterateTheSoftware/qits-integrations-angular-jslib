@@ -18,6 +18,7 @@ import {
   goOnline,
   OFFLINE_OPT_OUT_COMMAND,
   offlineShotsNotTaken,
+  SEEDED_CACHED_AT,
   seedOfflineStore,
   shotConnectivity,
   STALE_VERSION_PROBLEM,
@@ -140,10 +141,39 @@ describe('offline shots (qits-2151)', () => {
       network: 'OFFLINE',
       outbox: [],
       cacheResources: [`${PROVIDER}#getNote`],
+      // A seed without cachedAt is stamped with the fixed instant, so the freeze is stable.
+      cached: [{ operation: `${PROVIDER}#getNote`, cachedAt: '2026-01-01T00:00:00.000Z' }],
       queueMutations: [`${PROVIDER}#renameNote`],
     });
+    expect(SEEDED_CACHED_AT).toBe('2026-01-01T00:00:00.000Z');
+    expect(fixture.componentInstance.note.cachedAt()).toEqual(new Date(SEEDED_CACHED_AT));
     // The seed names its recording, as a flush does: the freeze shows it.
     expect(currentTestRecords()).toEqual([source('a note exists')]);
+  });
+
+  it('stamps a seed with the cachedAt the spec gives, an ISO string or a Date (qits-2153)', async () => {
+    configure();
+    goOffline();
+    await seedOfflineStore(GET_NOTE, { path: { id: 'n1' } }, NOTE, {
+      cachedAt: '2026-04-02T08:30:00Z',
+    });
+    const fixture = await openPage();
+    expect(fixture.componentInstance.note.cachedAt()).toEqual(new Date('2026-04-02T08:30:00Z'));
+    expect(shotConnectivity().cached).toEqual([
+      { operation: `${PROVIDER}#getNote`, cachedAt: '2026-04-02T08:30:00.000Z' },
+    ]);
+    await seedOfflineStore(GET_NOTE, { path: { id: 'n1' } }, NOTE, {
+      cachedAt: new Date(Date.UTC(2026, 5, 7, 9)),
+    });
+    await TestBed.inject(ApplicationRef).whenStable();
+    expect(shotConnectivity().cached).toEqual([
+      { operation: `${PROVIDER}#getNote`, cachedAt: '2026-06-07T09:00:00.000Z' },
+    ]);
+    await expect(
+      seedOfflineStore(GET_NOTE, { path: { id: 'n1' } }, NOTE, { cachedAt: 'last week' }),
+    ).rejects.toThrow(
+      /seedOfflineStore: cachedAt must be a Date or an ISO instant, not "last week"/,
+    );
   });
 
   it('starts the next test online with the store empty', async () => {
@@ -180,8 +210,12 @@ describe('offline shots (qits-2151)', () => {
     expect(shown(fixture)).toBe('shopping');
     expect(shotConnectivity()).toMatchObject({
       network: 'OFFLINE',
-      outbox: [{ operation: `${PROVIDER}#renameNote`, state: 'PENDING' }],
+      // The record the write touches; no currentVersion outside a conflict.
+      outbox: [{ operation: `${PROVIDER}#renameNote`, state: 'PENDING', recordId: 'n1' }],
+      // The stored answer, the queued write laid over it.
+      cached: [{ operation: `${PROVIDER}#getNote`, cachedAt: SEEDED_CACHED_AT }],
     });
+    expect(shotConnectivity().outbox[0]).not.toHaveProperty('currentVersion');
   });
 
   it('sends the queued write once back online; a 412 makes it a CONFLICT', async () => {
@@ -210,7 +244,18 @@ describe('offline shots (qits-2151)', () => {
     });
     expect(shotConnectivity()).toMatchObject({
       network: 'ONLINE',
-      outbox: [{ operation: `${PROVIDER}#renameNote`, state: 'CONFLICT' }],
+      outbox: [
+        {
+          operation: `${PROVIDER}#renameNote`,
+          state: 'CONFLICT',
+          recordId: 'n1',
+          // The server's version, as the 412 named it, stringified.
+          currentVersion: '2',
+        },
+      ],
+      // The page stored the server's record itself: freezeScreenshots({ offline: true }) pins the
+      // instant every cache write stamps, so this is the same on every run.
+      cached: [{ operation: `${PROVIDER}#getNote`, cachedAt: SEEDED_CACHED_AT }],
     });
     // The server is authoritative: the page shows its record.
     expect(shown(fixture)).toBe('groceries, by Bo');
@@ -260,6 +305,7 @@ describe('offline shots (qits-2151)', () => {
       network: 'ONLINE',
       outbox: [],
       cacheResources: [],
+      cached: [],
       queueMutations: [],
     });
   });

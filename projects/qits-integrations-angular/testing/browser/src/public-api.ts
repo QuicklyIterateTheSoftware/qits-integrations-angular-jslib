@@ -38,13 +38,17 @@ export {
   goOnline,
   OFFLINE_OPT_OUT_COMMAND,
   offlineShotsNotTaken,
+  SEEDED_CACHED_AT,
   seedOfflineStore,
   shotConnectivity,
   STALE_VERSION_PROBLEM,
   type OfflineOptOutPayload,
   type OfflineShotsOptOut,
+  type SeedOfflineStoreOptions,
+  type ShotCachedRead,
   type ShotConnectivity,
   type ShotNetwork,
+  type ShotOutboxEntry,
   type ShotOutboxState,
 } from './offline-shots';
 export { visibleDataMarks, type VisibleDataMark } from './visible-data-marks';
