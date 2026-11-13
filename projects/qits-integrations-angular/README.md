@@ -67,7 +67,10 @@ More entry points (the package's own), all documented in the repository README:
   `<html>`, every shot taken in each as `<name>[-<viewport>]-light` / `-dark`, a shot opting out
   with `{ colorSchemes: ['LIGHT'], reason }`, and `qits-angular screenshots --check` failing on a
   page shot missing a scheme; expect twice the references, regenerated through the
-  screenshot-baselines job) and `recordOutcomes()` for browser specs.
+  screenshot-baselines job), the offline shots of `freezeScreenshots({ offline: true })`
+  (`goOffline()` / `goOnline()`, `seedOfflineStore()`, `conflictAnswer()`,
+  `offlineShotsNotTaken()`, each freeze's `connectivity`, and `--check` asking each route for its
+  offline, pending and conflict shots) and `recordOutcomes()` for browser specs.
 - `@qits/angular/pwa`: the installable offline shell, opt-in per app (`qits-pwa.json`):
   `provideQitsPwa()` registers Angular's service worker, `QitsPwaUpdates` watches for a new version
   and never reloads on its own, and `<qits-pwa-update-prompt />` lets the person reload, past every

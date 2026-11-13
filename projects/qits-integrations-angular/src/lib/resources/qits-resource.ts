@@ -240,7 +240,7 @@ export function qitsResource<Params, Value, Err>(
         .finally(done);
     });
     const handle = Object.defineProperty(ref, OFFLINE_ENTRY, { value: () => shownKey });
-    const unlive = sync.addLive(handle);
+    const unlive = sync.addLive(handle, operation);
     injector.get(DestroyRef).onDestroy(() => {
       unwatch();
       unlive();

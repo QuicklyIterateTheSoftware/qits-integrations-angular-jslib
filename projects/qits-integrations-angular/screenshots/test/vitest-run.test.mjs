@@ -134,7 +134,8 @@ describe('screenshotReferences in a Vitest browser run', { timeout: 180_000 }, (
 
 /**
  * The Vitest config of a throwaway app with freezes on: `@qits/angular` points at `src/qits-angular.ts`
- * there (the two modules of the library the setup uses), the setup file is `src/setup.ts`.
+ * there (the modules of the library the setup uses: route telemetry, the outcome recorder and the
+ * offline testing hook), the setup file is `src/setup.ts`.
  */
 const freezesConfig = (app) => `import { playwright } from '@vitest/browser-playwright';
 import { defineConfig } from 'vitest/config';
@@ -149,6 +150,7 @@ export default defineConfig({
   },
   optimizeDeps: {
     include: [
+      '@angular/common',
       '@angular/compiler',
       '@angular/core',
       '@angular/core/testing',
@@ -203,6 +205,7 @@ describe('screenshot freezes in a Vitest browser run', { timeout: 300_000 }, () 
     'src/qits-angular.ts',
     `export * from ${JSON.stringify(join(LIBRARY, 'src/lib/route-telemetry.ts'))};
 export * from ${JSON.stringify(join(LIBRARY, 'src/lib/outcomes/outcome-recorder.ts'))};
+export * from ${JSON.stringify(join(LIBRARY, 'src/lib/offline/offline-testing.ts'))};
 `,
   );
   put(
@@ -511,6 +514,7 @@ describe('screenshot kinds and preset widths in a Vitest browser run', { timeout
     'src/qits-angular.ts',
     `export * from ${JSON.stringify(join(LIBRARY, 'src/lib/route-telemetry.ts'))};
 export * from ${JSON.stringify(join(LIBRARY, 'src/lib/outcomes/outcome-recorder.ts'))};
+export * from ${JSON.stringify(join(LIBRARY, 'src/lib/offline/offline-testing.ts'))};
 `,
   );
   put(
@@ -801,6 +805,7 @@ const restored = (theme: string | null) => {
       'src/qits-angular.ts',
       `export * from ${JSON.stringify(join(LIBRARY, 'src/lib/route-telemetry.ts'))};
 export * from ${JSON.stringify(join(LIBRARY, 'src/lib/outcomes/outcome-recorder.ts'))};
+export * from ${JSON.stringify(join(LIBRARY, 'src/lib/offline/offline-testing.ts'))};
 `,
     );
     put('src/setup.ts', `${SETUP_IMPORTS}\nfreezeScreenshots(${options});\n`);
@@ -990,5 +995,97 @@ it('at its own viewport', async () => {
     // No switching: the page stays light, and no theme attribute is set.
     assert.doesNotMatch(freezeHtml(without, OWN, 'own'), /data-theme/);
     assert.match(freezeHtml(without, OWN, 'own'), /class="box">light</);
+  });
+});
+
+// Offline shots (ticket qits-2151): freezeScreenshots({ offline: true }) in a real run. The page's
+// navigator.onLine is overridden by goOffline() and back after the test; every payload carries the
+// connectivity, and offlineShotsNotTaken() reaches the manifest through its own command.
+describe('offline shots in a Vitest browser run', { timeout: 300_000 }, () => {
+  const LIBRARY = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const SPEC = 'src/notes/notes.browser.spec.ts';
+  const app = mkdtempSync(join(process.cwd(), 'tmp', 'offline-run-'));
+  after(() => rmSync(app, { recursive: true, force: true }));
+  const put = (path, content) => {
+    mkdirSync(dirname(join(app, path)), { recursive: true });
+    writeFileSync(join(app, path), content);
+  };
+  const SHOTS = join(LIBRARY, 'testing/browser/src/offline-shots.ts');
+  put('vitest.config.mjs', freezesConfig(app));
+  put(
+    'src/qits-angular.ts',
+    `export * from ${JSON.stringify(join(LIBRARY, 'src/lib/route-telemetry.ts'))};
+export * from ${JSON.stringify(join(LIBRARY, 'src/lib/outcomes/outcome-recorder.ts'))};
+export * from ${JSON.stringify(join(LIBRARY, 'src/lib/offline/offline-testing.ts'))};
+`,
+  );
+  put(
+    'src/setup.ts',
+    `import '@angular/compiler';
+import { freezeScreenshots } from ${JSON.stringify(join(LIBRARY, 'testing/browser/src/freeze-screenshots.ts'))};
+
+freezeScreenshots({ offline: true });
+`,
+  );
+  put(
+    SPEC,
+    `import { expect, it } from 'vitest';
+import { page } from 'vitest/browser';
+import { goOffline, offlineShotsNotTaken } from ${JSON.stringify(SHOTS)};
+
+offlineShotsNotTaken({ reason: 'the notes are read live', operations: ['qits-notes-service#renameNote'] });
+
+const box = () => {
+  document.body.innerHTML = '<p data-testid="box">' + (navigator.onLine ? 'online' : 'offline') + '</p>';
+  return page.getByTestId('box');
+};
+
+it('offline', async () => {
+  goOffline();
+  await expect.element(box()).toMatchScreenshot('offline', { kind: 'DATA' });
+});
+
+it('back online in the next test', async () => {
+  expect(navigator.onLine).toBe(true);
+  await expect.element(box()).toMatchScreenshot('online', { kind: 'DATA' });
+});
+`,
+  );
+
+  it('records the network of each shot, and the spec’s opt-out', async () => {
+    const vitest = await startVitest('test', [], {
+      root: app,
+      watch: false,
+      update: true,
+      reporters: ['dot'],
+    });
+    const failures = vitest.state.getCountOfFailedTests();
+    await vitest.close();
+    process.exitCode = 0;
+    assert.equal(failures, 0);
+    const manifest = JSON.parse(
+      readFileSync(join(app, 'src/testing/browser/freezes/manifest.json'), 'utf8'),
+    );
+    assert.equal(manifest.offline, true);
+    const empty = { outbox: [], cacheResources: [], queueMutations: [] };
+    assert.deepEqual(
+      manifest.freezes.map((f) => [f.name, f.connectivity]),
+      [
+        ['offline', { network: 'OFFLINE', ...empty }],
+        ['online', { network: 'ONLINE', ...empty }],
+      ],
+    );
+    assert.deepEqual(manifest.offlineOptOuts, [
+      {
+        spec: SPEC,
+        reason: 'the notes are read live',
+        network: false,
+        operations: ['qits-notes-service#renameNote'],
+      },
+    ]);
+    assert.match(
+      readFileSync(join(app, 'src/testing/browser/freezes', SPEC, 'offline.html'), 'utf8'),
+      />offline</,
+    );
   });
 });

@@ -15,7 +15,9 @@
  * `--check` names the declared outcomes no test reaches or no screenshot shows (ticket qits-2003).
  * Each freeze records the `kind` its shot gave and the preset `viewport` it was taken at (ticket
  * qits-2046), and, with `freezeScreenshots({ colorSchemes })`, the colour scheme it was taken in
- * (ticket qits-2083), which `--check` holds every page and layout shot to.
+ * (ticket qits-2083), which `--check` holds every page and layout shot to; with
+ * `freezeScreenshots({ offline: true })`, the page's connectivity (ticket qits-2151), which `--check`
+ * holds every route with offline resources to (`offlineGaps()`).
  */
 export { completeForFreezes, screenshotReferences } from './plugin.mjs';
 export {
@@ -23,12 +25,16 @@ export {
   DEFAULT_FREEZE_DIRECTORY,
   DEFAULT_ROUTE_SPECS,
   FREEZE_COLOR_SCHEME_COMMAND,
+  NETWORKS,
+  OFFLINE_OPT_OUT_COMMAND,
+  OUTBOX_STATES,
   RESET_COLOR_SCHEME,
   SCREENSHOT_KINDS,
   SCREENSHOT_VIEWPORTS,
   colorSchemeGaps,
   freezeFile,
   freezeSlug,
+  offlineGaps,
 } from './freezes.mjs';
 export { findOrphans, pruneOrphans } from './orphans.mjs';
 export {

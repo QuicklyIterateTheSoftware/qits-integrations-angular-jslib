@@ -14,6 +14,10 @@ import {
   RESET_COLOR_SCHEME,
   colorSchemeGaps,
   completeForFreezes,
+  NETWORKS,
+  OFFLINE_OPT_OUT_COMMAND,
+  OUTBOX_STATES,
+  offlineGaps,
   declaredOutcomes,
   findOrphans,
   freezeFile,
@@ -578,6 +582,7 @@ describe('screenshot freezes', () => {
       'qitsFreezeRoutes',
       'qitsOutcomes',
       'qitsColorScheme',
+      'qitsOfflineOptOut',
     ]);
     assert.equal(screenshotReferences().config({}), undefined);
     // configureVitest keeps what the config hook registered.
@@ -2396,5 +2401,409 @@ describe('qits-angular screenshots --check, the colour schemes (qits-2083)', () 
       }),
       [`${PAGE} 'list': missing DARK`, `${PAGE} 'old': missing DARK`],
     );
+  });
+});
+
+// Ticket qits-2151: freezeScreenshots({ offline: true }) records each shot's connectivity, specs
+// opt out with offlineShotsNotTaken(), and --check asks each route for its offline shots.
+describe('offline shots in the freeze manifest (qits-2151)', () => {
+  const PAGE = 'src/app/routes/notes/notes.page.browser.spec.ts';
+  const OTHER = 'src/app/routes/notes/notes-board.page.browser.spec.ts';
+  const CARD = 'src/app/ui/card/card.browser.spec.ts';
+  const DIR = 'src/testing/browser/freezes';
+  const GET = 'qits-notes-service#getNote';
+  const RENAME = 'qits-notes-service#renameNote';
+  const module = (root, spec, state = 'passed') => ({
+    moduleId: join(root, spec),
+    state: () => state,
+    errors: () => [],
+    children: { allTests: () => [{ result: () => ({ state }) }] },
+  });
+  /**
+   * One run: `shots` maps a spec to its payloads (beside name: connectivity, when given), `optOuts`
+   * a spec to what its offlineShotsNotTaken() sent; `modules` the run's modules (default: every
+   * spec sent from, passed).
+   */
+  function run(root, { shots = {}, optOuts = {}, modules }) {
+    const vitest = { config: { reporters: [] } };
+    const project = { config: { root, browser: { enabled: true } } };
+    screenshotReferences({ freezes: true }).configureVitest({ vitest, project });
+    const [reporter] = vitest.config.reporters;
+    const commands = project.config.browser.commands;
+    reporter.onTestRunStart([]);
+    for (const [spec, list] of Object.entries(optOuts)) {
+      for (const optOut of list)
+        commands[OFFLINE_OPT_OUT_COMMAND]({ testPath: join(root, spec) }, optOut);
+    }
+    for (const [spec, payloads] of Object.entries(shots)) {
+      for (const payload of payloads) {
+        commands.qitsFreeze(
+          { testPath: join(root, spec) },
+          {
+            test: `t ${payload.name}`,
+            html: `<p>${payload.name}</p>`,
+            route: 'notes',
+            records: [],
+            kind: 'DATA',
+            viewport: null,
+            colorScheme: null,
+            colorSchemes: null,
+            colorSchemeReason: null,
+            ...payload,
+          },
+        );
+      }
+    }
+    const specs = new Set([...Object.keys(shots), ...Object.keys(optOuts)]);
+    reporter.onTestRunEnd(modules ?? [...specs].map((spec) => module(root, spec)));
+  }
+  const manifestText = (root) => readFileSync(join(root, DIR, 'manifest.json'), 'utf8');
+  const manifest = (root) => JSON.parse(manifestText(root));
+  const connectivity = (network, extra = {}) => ({
+    network,
+    outbox: [],
+    cacheResources: [GET],
+    queueMutations: [RENAME],
+    ...extra,
+  });
+
+  it('writes the manifest byte for byte as before without the option', () => {
+    const root = app({ [PAGE]: 'spec' });
+    run(root, {
+      shots: { [PAGE]: [{ name: 'list' }] },
+      optOuts: { [PAGE]: [{ reason: 'r', network: true, operations: [] }] },
+    });
+    const freeze = {
+      file: `${PAGE}/list.html`,
+      spec: PAGE,
+      test: 't list',
+      name: 'list',
+      kind: 'DATA',
+      viewport: null,
+      route: 'notes',
+      records: [],
+      triggers: [],
+    };
+    // The exact bytes the writer gave before qits-2151: no offline, connectivity or opt-outs.
+    assert.equal(
+      manifestText(root),
+      `${JSON.stringify(
+        {
+          routes: [],
+          freezes: [freeze],
+          byRoute: { notes: [`${PAGE}/list.html`] },
+          outcomes: { declared: [], fired: [] },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  });
+
+  it('records the option, each freeze’s connectivity and the specs’ opt-outs with it', () => {
+    const root = app({ [PAGE]: 'spec', [CARD]: 'spec' });
+    run(root, {
+      shots: {
+        [PAGE]: [
+          { name: 'offline', connectivity: connectivity('OFFLINE') },
+          {
+            name: 'pending',
+            connectivity: connectivity('OFFLINE', {
+              outbox: [
+                { operation: RENAME, state: 'PENDING' },
+                // Dropped: a state outside the enum, an entry without an operation.
+                { operation: RENAME, state: 'pending' },
+                { state: 'FAILED' },
+              ],
+              // Deduplicated and sorted; anything but a string dropped.
+              cacheResources: [GET, 'b#x', GET, 7],
+            }),
+          },
+          // A payload with a network outside the enum records none.
+          { name: 'odd', connectivity: { network: 'MAYBE' } },
+        ],
+        [CARD]: [{ name: 'card', route: null, connectivity: connectivity('ONLINE') }],
+      },
+      optOuts: {
+        [PAGE]: [
+          { reason: 'the board is read live', network: true, operations: [RENAME, GET, RENAME] },
+        ],
+        // Without a reason it is dropped.
+        [CARD]: [{ reason: ' ', network: true }],
+      },
+    });
+    const written = manifest(root);
+    assert.deepEqual(Object.keys(written), [
+      'routes',
+      'offline',
+      'freezes',
+      'byRoute',
+      'offlineOptOuts',
+      'outcomes',
+    ]);
+    assert.equal(written.offline, true);
+    assert.deepEqual(Object.keys(written.freezes[0]), [
+      'file',
+      'spec',
+      'test',
+      'name',
+      'kind',
+      'viewport',
+      'connectivity',
+      'route',
+      'records',
+      'triggers',
+    ]);
+    assert.deepEqual(
+      written.freezes.map((f) => [f.name, f.connectivity]),
+      [
+        ['odd', null],
+        ['offline', connectivity('OFFLINE')],
+        [
+          'pending',
+          connectivity('OFFLINE', {
+            outbox: [{ operation: RENAME, state: 'PENDING' }],
+            cacheResources: ['b#x', GET],
+          }),
+        ],
+        ['card', connectivity('ONLINE')],
+      ],
+    );
+    assert.deepEqual(written.offlineOptOuts, [
+      { spec: PAGE, reason: 'the board is read live', network: true, operations: [GET, RENAME] },
+    ]);
+    assert.deepEqual(NETWORKS, ['ONLINE', 'OFFLINE']);
+    assert.deepEqual(OUTBOX_STATES, ['PENDING', 'SENDING', 'CONFLICT', 'FAILED']);
+    assert.equal(OFFLINE_OPT_OUT_COMMAND, 'qitsOfflineOptOut');
+  });
+
+  it('keeps the option and the opt-outs across a run that froze nothing, and drops them with it', () => {
+    const root = app({ [PAGE]: 'spec', [OTHER]: 'spec' });
+    run(root, {
+      shots: { [PAGE]: [{ name: 'offline', connectivity: connectivity('OFFLINE') }] },
+      optOuts: { [OTHER]: [{ reason: 'no offline view', network: true }] },
+    });
+    // A run in which neither spec ran: the old manifest's option, freezes and opt-outs stay.
+    run(root, { modules: [] });
+    let written = manifest(root);
+    assert.equal(written.offline, true);
+    assert.deepEqual(written.freezes[0].connectivity, connectivity('OFFLINE'));
+    assert.deepEqual(
+      written.offlineOptOuts.map((o) => o.spec),
+      [OTHER],
+    );
+    // OTHER ran completely and sent no opt-out this time: its opt-out goes.
+    run(root, {
+      shots: { [PAGE]: [{ name: 'offline', connectivity: connectivity('OFFLINE') }] },
+      modules: [module(root, PAGE), module(root, OTHER)],
+    });
+    assert.deepEqual(manifest(root).offlineOptOuts, []);
+    // A failing spec keeps what it had.
+    run(root, { optOuts: { [OTHER]: [{ reason: 'again', network: true }] } });
+    run(root, {
+      shots: { [PAGE]: [{ name: 'offline', connectivity: connectivity('OFFLINE') }] },
+      optOuts: { [OTHER]: [{ reason: 'not this one' }] },
+      modules: [module(root, PAGE), module(root, OTHER, 'failed')],
+    });
+    assert.deepEqual(
+      manifest(root).offlineOptOuts.map((o) => o.reason),
+      ['again'],
+    );
+    // A run whose payloads carry no connectivity (the app dropped the option): the keys go.
+    run(root, { shots: { [PAGE]: [{ name: 'offline' }] } });
+    written = manifest(root);
+    assert.equal('offline' in written, false);
+    assert.equal('offlineOptOuts' in written, false);
+    assert.equal('connectivity' in written.freezes[0], false);
+  });
+
+  it('writes connectivity null on an entry kept from a run without the option', () => {
+    const root = app({ [PAGE]: 'spec', [OTHER]: 'spec' });
+    run(root, { shots: { [OTHER]: [{ name: 'board' }] } });
+    run(root, { shots: { [PAGE]: [{ name: 'offline', connectivity: connectivity('OFFLINE') }] } });
+    assert.deepEqual(
+      manifest(root).freezes.map((f) => [f.name, f.connectivity]),
+      [
+        ['board', null],
+        ['offline', connectivity('OFFLINE')],
+      ],
+    );
+  });
+});
+
+describe('offlineGaps and qits-angular screenshots --check (qits-2151)', () => {
+  const PAGE = 'src/app/routes/notes/notes.page.browser.spec.ts';
+  const OTHER = 'src/app/routes/notes/notes-board.page.browser.spec.ts';
+  const LIST = 'src/app/routes/lists/lists.page.browser.spec.ts';
+  const DIR = 'src/testing/browser/freezes';
+  const GET = 'qits-notes-service#getNote';
+  const RENAME = 'qits-notes-service#renameNote';
+  const DELETE = 'qits-notes-service#deleteNote';
+  /** A freeze of `spec` on `route` with `connectivity`. */
+  const freeze = (name, connectivity, { spec = PAGE, route = 'notes' } = {}) => ({
+    file: `${spec}/${name}.html`,
+    spec,
+    test: `t ${name}`,
+    name,
+    kind: 'DATA',
+    viewport: null,
+    connectivity,
+    route,
+    records: [],
+    triggers: [],
+  });
+  const online = (extra = {}) => ({
+    network: 'ONLINE',
+    outbox: [],
+    cacheResources: [GET],
+    queueMutations: [RENAME],
+    ...extra,
+  });
+  const offline = (extra = {}) => ({ ...online(extra), network: 'OFFLINE' });
+  const held = (operation, state) => ({ outbox: [{ operation, state }] });
+  const withManifest = (manifest) => {
+    const root = app({ [PAGE]: 'spec' });
+    mkdirSync(join(root, DIR), { recursive: true });
+    writeFileSync(
+      join(root, DIR, 'manifest.json'),
+      JSON.stringify({
+        routes: [],
+        byRoute: {},
+        outcomes: { declared: [], fired: [] },
+        ...manifest,
+      }),
+    );
+    return root;
+  };
+  const check = (root, env = {}) => {
+    const out = [];
+    const err = [];
+    const code = screenshots(['--check'], {
+      cwd: root,
+      env,
+      out: (l) => out.push(l),
+      err: (l) => err.push(l),
+    });
+    return { code, out: out.join('\n'), err: err.join('\n') };
+  };
+
+  it('names a route with cache resources and no offline shot, and its mutations’ missing shots', () => {
+    assert.deepEqual(offlineGaps({ offline: true, freezes: [freeze('list', online())] }), [
+      `notes: no conflict shot of ${RENAME}`,
+      'notes: no offline shot',
+      `notes: no pending shot of ${RENAME}`,
+    ]);
+  });
+
+  it('is satisfied by an offline shot, a pending shot and a conflict shot on the route', () => {
+    assert.deepEqual(
+      offlineGaps({
+        offline: true,
+        freezes: [
+          freeze('offline', offline()),
+          freeze('pending', offline(held(RENAME, 'PENDING'))),
+          // Another spec on the same route counts for the route.
+          freeze('conflict', online(held(RENAME, 'CONFLICT')), { spec: OTHER }),
+        ],
+      }),
+      [],
+    );
+  });
+
+  it('asks each queue mutation for its own pending and conflict shots', () => {
+    assert.deepEqual(
+      offlineGaps({
+        offline: true,
+        freezes: [
+          freeze('offline', offline({ queueMutations: [DELETE, RENAME] })),
+          freeze('pending', offline(held(RENAME, 'PENDING'))),
+          // SENDING and FAILED are neither.
+          freeze('sending', online(held(RENAME, 'SENDING'))),
+          freeze('failed', online(held(DELETE, 'FAILED'))),
+          freeze('conflict', online(held(DELETE, 'CONFLICT'))),
+        ],
+      }),
+      [`notes: no conflict shot of ${RENAME}`, `notes: no pending shot of ${DELETE}`],
+    );
+  });
+
+  it('asks nothing of a route without offline resources, a freeze without a route, or without the option', () => {
+    const plain = { network: 'ONLINE', outbox: [], cacheResources: [], queueMutations: [] };
+    assert.deepEqual(
+      offlineGaps({
+        offline: true,
+        freezes: [
+          freeze('list', plain, { spec: LIST, route: 'lists' }),
+          // Kept from a run without the option, or never written.
+          freeze('old', null, { spec: LIST, route: 'lists' }),
+          { ...freeze('bare', online(), { spec: LIST, route: 'lists' }), connectivity: undefined },
+          freeze('card', online(), { spec: 'src/app/ui/card/card.browser.spec.ts', route: null }),
+        ],
+      }),
+      [],
+    );
+    assert.deepEqual(offlineGaps({ freezes: [freeze('list', online())] }), []);
+    assert.deepEqual(offlineGaps(undefined), []);
+  });
+
+  it('is silenced by an opt-out from a spec with a freeze on the route, as far as it reaches', () => {
+    const freezes = [freeze('list', online({ queueMutations: [DELETE, RENAME] }))];
+    const gaps = (offlineOptOuts) => offlineGaps({ offline: true, freezes, offlineOptOuts });
+    assert.deepEqual(gaps([{ spec: PAGE, reason: 'read live', network: true, operations: [] }]), [
+      `notes: no conflict shot of ${DELETE}`,
+      `notes: no conflict shot of ${RENAME}`,
+      `notes: no pending shot of ${DELETE}`,
+      `notes: no pending shot of ${RENAME}`,
+    ]);
+    assert.deepEqual(
+      gaps([{ spec: PAGE, reason: 'no conflict UI yet', network: false, operations: [RENAME] }]),
+      [
+        `notes: no conflict shot of ${DELETE}`,
+        'notes: no offline shot',
+        `notes: no pending shot of ${DELETE}`,
+      ],
+    );
+    // Neither network nor operations: every gap of the route.
+    assert.deepEqual(
+      gaps([{ spec: PAGE, reason: 'online only', network: false, operations: [] }]),
+      [],
+    );
+    // A spec with no freeze on the route covers nothing there; one without a reason is none.
+    assert.equal(
+      gaps([{ spec: LIST, reason: 'elsewhere', network: false, operations: [] }]).length,
+      5,
+    );
+    assert.equal(gaps([{ spec: PAGE, reason: '', network: false, operations: [] }]).length, 5);
+  });
+
+  it('fails --check on the gaps, lists them in an update run, and passes a covered manifest', () => {
+    const root = withManifest({ offline: true, freezes: [freeze('list', online())] });
+    const { code, err } = check(root);
+    assert.equal(code, 1);
+    assert.match(err, /3 offline shot\(s\) missing:/);
+    assert.match(err, /\n {2}notes: no offline shot\n/);
+    assert.match(err, new RegExp(`  notes: no pending shot of ${RENAME}`));
+    assert.match(err, /offlineShotsNotTaken\(\{ reason: '…' \}\)/);
+    const update = check(root, { UPDATE_SNAPSHOT: 'all' });
+    assert.equal(update.code, 0);
+    assert.match(update.out, /no offline shot[\s\S]*the gaps are listed only/);
+    const covered = withManifest({
+      offline: true,
+      freezes: [freeze('list', online())],
+      offlineOptOuts: [{ spec: PAGE, reason: 'online only', network: false, operations: [] }],
+    });
+    const passed = check(covered);
+    assert.equal(passed.code, 0, passed.err);
+    assert.match(
+      passed.out,
+      /every route with offline resources has its offline, pending and conflict shots/,
+    );
+  });
+
+  it('checks nothing without offline in the manifest', () => {
+    const root = withManifest({ freezes: [freeze('list', online())] });
+    const { code, out, err } = check(root);
+    assert.equal(code, 0, err);
+    assert.doesNotMatch(`${out}${err}`, /offline/);
   });
 });

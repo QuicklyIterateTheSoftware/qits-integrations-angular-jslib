@@ -17,12 +17,17 @@
  * })`), `--check` also fails on every page or layout shot missing one of them that it did not opt
  * out of (`colorSchemeGaps()` in `freezes.mjs`). That is not an outcome gap: it fails without
  * `--enforce-outcomes`, and only an update run lists it instead.
+ *
+ * With a manifest that records `"offline": true` (ticket qits-2151, `freezeScreenshots({ offline:
+ * true })`), `--check` fails the same way on each route missing an offline shot of its `cache`
+ * resources, or a pending or conflict shot of a `queue` mutation, that no spec on it opted out of
+ * (`offlineGaps()` in `freezes.mjs`).
  */
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DEFAULT_RECORD } from './record.mjs';
 import { findOrphans, pruneOrphans } from './orphans.mjs';
-import { DEFAULT_FREEZE_DIRECTORY, MANIFEST, colorSchemeGaps } from './freezes.mjs';
+import { DEFAULT_FREEZE_DIRECTORY, MANIFEST, colorSchemeGaps, offlineGaps } from './freezes.mjs';
 import { checkedRoutes, DEFAULT_ROUTES, declaredOutcomes, outcomeGaps } from './outcomes.mjs';
 
 export const USAGE = `Usage: qits-angular screenshots --check | --prune [options]
@@ -50,6 +55,13 @@ When the manifest records colorSchemes (freezeScreenshots({ colorSchemes })),
 --check also fails on each page or layout shot (spec, test, name, viewport)
 missing one of those schemes, unless it opted out with its own colorSchemes
 and a reason.
+
+When the manifest records offline (freezeScreenshots({ offline: true })),
+--check also fails on each route whose shots show an offline: 'cache'
+resource but none of which was taken offline, and on each offline: 'queue'
+mutation on a route with no shot of its write pending in the outbox, or none
+of it refused as a conflict, unless a spec on that route opted out with
+offlineShotsNotTaken({ reason, network?, operations? }).
 
   --check              List the orphans; exit 1 if there are any.
   --prune              Delete the orphans (the screenshot baselines job does this).
@@ -123,7 +135,50 @@ export function screenshots(args, io = {}) {
   if (mode === '--prune') return orphanCode;
   const outcomeCode = checkOutcomes({ root, freezes, routes, enforceOutcomes, env, out, err });
   const schemeCode = checkColorSchemes({ root, freezes, env, out, err });
-  return Math.max(orphanCode, outcomeCode, schemeCode);
+  const offlineCode = checkOffline({ root, freezes, env, out, err });
+  return Math.max(orphanCode, outcomeCode, schemeCode, offlineCode);
+}
+
+/**
+ * The routes missing an offline, pending or conflict shot (ticket qits-2151), on stderr with exit 1;
+ * nothing at all for a manifest without `"offline": true` (or none). An update run only lists them,
+ * as it does the colour-scheme gaps.
+ */
+function checkOffline({ root, freezes, env, out, err }) {
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(join(resolve(root, freezes), MANIFEST), 'utf8'));
+  } catch {
+    return 0;
+  }
+  if (manifest?.offline !== true) return 0;
+  const gaps = offlineGaps(manifest);
+  if (gaps.length === 0) {
+    out(
+      'qits-angular screenshots: every route with offline resources has its offline, pending and ' +
+        'conflict shots, or says why not.',
+    );
+    return 0;
+  }
+  const report = [
+    `qits-angular screenshots: ${gaps.length} offline shot(s) missing:`,
+    ...gaps.map((gap) => `  ${gap}`),
+  ];
+  if (isUpdateRun(env)) {
+    out(
+      [...report, 'This is an update run (UPDATE_SNAPSHOT): the gaps are listed only.'].join('\n'),
+    );
+    return 0;
+  }
+  err(
+    [
+      ...report,
+      "Take them in the route's page spec: goOffline() and seedOfflineStore() for the offline shot,",
+      "the page's own mutation after goOffline() for the pending one, goOnline() and conflictAnswer()",
+      "for the conflict; or say why the spec takes none: offlineShotsNotTaken({ reason: '…' }).",
+    ].join('\n'),
+  );
+  return 1;
 }
 
 /**
