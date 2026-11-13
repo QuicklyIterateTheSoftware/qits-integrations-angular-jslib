@@ -115,3 +115,15 @@ export type { ExitCurrent } from './lib/outcomes/qits-exit.directive';
 export { QitsTriggers } from './lib/outcomes/qits-triggers.directive';
 export { ɵsetOutcomeRecorder } from './lib/outcomes/outcome-recorder';
 export type { OutcomeRecord, OutcomeRecorder } from './lib/outcomes/outcome-recorder';
+export {
+  DATA_QITS_DERIVED,
+  DATA_QITS_FIELD,
+  DATA_QITS_ITEM,
+  DATA_QITS_SOURCE,
+  itemMark,
+  sourceMark,
+} from './lib/data-marks/data-marks';
+export type { QitsFieldMark, QitsFieldPath } from './lib/data-marks/field-path';
+export { QitsEntityList } from './lib/data-marks/qits-entity-list.directive';
+export { QitsEntity } from './lib/data-marks/qits-entity.directive';
+export { QitsField } from './lib/data-marks/qits-field.directive';

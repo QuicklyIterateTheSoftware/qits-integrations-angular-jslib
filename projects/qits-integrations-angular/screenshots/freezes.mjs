@@ -25,7 +25,9 @@
  *       "viewport": null,                 // PHONE | TABLET | DESKTOP for a shot at a preset width
  *       "route": "projects",              // null unless a page or layout spec under routes/ (routeSpecs)
  *       "records": [{ "provider": "qits-projects-service", "state": "…", "operationId": "…" }],
- *       "triggers": ["projects:open"]     // the visible outcome marks, `<interaction>:<outcome>`
+ *       "triggers": ["projects:open"],    // the visible outcome marks, `<interaction>:<outcome>`
+ *       "dataMarks": [{ "source": "qits-projects-service#listProjects", "item": "id=1",
+ *                       "field": "name", "derived": [] }]
  *     }],
  *     "byRoute": { "projects": ["src/app/routes/projects/projects.page.browser.spec.ts/list.html"] },
  *     "outcomes": {
@@ -81,6 +83,15 @@
  * that renders a component, whose own declared entries are all `exit()`s with `triggered: false`,
  * and below which nothing renders. The flag sits on that route only, never on its `rendersNothing`
  * descendants; a route tree kept from an earlier run is judged again. Both are omitted when false.
+ *
+ * Data marks (ticket qits-2141): pages carry the data directives' marks as attributes
+ * (`data-qits-source`, `data-qits-item`, `data-qits-field`, `data-qits-derived`). Each freeze's
+ * `dataMarks` is the browser side's `visibleDataMarks()`, normalised to its four fields (`derived`
+ * coerced to a string array), deduplicated and sorted the same way as there. It is written only
+ * when the freeze shows at least one mark, right after `triggers`; a freeze without one has no
+ * `dataMarks` key at all, so a manifest from an app that carries no marks yet stays byte-for-byte
+ * identical to before. An entry kept from a spec a run skipped keeps whatever `dataMarks` (or lack
+ * of one) it already had.
  */
 import {
   copyFileSync,
@@ -217,6 +228,48 @@ export function freezeSlug(name) {
 
 const compare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
+/** `a` and `b`, with `null` first; otherwise the usual string order (ticket qits-2141). */
+const compareNullable = (a, b) => (a === b ? 0 : a === null ? -1 : b === null ? 1 : compare(a, b));
+
+/** `a` and `b` element-wise, then by length (a shorter list first when it is a prefix). */
+function compareDerived(a, b) {
+  const length = Math.min(a.length, b.length);
+  for (let i = 0; i < length; i++) {
+    const c = compareNullable(a[i], b[i]);
+    if (c !== 0) return c;
+  }
+  return a.length - b.length;
+}
+
+const compareDataMark = (a, b) =>
+  compareNullable(a.source, b.source) ||
+  compareNullable(a.item, b.item) ||
+  compareNullable(a.field, b.field) ||
+  compareDerived(a.derived, b.derived);
+
+/** One data mark as the manifest keeps it: only its four fields, `derived` a string array. */
+function dataMarkOf(mark) {
+  return {
+    source: typeof mark?.source === 'string' ? mark.source : null,
+    item: typeof mark?.item === 'string' ? mark.item : null,
+    field: typeof mark?.field === 'string' ? mark.field : null,
+    derived: Array.isArray(mark?.derived) ? mark.derived.map(String) : [],
+  };
+}
+
+/**
+ * The data marks a shot sent (ticket qits-2141), as the manifest keeps them: only the four
+ * fields, deduplicated and sorted as the browser side's `visibleDataMarks()` sorts them.
+ */
+function dataMarksOf(marks) {
+  const seen = new Map();
+  for (const raw of Array.isArray(marks) ? marks : []) {
+    const mark = dataMarkOf(raw);
+    seen.set(JSON.stringify([mark.source, mark.item, mark.field, mark.derived]), mark);
+  }
+  return [...seen.values()].sort(compareDataMark);
+}
+
 /**
  * Collects the freezes of one run and writes them at its end.
  *
@@ -296,6 +349,7 @@ export function freezeWriter({
         records,
         outcomes,
         triggers,
+        dataMarks,
         kind,
         viewport,
         colorScheme,
@@ -337,6 +391,7 @@ export function freezeWriter({
           operationId,
         })),
         triggers: [...new Set(triggers ?? [])].sort(compare),
+        dataMarks: dataMarksOf(dataMarks),
       };
       const freezes = pending.get(spec) ?? new Map();
       freezes.set(file, { entry, html: rewritten, assets, outcomes: outcomes ?? 0, shot: ++shots });
@@ -462,6 +517,7 @@ export function freezeWriter({
             route,
             records,
             triggers,
+            dataMarks,
           }) => ({
             file,
             spec,
@@ -478,6 +534,9 @@ export function freezeWriter({
             route,
             records,
             triggers: triggers ?? [],
+            // Written only when the freeze shows a mark, so a manifest without any stays
+            // byte-for-byte as before (ticket qits-2141).
+            ...(dataMarks && dataMarks.length > 0 ? { dataMarks } : {}),
           }),
         ),
         byRoute,

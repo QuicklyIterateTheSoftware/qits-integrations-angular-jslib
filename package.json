@@ -1,6 +1,6 @@
 {
   "name": "qits-integrations-angular",
-  "version": "2026.1113.20241",
+  "version": "2026.1113.24002",
   "private": true,
   "description": "Angular workspace that builds @qits/angular. The published package is the ng-packagr output in dist/qits-integrations-angular; this manifest is the harness and stays unpublishable.",
   "license": "MIT",
@@ -12,9 +12,10 @@
   "scripts": {
     "ng": "ng",
     "build": "ng build qits-integrations-angular",
-    "test": "pnpm test:eslint && pnpm test:screenshots && pnpm test:pwa && ng test qits-integrations-angular",
+    "test": "pnpm test:eslint && pnpm test:screenshots && pnpm test:templates && pnpm test:pwa && ng test qits-integrations-angular",
     "test:eslint": "node --test 'projects/qits-integrations-angular/eslint/test/*.test.mjs'",
     "test:screenshots": "node --test projects/qits-integrations-angular/screenshots/test/screenshots.test.mjs",
+    "test:templates": "node --test 'projects/qits-integrations-angular/templates/test/*.test.mjs'",
     "test:pwa": "node --test 'projects/qits-integrations-angular/pwa/test/*.test.mjs'",
     "test:browser": "ng run qits-integrations-angular:test-browser && node --test projects/qits-integrations-angular/screenshots/test/vitest-run.test.mjs && node --test projects/qits-integrations-angular/pwa/test/browser/offline-start.test.mjs",
     "lint": "prettier --check . && ng lint qits-integrations-angular",

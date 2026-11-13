@@ -221,6 +221,22 @@ describe('freezeShot', () => {
     ]);
   });
 
+  // Ticket qits-2141: the data marks (new directives) a page carries are plain attributes, so
+  // freezeShot keeps them as it keeps any other attribute it does not specifically recognise.
+  it('keeps the data-qits-source, data-qits-item, data-qits-field and data-qits-derived marks', () => {
+    mount(
+      '<section id="shot" data-qits-source="qits-projects-service#listProjects">' +
+        '<div data-qits-item="id=1"><span data-qits-field="name">Demo</span>' +
+        '<span data-qits-derived="status.value status.label">Open</span></div></section>',
+    );
+    const body = bodyOf(freezeShot(byId('shot')).html);
+    expect(body).toBe(
+      '<section id="f0" data-qits-source="qits-projects-service#listProjects">' +
+        '<div data-qits-item="id=1"><span data-qits-field="name">Demo</span>' +
+        '<span data-qits-derived="status.value status.label">Open</span></div></section>',
+    );
+  });
+
   it('gives the same bytes for the same DOM however the ids were generated', () => {
     const shot = (n: number) => {
       mount(

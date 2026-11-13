@@ -47,6 +47,10 @@ only checked once the app creates it. `qits-angular screenshots --check` also fl
 declared exit leads to, unless its own route `data` marks it an **entry point** (reached from
 outside the app, such as an idp redirect) with `QITS_ENTRY` — see the repository README.
 
+Which read, record and field a part of a screenshot shows is marked with the `QitsEntityList`,
+`QitsEntity` and `QitsField` directives, checked by the compiler against what the app reads; each
+freeze records the visible marks as `dataMarks` — see the repository README.
+
 More entry points (the package's own), all documented in the repository README:
 
 - `@qits/angular/testing`: golden masters and Pact V4 consumer pacts for specs (Node only; needs
