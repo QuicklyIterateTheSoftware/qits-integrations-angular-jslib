@@ -103,6 +103,23 @@ export declare const OUTBOX_STATES: readonly FreezeOutboxState[];
  */
 export declare const OFFLINE_OPT_OUT_COMMAND: string;
 
+/** One outbox entry at a shot (ticket qits-2151; `recordId`, `currentVersion` qits-2153). */
+export interface FreezeOutboxEntry {
+  operation: string;
+  state: FreezeOutboxState;
+  /** The record the write touches, as a string; `null` when it names none. */
+  recordId: string | null;
+  /** Only on a `CONFLICT` entry: the server's version, as a string; `null` when it named none. */
+  currentVersion?: string | null;
+}
+
+/** An operation whose shown value came from the local store at a shot (ticket qits-2153). */
+export interface FreezeCachedRead {
+  operation: string;
+  /** When the shown value was stored, an ISO instant. */
+  cachedAt: string;
+}
+
 /**
  * The page's offline layer at a shot (ticket qits-2151), as `freezeScreenshots({ offline: true })`
  * records it. Operations are named `<provider>#<operationId>`.
@@ -111,9 +128,14 @@ export interface FreezeConnectivity {
   /** As `navigator.onLine` said at the shot. */
   network: FreezeNetwork;
   /** The outbox, oldest first. */
-  outbox: { operation: string; state: FreezeOutboxState }[];
+  outbox: FreezeOutboxEntry[];
   /** The live `offline: 'cache'` resources' operations, sorted. */
   cacheResources: string[];
+  /**
+   * The operations whose shown value came from the local store at the shot (ticket qits-2153), one
+   * each (the latest `cachedAt` when several resources show one), sorted by operation.
+   */
+  cached: FreezeCachedRead[];
   /** The live `offline: 'queue'` mutations' operations, sorted. */
   queueMutations: string[];
 }

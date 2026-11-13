@@ -1067,7 +1067,7 @@ it('back online in the next test', async () => {
       readFileSync(join(app, 'src/testing/browser/freezes/manifest.json'), 'utf8'),
     );
     assert.equal(manifest.offline, true);
-    const empty = { outbox: [], cacheResources: [], queueMutations: [] };
+    const empty = { outbox: [], cacheResources: [], cached: [], queueMutations: [] };
     assert.deepEqual(
       manifest.freezes.map((f) => [f.name, f.connectivity]),
       [

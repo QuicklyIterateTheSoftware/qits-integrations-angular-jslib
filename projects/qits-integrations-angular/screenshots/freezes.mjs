@@ -78,9 +78,12 @@
  *
  *   "connectivity": {
  *     "network": "OFFLINE",                // ONLINE | OFFLINE, as navigator.onLine said at the shot
- *     "outbox": [{ "operation": "qits-notes-service#renameNote", "state": "PENDING" }],
- *                                          // PENDING | SENDING | CONFLICT | FAILED, oldest first
+ *     "outbox": [{ "operation": "qits-notes-service#renameNote", "state": "PENDING", "recordId": "n1" }],
+ *                                          // PENDING | SENDING | CONFLICT | FAILED, oldest first;
+ *                                          // a CONFLICT also has "currentVersion": "2" (or null)
  *     "cacheResources": ["qits-notes-service#getNote"],   // the live offline: 'cache' resources
+ *     "cached": [{ "operation": "qits-notes-service#getNote", "cachedAt": "2026-01-01T00:00:00.000Z" }],
+ *                                          // shown from the store, by operation (qits-2153)
  *     "queueMutations": ["qits-notes-service#renameNote"] // the live offline: 'queue' mutations
  *   },
  *   "offlineOptOuts": [{ "spec": "…", "reason": "…", "network": true, "operations": ["…"] }]
@@ -195,10 +198,48 @@ const operationsOf = (value) =>
     compare,
   );
 
+/** An id or a version as the manifest keeps it: a string, a number stringified, else `null`. */
+const textOf = (value) =>
+  typeof value === 'string' ? value : Number.isFinite(value) ? String(value) : null;
+
+/** An outbox entry as the manifest keeps it, or `null` with no operation or an unknown state. */
+function outboxEntryOf(entry) {
+  if (typeof entry?.operation !== 'string') return null;
+  const state = oneOf(OUTBOX_STATES, entry.state);
+  if (state === null) return null;
+  return {
+    operation: entry.operation,
+    state,
+    recordId: textOf(entry.recordId),
+    // Only a conflict names the server's version (ticket qits-2153).
+    ...(state === 'CONFLICT' ? { currentVersion: textOf(entry.currentVersion) } : {}),
+  };
+}
+
+/**
+ * The `cached` list (ticket qits-2153) as the manifest keeps it: entries with a string operation
+ * and a valid instant only, `cachedAt` as an ISO string, one per operation (the latest `cachedAt`
+ * when one repeats), sorted by operation.
+ */
+function cachedOf(value) {
+  const latest = new Map();
+  for (const entry of Array.isArray(value) ? value : []) {
+    if (typeof entry?.operation !== 'string' || typeof entry.cachedAt !== 'string') continue;
+    const at = Date.parse(entry.cachedAt);
+    if (Number.isNaN(at)) continue;
+    if (!latest.has(entry.operation) || at > latest.get(entry.operation)) {
+      latest.set(entry.operation, at);
+    }
+  }
+  return [...latest.keys()]
+    .sort(compare)
+    .map((operation) => ({ operation, cachedAt: new Date(latest.get(operation)).toISOString() }));
+}
+
 /**
  * A payload's `connectivity` (ticket qits-2151) as the manifest keeps it, or `null` when it is
  * missing or carries no known network. The outbox keeps its order (oldest first) and drops entries
- * with no operation or an unknown state.
+ * with no operation or an unknown state; `cached` drops malformed entries (ticket qits-2153).
  */
 function connectivityOf(value) {
   if (!value || typeof value !== 'object') return null;
@@ -207,10 +248,10 @@ function connectivityOf(value) {
   return {
     network,
     outbox: (Array.isArray(value.outbox) ? value.outbox : [])
-      .filter((entry) => typeof entry?.operation === 'string')
-      .map(({ operation, state }) => ({ operation, state: oneOf(OUTBOX_STATES, state) }))
-      .filter((entry) => entry.state !== null),
+      .map(outboxEntryOf)
+      .filter((entry) => entry !== null),
     cacheResources: operationsOf(value.cacheResources),
+    cached: cachedOf(value.cached),
     queueMutations: operationsOf(value.queueMutations),
   };
 }

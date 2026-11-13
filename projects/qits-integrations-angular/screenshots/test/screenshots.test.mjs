@@ -2463,6 +2463,7 @@ describe('offline shots in the freeze manifest (qits-2151)', () => {
     network,
     outbox: [],
     cacheResources: [GET],
+    cached: [],
     queueMutations: [RENAME],
     ...extra,
   });
@@ -2562,7 +2563,8 @@ describe('offline shots in the freeze manifest (qits-2151)', () => {
         [
           'pending',
           connectivity('OFFLINE', {
-            outbox: [{ operation: RENAME, state: 'PENDING' }],
+            // A payload from before qits-2153 names no record: null.
+            outbox: [{ operation: RENAME, state: 'PENDING', recordId: null }],
             cacheResources: ['b#x', GET],
           }),
         ],
@@ -2575,6 +2577,78 @@ describe('offline shots in the freeze manifest (qits-2151)', () => {
     assert.deepEqual(NETWORKS, ['ONLINE', 'OFFLINE']);
     assert.deepEqual(OUTBOX_STATES, ['PENDING', 'SENDING', 'CONFLICT', 'FAILED']);
     assert.equal(OFFLINE_OPT_OUT_COMMAND, 'qitsOfflineOptOut');
+  });
+
+  it('keeps each shot’s store reads and the outbox records, dropping malformed entries (qits-2153)', () => {
+    const root = app({ [PAGE]: 'spec' });
+    const LIST = 'qits-notes-service#listNotes';
+    run(root, {
+      shots: {
+        [PAGE]: [
+          {
+            name: 'conflict',
+            connectivity: connectivity('ONLINE', {
+              outbox: [
+                { operation: RENAME, state: 'CONFLICT', recordId: 'n1', currentVersion: '2' },
+                // A numeric id or version is stringified; a conflict without one says null.
+                { operation: RENAME, state: 'CONFLICT', recordId: 7, currentVersion: 3 },
+                { operation: RENAME, state: 'CONFLICT', recordId: { id: 'n1' } },
+                // Only a conflict carries currentVersion.
+                { operation: RENAME, state: 'PENDING', recordId: 'n2', currentVersion: '5' },
+              ],
+              cached: [
+                { operation: LIST, cachedAt: '2026-03-01T10:00:00.000Z' },
+                // One per operation: the latest cachedAt; normalised to an ISO instant.
+                { operation: GET, cachedAt: '2026-01-01T00:00:00Z' },
+                { operation: GET, cachedAt: '2026-02-01T00:00:00.000Z' },
+                { operation: GET, cachedAt: '2025-12-31T00:00:00.000Z' },
+                // Dropped: no operation, no instant, not an instant, not an object.
+                { cachedAt: '2026-01-01T00:00:00.000Z' },
+                { operation: 'a#b' },
+                { operation: 'a#c', cachedAt: 'yesterday' },
+                { operation: 'a#d', cachedAt: 1767225600000 },
+                'a#e',
+                null,
+              ],
+            }),
+          },
+          // A payload without the list records none.
+          { name: 'bare', connectivity: { network: 'OFFLINE' } },
+        ],
+      },
+    });
+    assert.deepEqual(
+      manifest(root).freezes.map((f) => [f.name, f.connectivity]),
+      [
+        [
+          'bare',
+          { network: 'OFFLINE', outbox: [], cacheResources: [], cached: [], queueMutations: [] },
+        ],
+        [
+          'conflict',
+          connectivity('ONLINE', {
+            outbox: [
+              { operation: RENAME, state: 'CONFLICT', recordId: 'n1', currentVersion: '2' },
+              { operation: RENAME, state: 'CONFLICT', recordId: '7', currentVersion: '3' },
+              { operation: RENAME, state: 'CONFLICT', recordId: null, currentVersion: null },
+              { operation: RENAME, state: 'PENDING', recordId: 'n2' },
+            ],
+            cached: [
+              { operation: GET, cachedAt: '2026-02-01T00:00:00.000Z' },
+              { operation: LIST, cachedAt: '2026-03-01T10:00:00.000Z' },
+            ],
+          }),
+        ],
+      ],
+    );
+    // The keys keep their order: the cached list after the cache resources.
+    assert.deepEqual(Object.keys(manifest(root).freezes[1].connectivity), [
+      'network',
+      'outbox',
+      'cacheResources',
+      'cached',
+      'queueMutations',
+    ]);
   });
 
   it('keeps the option and the opt-outs across a run that froze nothing, and drops them with it', () => {
