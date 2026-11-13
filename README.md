@@ -546,6 +546,108 @@ It refuses with `'the outbox is sending'` while `sending()` is true.
 
 Not covered yet: caching API answers in the service worker.
 
+### Holding an offline-first app to its policies
+
+Offline mode fails quietly. The `offline` option defaults to `'online-only'`, so a forgotten one
+compiles and passes every test that runs online. The offline states are reached only through
+`qitsStatus()` / `status()`, so a template written the usual way shows stored data as fresh, and a
+queued write as done. And a queued or cached call is safe only on an operation the provider built
+for it: qits-2148's `@OfflineCapable` operations take `If-Match`, replay an `Idempotency-Key` and
+answer `ChangesPage` collections, and any other operation can apply a replayed write twice or
+overwrite a change. Three lint rules (ticket qits-2150, see [the rules table](#lint-rules-qitsangulareslint))
+check all three. None is in `recommended`: an offline-first app opts in.
+
+- **`qits/offline-policy-declared`**: every `qitsResource(...)` has an options object literal with
+  an `offline` property as its third argument, and every `qitsMutation(...)` as its second. The value
+  is not checked (`'online-only'` written out is a decision); a spread does not count.
+- **`qits/offline-states-handled`** (typed linting): a component's template shows each state its
+  fields can reach. A resource with `offline: 'cache'` that the template renders (`value()`,
+  `hasValue()` or `qitsStatus()`) can be `cached` and `offline`; a mutation the component runs
+  (`.run(` in the template or the class) can be `conflict`, and `pending` too with
+  `offline: 'queue'`. A state is shown when the template compares `qitsStatus()` (a resource) or
+  `status()` (a mutation) with it, by `===` / `!==` / `==` / `!=` or an `@case` under
+  `@switch (<field>.<signal>())`, or reads a `computed` / `linkedSignal` of the class that does.
+  `cachedAt()` shows `cached` and `conflict()` shows `conflict`. Each missing state is reported on
+  the field: `'rename' can be conflict, and the template never shows it`.
+- **`qits/offline-capable-operations`** (typed linting, option `contracts`): a cache resource and a
+  queue mutation go through an operation its provider's OpenAPI document marks `x-qits-offline`
+  (`true`, or the string `"true"` that MicroProfile's `@Extension` writes). The operation is
+  followed with the type checker to its `qitsOperation({ provider, operationId, method, … })` and
+  looked up by `operationId` under `paths.*.<method>`. Reported: a provider with no document, an
+  operation the document does not have, and an operation without the mark.
+
+```ts
+@Component({
+  template: `
+    @switch (things.qitsStatus()) {
+      @case ('offline') {
+        <p>You are offline, and nothing is stored yet.</p>
+      }
+      @case ('cached') {
+        <p>Stored {{ things.cachedAt() | date: 'short' }}</p>
+      }
+    }
+    <ul>
+      @for (thing of things.value()?.items ?? []; track thing.id) {
+        <li>{{ thing.name }}</li>
+      }
+    </ul>
+    <button (click)="rename.run(params)">Rename</button>
+    @if (rename.status() === 'pending') {
+      <p>Saved on this device, sent when you are back online.</p>
+    }
+    @if (rename.conflict(); as c) {
+      <p>Changed elsewhere: {{ c.current }}</p>
+    }
+  `,
+})
+export class ThingsPage {
+  readonly things = qitsResource(LIST_THINGS, () => ({}), { offline: 'cache' });
+  readonly rename = qitsMutation(RENAME_THING, { offline: 'queue', affects: () => [this.things] });
+}
+```
+
+`qits.configs.offline` turns the first two on as `error`. `offline-capable-operations` needs the
+app's documents, so it cannot ship in a preset: add it beside the preset, with typed linting for both
+typed rules:
+
+```js
+// eslint.config.mjs
+import qits from '@qits/angular/eslint';
+import tseslint from 'typescript-eslint';
+export default [
+  ...yourConfig,
+  ...qits.configs.recommended,
+  ...qits.configs.offline,
+  {
+    files: ['src/app/**/*.ts'],
+    languageOptions: {
+      parser: tseslint.parser,
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+    },
+    rules: {
+      'qits/offline-capable-operations': [
+        'error',
+        { contracts: { 'qits-things-service': 'contracts/qits-things-service.openapi.yml' } },
+      ],
+    },
+  },
+];
+```
+
+**Where the documents come from.** `contracts` maps a `qitsOperation`'s `provider` (the repository
+name) to that provider's OpenAPI document, relative to the app's `package.json`: `.json`, `.yml` or
+`.yaml`. Commit the provider's `docs/openapi.yml`, the document the app's client is generated from
+(`openapi-ts.config.ts`), and update it with the client: a lint rule cannot fetch, and CI builds the
+app without its siblings. A YAML document needs the `yaml` package (`^2`, an optional peer of
+`@qits/angular`): `pnpm add -D yaml`, or the rule asks for it once per document. The entity map
+(`entities.json`) is no substitute, since it has no row for an operation that answers no entity,
+such as a `DELETE` answering 204.
+
+`offline-policy-declared` and `offline-states-handled` take `resource` (default `qitsResource`) and
+`mutation` (default `qitsMutation`) for renamed functions. Without typed linting the typed rules say
+so instead of passing. Specs are not read.
+
 ## What a page shows: data marks
 
 The UI builder needs to know, for any part of a screenshot, which read produced it, which record
@@ -1379,6 +1481,9 @@ export default [...yourConfig, ...qits.configs.recommended];
 | `qits/store-has-pact`                        | A store or operations file that imports a generated client has its pact spec beside it: `<name>.store.pact.spec.ts` for a store, `<name>.operations.pact.spec.ts` for an operations file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `qits/reads-through-resources`               | **Off** in `recommended`: an app turns it on, route by route, as it migrates (see [API reads and writes](#api-reads-and-writes-qitsresource-and-qitsmutation)). Reports three ways round `qitsResource` / `qitsMutation`: using a generated client function directly, called or not (a type-only import is fine); calling `qitsOperation(...)` anywhere but a `*.operations.ts` file, where no pact spec stands beside it; and `inject(X)` of a store whose own file imports a generated client, which means the data still arrives through the store's calls rather than through an operation (a store that imports no client — UI state only — is fine). `X`'s import is followed to a `*.store.ts` file on disk, relative or through a tsconfig path alias (`$core/…`). Specs and the generated clients themselves are not read, and inside an operations file the client function itself is `consume-client-calls`' business, not this rule's. Options `clients` / `operation` (default `qitsOperation`), shared with the other client rules.                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `qits/data-through-fields`                   | **Off** in `recommended`: an app turns it on, route by route, once its templates carry the data marks, with typed linting (see [Holding a page to its marks](#holding-a-page-to-its-marks-qitsdata-through-fields)). In a component's template (inline or `templateUrl`), the API data it renders — read from a `qitsResource` field's `value()` (option `resource`) or from an `input()` / `model()` whose type, a union member, an array element or a type argument of it, is declared under `clients` — sits under a `qitsField` inside a `qitsEntity` / `qitsEntityList`. Interpolations, `[textContent]` / `[innerText]` / `[innerHTML]`, and every input of an element whose tag starts with a `display` prefix (default `['ui-']`) render; class, style, `attr.*`, the marks' own inputs and control-flow conditions do not. Reported: rendered data with no `qitsField` at or above it; a `qitsField` with no entity mark at or above it in the same template; a pipe, call, operator, template literal, ternary or non-alias `computed` under a plain path mark (it needs `{ derived: [...] }`); a literal path naming another field than the plain path shown; a literal `{ derived: [...] }` missing a path the expression reads. A `computed(() => <plain path>)` (or `linkedSignal`) is that path, an `@for` item an entity of its own. Without typed linting it says so once per component class. Options `clients` / `resource` (default `qitsResource`) / `display`.                                  |
+| `qits/offline-policy-declared`               | **Off** in `recommended`, on in `configs.offline` (see [Holding an offline-first app to its policies](#holding-an-offline-first-app-to-its-policies)). Every `qitsResource(...)` (option `resource`) has an object literal with its own `offline` property as its third argument, every `qitsMutation(...)` (option `mutation`) as its second; the value is not checked, a spread does not count. Specs are skipped.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `qits/offline-states-handled`                | **Off** in `recommended`, on in `configs.offline`; needs typed linting. In a component's template (inline or `templateUrl`), a `qitsResource` field with `offline: 'cache'` that the template renders (`value()`, `hasValue()`, `qitsStatus()`) shows `cached` and `offline`, and a `qitsMutation` field that is run (`.run(` in the template or the class) shows `conflict`, plus `pending` with `offline: 'queue'`. Shown: `qitsStatus()` / `status()` compared with the state (`===`, `!==`, `==`, `!=`, `@case` under `@switch`), in the template or one `computed` / `linkedSignal` it reads; `cachedAt()` shows `cached`, `conflict()` shows `conflict`. One report per missing state, on the field. A policy that is not a string literal is skipped. Options `resource` / `mutation`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `qits/offline-capable-operations`            | **Off** in `recommended` and in no preset; needs typed linting and the option `contracts` (`{ "<provider>": "<OpenAPI document>" }`, `.json` / `.yml` / `.yaml`, relative to the nearest `package.json`). A `qitsResource` with `offline: 'cache'` and a `qitsMutation` with `offline: 'queue'` go through an operation (followed by the type checker to its `qitsOperation({...})`) that the provider's document has under its method and marks `x-qits-offline: true` (or `"true"`). Reported: no document for the provider or a missing file, an unknown operation, an operation without the mark, a YAML document without the optional `yaml` peer.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `qits/pact-names`                            | In a `*.pact.spec.ts`, `new PactV4({ consumer, provider })` and `addGoldenInteraction(…, { provider, trigger: { app } })`: the consumer and trigger app equal the nearest `package.json` `name`; the provider is a repository name ending in a role (`-service`, `-frontend`, `-app`, `-daemon`, `-oci`, `-cli`, `-javalib`, `-jslib`). Give names as string literals or consts, or the rule cannot check them.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `qits/page-location`                         | A `*.page.ts` or `*.layout.ts` file lives under the routes directory (a `*.layout.ts` also under the `$layout` alias directory, when the project has one), and every component class under the routes directory lives in such a file. Other files there (a resolver, a guard, a `*.routes.ts`) and specs are fine.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `qits/page-suffix`                           | The exported component in a `*.page.ts` ends in `Page`, the one in a `*.layout.ts` ends in `Layout`, and a component named `…Page` / `…Layout` lives in such a file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |

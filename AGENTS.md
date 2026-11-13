@@ -406,6 +406,15 @@ viewportSpecs, colorSchemes })`, all off by default so a bump changes nothing un
   `--color-*` names decide what exists, light declarations (no dark selector, media or variant)
   decide the suggestion. The Tailwind default palette is hard-coded in the rule (4.1's mauve, olive,
   mist, taupe included); `white` / `black` resolve to `#fff` / `#000`. Suggestions only, never a fix.
+  The offline rules (ticket qits-2150) are in no `recommended`: `configs.offline` turns on
+  `offline-policy-declared` (untyped) and `offline-states-handled` (typed; walks the whole parsed
+  template generically, so any expression position counts — note Angular 22's `ThisReceiver` is
+  **not** an `ImplicitReceiver`, and a `@switch` / `@case` expression is an `ASTWithSource`).
+  `offline-capable-operations` needs the app's `contracts`, so it is in no preset; it loads
+  `typescript` (for `SymbolFlags.Alias` and the node guards) and the optional peer `yaml` with
+  `createRequire(import.meta.url)`, both only when needed, and caches each document by path and
+  mtime. Its `noYaml` test copies the rule outside the workspace (only `typescript` symlinked
+  beside it), since `yaml` is a root devDependency here.
   **A rule added to `configs.recommended` must pass on a consumer that has not adopted it yet**: it
   is `error` on every consumer's whole codebase the moment the library bumps, so it may only report
   on something a consumer opts into by a file existing (as `route-paths` now does) or something

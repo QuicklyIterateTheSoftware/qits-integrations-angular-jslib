@@ -4,6 +4,8 @@
  *   import qits from '@qits/angular/eslint';
  *   export default [...yourConfig, ...qits.configs.recommended];
  *
+ * An offline-first app also spreads `qits.configs.offline` (see below).
+ *
  * The rules read TypeScript, so the app's config must already parse `.ts` (typescript-eslint or
  * angular-eslint does).
  */
@@ -12,6 +14,9 @@ import clientOnlyInStores from './rules/client-only-in-stores.mjs';
 import consumeClientCalls from './rules/consume-client-calls.mjs';
 import dataThroughFields from './rules/data-through-fields.mjs';
 import navigationThroughOutcomes from './rules/navigation-through-outcomes.mjs';
+import offlineCapableOperations from './rules/offline-capable-operations.mjs';
+import offlinePolicyDeclared from './rules/offline-policy-declared.mjs';
+import offlineStatesHandled from './rules/offline-states-handled.mjs';
 import pactNames from './rules/pact-names.mjs';
 import pageHasScreenshots from './rules/page-has-screenshots.mjs';
 import pageLocation from './rules/page-location.mjs';
@@ -50,6 +55,13 @@ const plugin = {
     // Off in recommended: an app turns it on with a `files` glob for each route whose templates
     // carry the data marks, and it needs typed linting (parserOptions.projectService).
     'data-through-fields': dataThroughFields,
+    // Off in recommended: an offline-first app turns these two on with configs.offline; the second
+    // needs typed linting (parserOptions.projectService).
+    'offline-policy-declared': offlinePolicyDeclared,
+    'offline-states-handled': offlineStatesHandled,
+    // In no preset: it needs the app's contracts (the providers' OpenAPI documents), and typed
+    // linting.
+    'offline-capable-operations': offlineCapableOperations,
   },
   configs: {},
 };
@@ -77,6 +89,24 @@ plugin.configs.recommended = [
       'qits/browser-spec-data-from-golden-masters': 'error',
       // warn until a consumer categorises its existing shots (qits-2047 turns it to error there)
       'qits/screenshot-kind': 'warn',
+    },
+  },
+];
+
+/**
+ * The opt-in preset for an offline-first app (ticket qits-2150): every resource and mutation
+ * declares its offline policy, and every template shows the offline states its fields can reach.
+ * `offline-states-handled` needs typed linting, which the app's config sets.
+ * `offline-capable-operations` needs the app's `contracts`, so the app adds it beside this preset.
+ */
+plugin.configs.offline = [
+  {
+    name: 'qits/offline',
+    files: ['**/*.ts'],
+    plugins: { qits: plugin },
+    rules: {
+      'qits/offline-policy-declared': 'error',
+      'qits/offline-states-handled': 'error',
     },
   },
 ];
