@@ -263,7 +263,7 @@ export class OfflineSync {
   private readonly pendingTasks = inject(PendingTasks);
   private readonly browser = isPlatformBrowser(inject(PLATFORM_ID));
   private readonly user: () => string | null =
-    this.options.user ?? (() => this.tokens?.subject() ?? null);
+    this.options.user ?? (() => this.tokens?.user() ?? null);
 
   private readonly operations = new Map<string, QitsOfflineOperation>();
   private readonly watchers = new Set<(keys: ReadonlySet<string>) => void>();

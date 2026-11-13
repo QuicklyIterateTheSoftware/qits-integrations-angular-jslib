@@ -24,9 +24,11 @@ import {
  * the idp's public client `options.clientId`, the bearer on every platform call, the event stream
  * through `fetch()` with the bearer, WebSockets with the bearer as a subprotocol.
  *
- * - {@link QitsTokens}: the flow, the token store (`sessionStorage`, this tab), the refresh ahead
- *   of expiry, one refresh in flight.
- * - {@link QitsSession} (and `qitsSignedInGuard`): signed in means holding a usable token.
+ * - {@link QitsTokens}: the flow, the token store (`sessionStorage`, this tab), the user signed in
+ *   last (the `sub` alone, `localStorage`, for an offline relaunch), the refresh ahead of expiry,
+ *   one refresh in flight.
+ * - {@link QitsSession} (and `qitsSignedInGuard`): signed in means holding a usable token; offline,
+ *   being the remembered user, who signs in once the network is back.
  * - {@link QitsSessionExpiry}: a platform call answered 401 and no refresh helps, so the visitor
  *   signs in again (`session-expired:signedOut`), for `qitsBearerInterceptor` and
  *   {@link QitsBearerFetch}.

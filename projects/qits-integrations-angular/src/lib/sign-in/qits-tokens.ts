@@ -23,6 +23,14 @@ export function tokensKey(clientId: string): string {
   return `qits.sign-in.${clientId}.tokens`;
 }
 
+/**
+ * Who signed in last on this device, one entry per client: the access token's `sub` alone, in
+ * `localStorage`, so an offline relaunch still knows whose store to open. Never a token.
+ */
+export function userKey(clientId: string): string {
+  return `qits.sign-in.${clientId}.user`;
+}
+
 /** One sign-in in progress, by its `state`: the PKCE verifier and the path to go back to. */
 export function pendingKey(clientId: string, state: string): string {
   return `qits.sign-in.${clientId}.pkce.${state}`;
@@ -89,12 +97,17 @@ interface TokenAnswer {
  * - `refresh()` swaps the refresh token for new tokens. The idp rotates the refresh token on every
  *   use and revokes the whole family when one is used twice, so there is only ever one refresh in
  *   flight: a second caller gets the first one's answer.
- * - The tokens live in memory and in `sessionStorage`, so a reload keeps them. A refresh runs on
- *   its own {@link REFRESH_AHEAD_MS} before the access token expires.
- * - `logout()` forgets the tokens. It runs on its own when the idp refuses a refresh, so it is not a
- *   sign-out: the offline store (`QitsOffline.signOut`) stays where it is.
+ * - The tokens live in memory and in `sessionStorage` (this tab), so a reload keeps them and a
+ *   relaunch does not. A refresh runs on its own {@link REFRESH_AHEAD_MS} before the access token
+ *   expires. The access token's `sub` alone is also remembered in `localStorage` ({@link userKey})
+ *   whenever the idp issues tokens; the next user's sign-in replaces it.
+ * - `logout()` forgets the tokens, not the remembered `sub`. It runs on its own when the idp
+ *   refuses a refresh, so it is not a sign-out: the offline store (`QitsOffline.signOut`) stays
+ *   where it is.
  * - `subject()` is the access token's `sub` claim, and `renewals()` counts the tokens the idp has
  *   issued on this page (a sign-in or a refresh): the offline outbox resumes on it after a 401.
+ * - `user()` is `subject()` while a token is held, else the remembered `sub`: who the offline store
+ *   belongs to on a relaunch without tokens. `forgetUser()` forgets it (`QitsOffline.signOut`).
  */
 @Injectable()
 export class QitsTokens {
@@ -104,6 +117,7 @@ export class QitsTokens {
   private readonly idp = this.settings.idpOrigin;
   private readonly clientId = this.settings.clientId;
   private readonly tokensKey = tokensKey(this.clientId);
+  private readonly userKey = userKey(this.clientId);
   private readonly fetch = inject(QITS_SIGN_IN_FETCH);
 
   private tokens: Tokens | null = null;
@@ -112,6 +126,7 @@ export class QitsTokens {
   private redirecting = false;
   readonly #accessToken = signal<string | null>(null);
   readonly #renewals = signal(0);
+  readonly #remembered = signal<string | null>(null);
 
   /**
    * How many times the idp issued tokens on this page, a sign-in or a refresh. Tokens read back
@@ -122,6 +137,7 @@ export class QitsTokens {
   constructor() {
     inject(DestroyRef).onDestroy(() => clearTimeout(this.timer));
     if (!this.browser) return;
+    this.#remembered.set(readLocal(this.userKey));
     const stored = read<Tokens>(this.tokensKey);
     if (stored) this.keep(stored);
   }
@@ -229,7 +245,22 @@ export class QitsTokens {
     return token ? subjectOf(token) : null;
   }
 
-  /** Forgets the tokens, here and in `sessionStorage`. */
+  /**
+   * Who is signed in on this device: {@link subject} while a token is held, else the `sub` the idp
+   * last issued tokens for here (an offline relaunch, a refused refresh); null when neither. A
+   * signal read, so it is reactive.
+   */
+  user(): string | null {
+    return this.subject() ?? this.#remembered();
+  }
+
+  /** Forgets the remembered `sub`, here and in `localStorage` (`QitsOffline.signOut`). */
+  forgetUser(): void {
+    this.#remembered.set(null);
+    if (this.browser) removeLocal(this.userKey);
+  }
+
+  /** Forgets the tokens, here and in `sessionStorage`. The remembered `sub` stays. */
   logout(): void {
     clearTimeout(this.timer);
     this.tokens = null;
@@ -279,8 +310,17 @@ export class QitsTokens {
     if (!tokens) return null;
     this.keep(tokens);
     write(this.tokensKey, tokens);
+    this.remember(tokens.accessToken);
     this.#renewals.update((n) => n + 1);
     return tokens;
+  }
+
+  /** Remembers the `sub` of a token the idp issued, for {@link user}; none changes nothing. */
+  private remember(accessToken: string): void {
+    const sub = subjectOf(accessToken);
+    if (!sub || !this.browser) return;
+    this.#remembered.set(sub);
+    writeLocal(this.userKey, sub);
   }
 
   private keep(tokens: Tokens): void {
@@ -359,6 +399,30 @@ function write(key: string, value: unknown): void {
 function remove(key: string): void {
   try {
     sessionStorage.removeItem(key);
+  } catch {
+    // Storage off: nothing was kept.
+  }
+}
+
+function readLocal(key: string): string | null {
+  try {
+    return localStorage.getItem(key) || null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLocal(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Storage off: the user is known on this page only.
+  }
+}
+
+function removeLocal(key: string): void {
+  try {
+    localStorage.removeItem(key);
   } catch {
     // Storage off: nothing was kept.
   }

@@ -125,8 +125,9 @@ export interface QitsOfflineOptions {
   readonly project: string;
   /**
    * Who is signed in. Null means no store: `cache` resources act `online-only` and `queue`
-   * mutations refuse with {@link QitsOfflineError} `'signed-out'`. By default the `sub` claim of
-   * `QitsTokens`' access token, or null without `provideQitsBearerSignIn`.
+   * mutations refuse with {@link QitsOfflineError} `'signed-out'`. By default `QitsTokens.user()`:
+   * the `sub` claim of the access token, or without one the `sub` remembered on this device from
+   * the last sign-in (an offline relaunch); null without `provideQitsBearerSignIn`.
    */
   readonly user?: () => string | null;
   /**

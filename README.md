@@ -248,7 +248,9 @@ before any module code, so it stays an inline `index.html` script — the canoni
 A platform page signs in with OIDC authorization code + PKCE against one of the idp's public
 clients, keeps the tokens in `sessionStorage` (this tab), refreshes them ahead of expiry (one
 refresh in flight: the idp revokes the family when a refresh token is used twice), and sends the
-bearer on every platform call (epic qits-543).
+bearer on every platform call (epic qits-543). The access token's `sub` alone is remembered in
+`localStorage` (`qits.sign-in.<clientId>.user`) each time the idp issues tokens, so an offline
+relaunch still knows who signed in last; no token ever goes there.
 
 ```ts
 // app.config.ts
@@ -276,6 +278,9 @@ providers: [
   URLs included) and to `https` hosts at or under the platform domain, nowhere else. A 401 gets one
   refresh and one retry, then the sign-in, back to the current page.
 - **`qitsSignedInGuard`** / **`QitsSession.ensure(url)`**: start the sign-in before a page renders.
+  Offline (`navigator.onLine === false`), a visitor without a usable token whom the device
+  remembers is let through instead (the idp cannot load), and the sign-in starts, back to the
+  current page, when the browser goes `online` again (unless a refresh then brings a token).
 - **`QITS_EVENT_SOURCE`** opens a `FetchEventSource` (an `EventSource` stand-in over `fetch`, with the
   bearer). It behaves like `EventSource`: `onopen` on a 2xx; a dropped stream is `CONNECTING` and
   reconnects after 3 s (or the stream's `retry:`), sending `Last-Event-ID` once ids were seen; a
@@ -284,7 +289,9 @@ providers: [
   subprotocols. Without the provider both are the browser's own.
 - **`QitsBearerFetch`**: `fetch(url, init)` with the bearer; `fetchObjectUrl(url)` for an `<img>` of a
   role-guarded route (revoke the URL when done); `download(url, fileName)` for a download link.
-- **`QitsTokens`**: `accessToken()`, `login(returnPath)`, `logout()`, `refresh()`.
+- **`QitsTokens`**: `accessToken()`, `login(returnPath)`, `logout()`, `refresh()`, `subject()` (the
+  access token's `sub`), `user()` (`subject()`, else the remembered `sub`) and `forgetUser()`.
+  `logout()` keeps the remembered `sub`; `QitsOffline.signOut()` forgets it.
 
 ## What a store reads: `consume` and `Consumed`
 
@@ -422,10 +429,11 @@ providers: [
 ```
 
 - **The store** is IndexedDB, one database per user, `qits-offline:<project>:<user>`, opened at
-  start-up. `user` defaults to the `sub` claim of `QitsTokens`' access token (`QitsTokens.subject()`);
-  pass `user: () => …` without the bearer sign-in. No user means no store: `cache` resources act
-  `online-only` and `queue` mutations refuse with `QitsOfflineError('signed-out')`. Another user
-  signing in switches to their database.
+  start-up. `user` defaults to `QitsTokens.user()`: the `sub` claim of the access token, or without
+  one the `sub` remembered on this device, so an installed app relaunched offline (empty
+  `sessionStorage`) still opens its store; pass `user: () => …` without the bearer sign-in. No user
+  means no store: `cache` resources act `online-only` and `queue` mutations refuse with
+  `QitsOfflineError('signed-out')`. Another user signing in switches to their database.
 - **`operations`** lists every write the outbox may replay after a page reload; a `qitsMutation`
   registers its own operation as it is created. An entry whose operation nobody registered waits,
   and shows `waiting: 'unknown-operation'` in `outbox()`.
@@ -521,9 +529,10 @@ readonly conflicts = computed(() => this.offline.outbox().filter((e) => e.state 
 **Sign-out.** `QitsOffline.signOut()` answers `{ signedOut: false, pending: n }` and changes nothing
 while the outbox holds entries: show that as the warning, and call `signOut({ discardPending: true })`
 once the person agrees to lose them. Otherwise it deletes the user's database (stored answers and
-outbox), calls `QitsTokens.logout()` when the bearer sign-in is provided, and answers
-`{ signedOut: true, pending: n }`. `QitsTokens.logout()` on its own, which also runs when the idp
-refuses a refresh, clears nothing: an expired refresh token offline must not throw the outbox away.
+outbox), calls `QitsTokens.logout()` and `QitsTokens.forgetUser()` when the bearer sign-in is
+provided, and answers `{ signedOut: true, pending: n }`. `QitsTokens.logout()` on its own, which
+also runs when the idp refuses a refresh, clears nothing: the remembered user keeps the store open,
+since an expired refresh token offline must not throw the outbox away.
 
 **The PWA reload guard.** A reload while a write is on the wire can lose its answer. With
 `@qits/angular/pwa`, add the guard (the main entry does not import the pwa entry; the guard is a plain
@@ -541,9 +550,7 @@ It refuses with `'the outbox is sending'` while `sending()` is true.
 `qits-angular screenshots --check` asks every route for them — see
 [Offline shots](#offline-shots-offline).
 
-Not covered yet: caching API answers in the service worker, and a sign-in on an offline relaunch
-(`QitsTokens` keeps the tokens in `sessionStorage`, so a PWA started fresh while offline knows no user;
-qits-2169).
+Not covered yet: caching API answers in the service worker.
 
 ## What a page shows: data marks
 

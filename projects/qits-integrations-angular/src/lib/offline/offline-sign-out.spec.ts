@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { QITS_SIGN_IN_FETCH, QitsTokens, tokensKey } from '../sign-in/qits-tokens';
+import { QITS_SIGN_IN_FETCH, QitsTokens, tokensKey, userKey } from '../sign-in/qits-tokens';
 import { QITS_SIGN_IN } from '../sign-in/sign-in-settings';
 import {
   boot,
@@ -15,6 +15,7 @@ import type { QitsOffline } from './qits-offline';
 
 const CLIENT_ID = 'qits-fixture';
 const ALICE_STORE = 'qits-offline:fixture:alice';
+const USER_KEY = userKey(CLIENT_ID);
 
 /** An unsigned JWT with the `sub` claim, as the idp's access token carries it. */
 function jwt(sub: string): string {
@@ -23,8 +24,12 @@ function jwt(sub: string): string {
   return `${part({ alg: 'RS256' })}.${part({ sub, exp: 4102444800 })}.signature`;
 }
 
-/** Tokens in `sessionStorage`, as a finished sign-in leaves them. */
+/**
+ * Tokens in `sessionStorage` and the remembered `sub` in `localStorage`, as a finished sign-in
+ * leaves them.
+ */
 function signedIn(sub: string): void {
+  localStorage.setItem(USER_KEY, sub);
   sessionStorage.setItem(
     tokensKey(CLIENT_ID),
     JSON.stringify({
@@ -85,6 +90,7 @@ describe('offline mode: sign-in and sign-out', () => {
     server = resetWorld();
     server.seed('t1', 'one');
     sessionStorage.clear();
+    localStorage.clear();
     idp.mockReset();
     signedIn('alice');
     await start();
@@ -93,10 +99,12 @@ describe('offline mode: sign-in and sign-out', () => {
   afterEach(() => {
     network(true);
     sessionStorage.clear();
+    localStorage.clear();
   });
 
   it('names the store after the signed-in user', async () => {
     expect(tokens.subject()).toBe('alice');
+    expect(tokens.user()).toBe('alice');
     expect(await databases()).toEqual([ALICE_STORE]);
     expect(page.thing.qitsStatus()).toBe('resolved');
   });
@@ -112,6 +120,7 @@ describe('offline mode: sign-in and sign-out', () => {
     expect(offline.outbox()).toMatchObject([{ state: 'pending', recordId: 't1' }]);
     expect(tokens.subject()).toBe('alice');
     expect(sessionStorage.getItem(tokensKey(CLIENT_ID))).not.toBeNull();
+    expect(localStorage.getItem(USER_KEY)).toBe('alice');
 
     // Nothing was lost: back online, the write is sent.
     network(true);
@@ -128,7 +137,9 @@ describe('offline mode: sign-in and sign-out', () => {
     expect(await databases()).toEqual([]);
     expect(offline.outbox()).toEqual([]);
     expect(tokens.subject()).toBeNull();
+    expect(tokens.user()).toBeNull();
     expect(sessionStorage.getItem(tokensKey(CLIENT_ID))).toBeNull();
+    expect(localStorage.getItem(USER_KEY)).toBeNull();
 
     network(true);
     await settle();
@@ -140,16 +151,20 @@ describe('offline mode: sign-in and sign-out', () => {
     await expect(offline.signOut()).resolves.toEqual({ signedOut: true, pending: 0 });
     expect(await databases()).toEqual([]);
     expect(tokens.subject()).toBeNull();
+    expect(tokens.user()).toBeNull();
   });
 
   it('A refused token refresh clears nothing', async () => {
     await queueOne();
     idp.mockResolvedValueOnce(new Response('{"error":"invalid_grant"}', { status: 400 }));
     await expect(tokens.refresh()).resolves.toBeNull();
-    // The refusal ran `logout()`: no user, so the store is closed, but nothing is deleted.
+    // The refusal ran `logout()`: no token, but the remembered user keeps her store open.
     expect(tokens.subject()).toBeNull();
+    expect(tokens.user()).toBe('alice');
     await settle();
     expect(await databases()).toEqual([ALICE_STORE]);
+    expect(offline.outbox()).toMatchObject([{ state: 'pending', recordId: 't1' }]);
+    expect(page.thing.value()?.name).toBe('mine');
 
     // The same person signs in again: the outbox is still there, and is sent.
     signedIn('alice');
@@ -193,5 +208,38 @@ describe('offline mode: sign-in and sign-out', () => {
     expect(tokens.subject()).toBe('bob');
     expect(offline.outbox()).toEqual([]);
     expect(await databases()).toEqual([ALICE_STORE, 'qits-offline:fixture:bob']);
+  });
+
+  it("opens the remembered user's store on an offline relaunch, without the idp", async () => {
+    // Alice signs in online: the idp issues her tokens, and her `sub` is remembered.
+    localStorage.clear();
+    idp.mockResolvedValueOnce(issued('alice'));
+    await tokens.refresh();
+    expect(localStorage.getItem(USER_KEY)).toBe('alice');
+    expect(page.thing.qitsStatus()).toBe('resolved');
+    await queueOne();
+
+    // The installed app is closed and started again offline: the tab's tokens are gone.
+    sessionStorage.clear();
+    reloadPage();
+    idp.mockClear();
+    network(false);
+    await start();
+    expect(tokens.subject()).toBeNull();
+    expect(tokens.user()).toBe('alice');
+    expect(await databases()).toEqual([ALICE_STORE]);
+    expect(page.thing.qitsStatus()).toBe('cached');
+    expect(page.thing.value()?.name).toBe('mine');
+    expect(offline.outbox()).toMatchObject([{ state: 'pending', recordId: 't1' }]);
+    expect(idp).not.toHaveBeenCalled();
+
+    // Signing out on this device forgets her too.
+    await expect(offline.signOut({ discardPending: true })).resolves.toEqual({
+      signedOut: true,
+      pending: 1,
+    });
+    expect(localStorage.getItem(USER_KEY)).toBeNull();
+    expect(tokens.user()).toBeNull();
+    expect(await databases()).toEqual([]);
   });
 });
