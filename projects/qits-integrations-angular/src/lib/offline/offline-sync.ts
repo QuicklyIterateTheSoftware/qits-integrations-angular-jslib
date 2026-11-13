@@ -115,6 +115,24 @@ export type SettledWrite =
   | { readonly seq: number; readonly outcome: 'error'; readonly error: QitsApiError }
   | { readonly seq: number; readonly outcome: 'pending' };
 
+/**
+ * The instant a cache write stamps as `cachedAt` while a test pins it (ticket qits-2153,
+ * `ɵpinQitsOfflineCacheClock`), so a freeze's `connectivity.cached` is the same on every run; null,
+ * the real clock, otherwise. Only cache writes read it: an outbox entry's `enqueuedAt` keeps the
+ * real clock.
+ */
+let pinnedCacheClock: number | null = null;
+
+/** Pins the clock cache writes stamp `cachedAt` with to `at` (epoch milliseconds); null unpins. */
+export function pinCacheClock(at: number | null): void {
+  pinnedCacheClock = at;
+}
+
+/** Now, as a cache write stamps it: the pinned instant in a test that pins it, else `Date.now()`. */
+function cacheNow(): number {
+  return pinnedCacheClock ?? Date.now();
+}
+
 /** A stored answer as a resource shows it, with the queued writes laid over it. */
 export interface OfflineView {
   readonly value: unknown;
@@ -268,8 +286,14 @@ export class OfflineSync {
   private readonly operations = new Map<string, QitsOfflineOperation>();
   private readonly watchers = new Set<(keys: ReadonlySet<string>) => void>();
   private readonly settledWatchers = new Set<(settled: SettledWrite) => void>();
-  /** The live `cache` resources, each with its operation's key. */
-  private readonly live = new Map<OfflineEntryHandle & { reload(): unknown }, string>();
+  /**
+   * The live `cache` resources, each with its operation's key and, for the testing hook (ticket
+   * qits-2153), when the stored value it shows now was stored (undefined when it shows none).
+   */
+  private readonly live = new Map<
+    OfflineEntryHandle & { reload(): unknown },
+    { readonly operation: string; readonly shownCachedAt: () => Date | undefined }
+  >();
   /**
    * The live `queue` mutations' operation keys (ticket qits-2151), one entry per mutation: what the
    * testing hook reports as `queueMutations`. Every mutation registers its operation, whatever its
@@ -395,13 +419,15 @@ export class OfflineSync {
 
   /**
    * Reloads `resource`, a `cache` resource reading through `op`, when the network comes back.
-   * Answers the unregister.
+   * `shownCachedAt` says when the stored value it shows was stored, undefined while it shows none
+   * (read by {@link liveCachedReads}). Answers the unregister.
    */
   addLive(
     resource: OfflineEntryHandle & { reload(): unknown },
     op: QitsOperationIdentity,
+    shownCachedAt: () => Date | undefined = () => undefined,
   ): () => void {
-    this.live.set(resource, operationKey(op));
+    this.live.set(resource, { operation: operationKey(op), shownCachedAt });
     return () => this.live.delete(resource);
   }
 
@@ -414,7 +440,26 @@ export class OfflineSync {
 
   /** The operation keys of the live `cache` resources, sorted and without duplicates. */
   liveCacheOperations(): string[] {
-    return [...new Set(this.live.values())].sort();
+    return [...new Set([...this.live.values()].map((l) => l.operation))].sort();
+  }
+
+  /**
+   * The live `cache` resources that show a stored value now (a store read, ticket qits-2153): one
+   * per operation key, sorted by it. When several resources of one operation show stored values,
+   * the latest `cachedAt` is kept: the freshest data the page shows for that operation.
+   */
+  liveCachedReads(): { operation: string; cachedAt: Date }[] {
+    const latest = new Map<string, Date>();
+    for (const { operation, shownCachedAt } of this.live.values()) {
+      const at = shownCachedAt();
+      if (!at || Number.isNaN(at.getTime())) continue;
+      const kept = latest.get(operation);
+      if (!kept || at.getTime() > kept.getTime()) latest.set(operation, at);
+    }
+    return [...latest.keys()].sort().map((operation) => ({
+      operation,
+      cachedAt: latest.get(operation)!,
+    }));
   }
 
   /** The operation keys of the live `queue` mutations, sorted and without duplicates. */
@@ -525,7 +570,7 @@ export class OfflineSync {
       const version = etagOf(first.answer) ?? versionOfRecord(first.value);
       const entry: StoredEntry = {
         value: first.value,
-        cachedAt: Date.now(),
+        cachedAt: cacheNow(),
         ...(version !== null ? { version } : {}),
       };
       await write(db, ENTRIES, (tx) => {
@@ -539,19 +584,20 @@ export class OfflineSync {
   /**
    * Stores `value` under `key` as if a read had just answered it (ticket qits-2151, the testing
    * hook's seed): a `ChangesPage` is merged into the entry's records, anything else replaces the
-   * entry. The resources showing `key` read it again. Answers false when there is no store (nobody
-   * signed in).
+   * entry. `cachedAt` (epoch milliseconds, ticket qits-2153) is the instant the entry says it was
+   * stored; the cache clock without it. The resources showing `key` read it again. Answers false
+   * when there is no store (nobody signed in).
    */
-  async seed(key: string, value: unknown): Promise<boolean> {
+  async seed(key: string, value: unknown, cachedAt: number = cacheNow()): Promise<boolean> {
     const db = await this.database();
     if (!db) return false;
     if (isChangesPage(value)) {
-      await this.merge(db, key, value);
+      await this.merge(db, key, value, cachedAt);
     } else {
       const version = versionOfRecord(value);
       const entry: StoredEntry = {
         value,
-        cachedAt: Date.now(),
+        cachedAt,
         ...(version !== null ? { version } : {}),
       };
       await write(db, ENTRIES, (tx) => {
@@ -578,7 +624,12 @@ export class OfflineSync {
   }
 
   /** Upserts a page's items by version, applies its tombstones, and stores its cursor. */
-  private merge(db: IDBDatabase, key: string, page: ChangesPage): Promise<void> {
+  private merge(
+    db: IDBDatabase,
+    key: string,
+    page: ChangesPage,
+    cachedAt: number = cacheNow(),
+  ): Promise<void> {
     return write(db, [ENTRIES, RECORDS], (tx) => {
       const records = tx.objectStore(RECORDS);
       for (const item of page.items) {
@@ -603,7 +654,7 @@ export class OfflineSync {
           }
         };
       }
-      const entry: StoredEntry = { value: null, cachedAt: Date.now(), cursor: page.nextCursor };
+      const entry: StoredEntry = { value: null, cachedAt, cursor: page.nextCursor };
       tx.objectStore(ENTRIES).put(entry, key);
       return () => undefined;
     });
@@ -662,7 +713,7 @@ export class OfflineSync {
             entries.put(
               {
                 value: answer,
-                cachedAt: Date.now(),
+                cachedAt: cacheNow(),
                 ...(answerVersion !== null ? { version: answerVersion } : {}),
               } satisfies StoredEntry,
               key,
@@ -702,7 +753,7 @@ export class OfflineSync {
             tx.objectStore(ENTRIES).put(
               {
                 value: current,
-                cachedAt: Date.now(),
+                cachedAt: cacheNow(),
                 ...(version !== null ? { version } : {}),
               } satisfies StoredEntry,
               key,

@@ -52,10 +52,15 @@ export {
 export { QitsOfflineError } from './lib/offline/offline-types';
 export {
   ɵdeleteQitsOfflineStores,
+  ɵpinQitsOfflineCacheClock,
   ɵQITS_OFFLINE_STORE_PREFIX,
   ɵqitsOfflineState,
 } from './lib/offline/offline-testing';
-export type { ɵQitsOfflineOutboxEntry, ɵQitsOfflineState } from './lib/offline/offline-testing';
+export type {
+  ɵQitsOfflineCachedRead,
+  ɵQitsOfflineOutboxEntry,
+  ɵQitsOfflineState,
+} from './lib/offline/offline-testing';
 export type {
   QitsConflict,
   QitsMutationOfflinePolicy,

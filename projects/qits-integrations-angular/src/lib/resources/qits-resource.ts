@@ -240,7 +240,12 @@ export function qitsResource<Params, Value, Err>(
         .finally(done);
     });
     const handle = Object.defineProperty(ref, OFFLINE_ENTRY, { value: () => shownKey });
-    const unlive = sync.addLive(handle, operation);
+    // When the stored value shown now was stored: what a freeze lists as `cached` (qits-2153).
+    const unlive = sync.addLive(handle, operation, () =>
+      untracked(() =>
+        ref.status() === 'resolved' && phase() === 'cached' ? cachedAt() : undefined,
+      ),
+    );
     injector.get(DestroyRef).onDestroy(() => {
       unwatch();
       unlive();
