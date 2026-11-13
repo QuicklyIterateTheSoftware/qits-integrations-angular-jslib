@@ -20,6 +20,11 @@
     },
     {
       "glob": "*.mjs",
+      "input": "pwa",
+      "output": "pwa"
+    },
+    {
+      "glob": "*.mjs",
       "input": "bin",
       "output": "bin"
     }

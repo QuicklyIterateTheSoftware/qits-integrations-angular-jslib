@@ -375,7 +375,7 @@ export function loadTheme(root, option) {
  * `var(--x, fallback)` follows `--x` when it is known, the fallback otherwise; `light-dark(a, b)`
  * takes `a`.
  */
-function chain(theme, value) {
+export function chain(theme, value) {
   const refs = new Set();
   const seen = new Set();
   let v = norm(value);

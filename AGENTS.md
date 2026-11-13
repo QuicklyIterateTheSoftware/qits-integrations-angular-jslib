@@ -218,9 +218,9 @@ marked optional via a pnpm `packageExtensions` entry here and in every consumer.
 ## Commands
 
 - `pnpm build` — `ng build qits-integrations-angular` → APF output in `dist/qits-integrations-angular/`
-- `pnpm test` — `pnpm test:eslint` (the lint rules) and `pnpm test:screenshots` (the screenshot command), both `node --test`, then `ng test qits-integrations-angular` (vitest builder, jsdom; excludes `*.browser.spec.ts`)
+- `pnpm test` — `pnpm test:eslint` (the lint rules), `pnpm test:screenshots` (the screenshot command) and `pnpm test:pwa` (the pwa command, its offline start stood in), all `node --test`, then `ng test qits-integrations-angular` (vitest builder, jsdom; excludes `*.browser.spec.ts`)
 - `pnpm test:browser` — `*.browser.spec.ts` in headless Chromium (`ng run
-qits-integrations-angular:test-browser`), then the real Vitest run of `screenshotReferences()`; one-time `pnpm exec playwright install chromium`
+qits-integrations-angular:test-browser`), then the real Vitest run of `screenshotReferences()`, then the pwa command's real offline start (`pwa/test/browser/`); one-time `pnpm exec playwright install chromium`
 - `pnpm lint` — `ng lint qits-integrations-angular`
 - `pnpm check-exports` — verify `dist/qits-integrations-angular` is publishable (after `pnpm build`)
 
@@ -496,6 +496,28 @@ viewportSpecs, colorSchemes })`, all off by default so a bump changes nothing un
   run) on each page or layout freeze group (spec, test, name, viewport) missing a scheme none of its
   freezes opted out of (`colorSchemeGaps()`). Turning the option on doubles and renames every
   reference: they are regenerated through the screenshot-baselines job.
+
+- **`@qits/angular/pwa`** (`projects/qits-integrations-angular/pwa/`, an ng-packagr secondary
+  entry; ticket qits-2152) and the **`qits-angular pwa`** command (`pwa/*.mjs`, plain ESM copied as
+  assets by the `pwa` glob, top level only so `test/` stays out). The entry is separate because it
+  imports `@angular/service-worker`, an **optional peer** (root devDependency); the main entry must
+  never import it, and `check-exports` fails if its bundle names it. `provideQitsPwa()` is
+  `provideServiceWorker` plus an environment initializer starting `QitsPwaUpdates`, which **never
+  reloads, assigns `location` or activates on its own** (not even on `unrecoverable`, which only
+  sets `broken`): the owner ruled the silent reload out, since it drops qits-2149's outbox mid-send.
+  `apply()` is the only reload, behind every `QITS_PWA_RELOAD_GUARDS` entry (run in the root
+  injection context; a throw refuses). `SwUpdate` is injected optionally, so the service is inert
+  without the worker. The prompt is held to `qits/theme-colors` by the library's own
+  `eslint.config.js` (no theme here, so any fixed colour is reported). Specs run under `ng test`
+  (the `../pwa/**` include) with a fake `SwUpdate` and `DOCUMENT`. The command: `manifest.mjs`
+  (`qits-pwa.json`, the manifest; colours through `loadTheme` / `chain` from
+  `eslint/rules/theme-colors.mjs`, whose theme cache is per process, so a test changing a token file
+  needs a fresh root), `checks.mjs` (fresh, manifest, linked, worker), `offline.mjs` (an in-process
+  static server and the **consumer's** `playwright`, resolved with `createRequire` from the project
+  root; it waits for control and for `caches.match` of every prefetch URL before going offline).
+  `pwa(args, io)` is async (the bin awaits every command); `io.offlineStart` is the node tests'
+  stand-in for step 5, and `pwa/test/browser/offline-start.test.mjs` runs the real one on a shell
+  with Angular's own `ngsw-worker.js` and an `ngsw.json` from its `ngsw-config` bin.
 
 ## Conventions (inherited from the qits webui)
 

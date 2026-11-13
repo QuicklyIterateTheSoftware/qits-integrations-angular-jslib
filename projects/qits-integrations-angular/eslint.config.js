@@ -41,6 +41,16 @@ module.exports = defineConfig([
     },
   },
   {
+    // The update prompt sits in an app's shell, so it keeps to the app's semantic theme tokens
+    // (ticket qits-2152). The library has no theme of its own: any fixed colour is reported.
+    files: ['pwa/src/**/*.ts'],
+    ignores: ['**/*.spec.ts'],
+    plugins: { qits },
+    rules: {
+      'qits/theme-colors': 'error',
+    },
+  },
+  {
     files: ['**/*.html'],
     rules: {},
   },

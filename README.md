@@ -76,7 +76,9 @@ hook, no `pnpm.onlyBuiltDependencies` allowlist, no Angular toolchain in the con
 (`^7.4.0`), and
 `@ngrx/signals` (`^21.0.0 || ^22.0.1`). The ngrx peer is required even if you never call
 `withQitsSnapshot` — the library's single bundle imports it statically, so it must be resolvable in
-every consumer. The bundle is partial-compiled (`ɵɵngDeclare*` with a `minVersion` of at most
+every consumer. `@angular/service-worker` (`^21.2.0 || ^22.1.0`) is an **optional** peer: only the
+`@qits/angular/pwa` entry imports it, so only an app that opts in to the
+[installable offline shell](#installable-offline-shell-qitsangularpwa) installs it. The bundle is partial-compiled (`ɵɵngDeclare*` with a `minVersion` of at most
 17.0.0), so an Angular 21.2 application's linker links it like any other library.
 
 An Angular 21 consumer that does not already depend on `@ngrx/signals` has to name it itself
@@ -402,6 +404,176 @@ Angular's `status()` is a closed union a library cannot extend; `qitsResource` k
 the ordinary `'idle'` / `'running'` / `'done'` / `'error'`, equally unreached online. Both extra
 pairs exist now so that templates and the offline lint rules can be written against the full set
 ahead of time; the offline behaviour itself is qits-2149.
+
+## Installable offline shell: `@qits/angular/pwa`
+
+An offline-first app has to install, start without a network, and never lose what the person did to
+a reload they did not choose (ticket qits-2152). The `@qits/angular/pwa` entry point is that shell:
+Angular's service worker, a watcher for new versions that never reloads on its own, and the prompt
+that lets the person take one. The `qits-angular pwa` command writes the web manifest from the
+app's theme and fails a build that would not install or start offline.
+
+It is **opt-in per repository**, like the light/dark screenshots: an app without `qits-pwa.json`
+gets nothing new, and the qits landing app does not opt in. It is a separate entry point because it
+imports `@angular/service-worker`, an **optional peer** (`^21.2.0 || ^22.1.0`) the main entry never
+imports, so the ~28 apps that never opt in need not install it (the main entry's own `@ngrx/signals`
+peer shows the cost of the other way round).
+
+To opt in, an app:
+
+1. installs `@angular/service-worker` (the same version as its `@angular/core`);
+2. provides the shell and places the prompt in its shell component:
+
+   ```ts
+   // app.config.ts
+   import { provideQitsPwa } from '@qits/angular/pwa';
+
+   providers: [provideQitsPwa()], // ngsw-worker.js, production builds only, once stable or after 30 s
+   ```
+
+   ```ts
+   // app.ts
+   import { QitsPwaUpdatePrompt } from '@qits/angular/pwa';
+
+   @Component({ imports: [QitsPwaUpdatePrompt], template: `<router-outlet /><qits-pwa-update-prompt />` })
+   ```
+
+3. commits a `qits-pwa.json` beside `angular.json` (fields below), runs `qits-angular pwa --write`,
+   commits the `public/manifest.webmanifest` it writes, and links it from `src/index.html`:
+   `<link rel="manifest" href="manifest.webmanifest" />`, with the icons it names in `public/`;
+4. commits an `ngsw-config.json` (below) and sets `"serviceWorker": "ngsw-config.json"` in the
+   production configuration of its build in `angular.json`;
+5. checks the build in its build script:
+
+   ```json
+   "build": "ng build && qits-angular pwa --check --dist dist/<app>/browser"
+   ```
+
+`provideQitsPwa({ script?, enabled?, registrationStrategy? })` takes the worker script (default
+`ngsw-worker.js`), whether to register it (default `!isDevMode()`, so never under `ng serve`) and
+when (default `registerWhenStable:30000`). It starts `QitsPwaUpdates`, which does nothing on the
+server or where the worker is off.
+
+### No reload the person did not choose
+
+The one service worker the estate had before reloaded silently: after a new version was ready, the
+next navigation loaded as a full page, and a version the worker could no longer serve reloaded at
+once. In an offline-first app that drops whatever the outbox was sending or writing, so here nothing
+reloads unless the person presses Reload:
+
+- `QitsPwaUpdates.state()` is `'current'`, `'ready'` after `VERSION_READY`, or `'broken'` after the
+  worker reports the tab's version `unrecoverable`. Neither event reloads, assigns `location` or
+  activates anything; they only change the state.
+- `check()` asks the worker for a new version and swallows a failure (offline). It runs when the tab
+  becomes visible; an app may call it too, for example on its own deployment event.
+- `apply()` is the only path to a reload. It first asks every `QITS_PWA_RELOAD_GUARDS` entry (a
+  multi token of `() => true | string | Promise<true | string>`, run in the root injection context
+  so a guard may `inject()`). A string refuses and says why; a guard that throws refuses with its
+  message. If any refuses, `apply()` resolves `{ applied: false, reasons }` and does nothing.
+  Otherwise it activates the ready version and calls `document.location.reload()`, resolving
+  `{ applied: true }`.
+
+```ts
+// a guard of the app's own: never reload over an unsaved form
+{
+  provide: QITS_PWA_RELOAD_GUARDS,
+  multi: true,
+  useFactory: () => {
+    const form = inject(DraftForm);
+    return () => (form.dirty() ? 'A form has unsaved changes' : true);
+  },
+}
+```
+
+qits-2149's outbox will provide a guard that refuses while it is sending.
+
+`<qits-pwa-update-prompt />` shows that state. It is hidden while `current`; at `ready` it shows
+"A new version is ready" with **Reload** (`apply()`) and **Later**, which hides it until the next
+`VERSION_READY`; at `broken` it shows "This version can no longer be loaded" with **Reload** only. A
+refused Reload lists the guards' reasons in the prompt. The buttons are named
+`data-track-event="pwa-update-reload"` and `"pwa-update-later"`, and the prompt is styled only
+with `var(--color-surface)`, `var(--color-fg)` and `var(--color-accent)`, so it follows the app's
+theme, dark too, and passes `qits/theme-colors`.
+
+### `qits-pwa.json`
+
+| Field               | Default                       | Meaning                                                                                             |
+| ------------------- | ----------------------------- | --------------------------------------------------------------------------------------------------- |
+| `name`, `shortName` | required                      | the manifest's `name` and `short_name`                                                              |
+| `description`       | none                          | the manifest's `description`                                                                        |
+| `startUrl`, `scope` | `./`                          | `start_url` and `scope`                                                                             |
+| `display`           | `standalone`                  | `display`; an installable app needs `standalone`, `fullscreen` or `minimal-ui`                      |
+| `icons`             | `[]`                          | `[{ src, sizes, type, purpose? }]`, `src` relative to the build output; a 192x192 and a 512x512 PNG |
+| `themeColor`        | `accent`                      | a semantic token **name**, resolved to its light value                                              |
+| `backgroundColor`   | `surface`                     | the same, for `background_color`                                                                    |
+| `theme`             | `src/styles.css`              | the stylesheet the tokens are read from, through its `@import`s                                     |
+| `output`            | `public/manifest.webmanifest` | where `--write` writes; the check looks for this file's name in the build output                    |
+| `shell`             | `app-root`                    | the selector the offline start looks for                                                            |
+
+A manifest cannot name a CSS variable, so `--write` resolves the two colours at build time: through
+the theme `qits/theme-colors` reads (`@qits/ui-components/theme.css` and the app's own tokens),
+following each `--color-<name>` to its light value (`accent` is `#1d4ed8` with the qits design
+library). A name that is not a semantic `@theme` colour (a palette step such as `blue-700`
+included), or that leads to no literal colour, exits 1 and names it. The manifest is written as
+stable JSON with sorted keys, so a rerun with nothing changed changes nothing.
+
+### A recommended `ngsw-config.json`
+
+```json
+{
+  "$schema": "./node_modules/@angular/service-worker/config/schema.json",
+  "index": "/index.html",
+  "assetGroups": [
+    {
+      "name": "app",
+      "installMode": "prefetch",
+      "resources": {
+        "files": [
+          "/favicon.ico",
+          "/index.html",
+          "/manifest.webmanifest",
+          "/*.css",
+          "/*.js",
+          "/icons/*.png"
+        ]
+      }
+    }
+  ],
+  "navigationUrls": ["/**", "!/**/*.*", "!/**/*__*", "!/**/*__*/**", "!/api/**"]
+}
+```
+
+The `app` group prefetches the whole shell at install, so the first offline start already has it.
+`navigationUrls` keeps `/api/**` away from the index fallback: an API request the worker answered
+with `index.html` would parse as garbage instead of failing as offline.
+
+### The installability check: `qits-angular pwa --check --dist <dir>`
+
+`<dir>` is the built browser output. Each failure is one line, and the command exits 1 if any check
+fails:
+
+1. **fresh**: the committed manifest holds what `--write` would write now (compared as JSON, so a
+   formatter's whitespace does not count). A stale one says `run qits-angular pwa --write`.
+2. **manifest**: `<dir>/manifest.webmanifest` parses and has `name` or `short_name`, `start_url`,
+   `display` `standalone`, `fullscreen` or `minimal-ui`, and a 192x192 and a 512x512 PNG icon; every
+   icon is in `<dir>`, and each PNG's real size (its IHDR) is one of its `sizes`.
+3. **linked**: `index.html` (`index.csr.html` for an SSR build) has a `<link rel="manifest">` to it.
+4. **worker**: `ngsw-worker.js` and `ngsw.json` are built, `ngsw.json`'s `index` is `/index.html`
+   (or `/index.csr.html`), and a `prefetch` asset group holds it.
+5. **offline start**: `<dir>` is served from an in-process static server on `127.0.0.1` (a random
+   port, unknown paths without an extension falling back to the index; localhost is a secure
+   context) and opened in Playwright's Chromium, imported from the app's own `playwright`. The check
+   waits until a worker controls the page (reloading once if one is active but not yet in control)
+   and has cached every prefetched URL, then takes the browser context offline and reloads. It
+   passes when the `shell` element is there with at least one child element. `--timeout <seconds>`
+   (default 60) bounds each wait. A worker that never takes control fails with
+   `service worker not registered`.
+
+**Step 5 needs the `app` recipe's renderer image.** Only qits-ci's `app` recipe builds on
+`node-browser-base`, which carries Playwright's Chromium; a `spa-frontend` repository builds on
+`node-base`, where the check fails with `needs the renderer image`. An offline-first app is an
+`app`-archetype repository, so its `npm run build` runs the check, and a build that would not
+install or start offline fails its release request.
 
 ## Where an interaction leads: `outcomes`
 
@@ -1451,10 +1623,12 @@ pnpm ng build                                            # compiles against the 
 
 ## Commands
 
-| Command              | What it does                                                                                                                                                                                               |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm build`         | `ng build qits-integrations-angular` → APF output in `dist/qits-integrations-angular/`                                                                                                                     |
-| `pnpm test`          | the lint-rule and screenshot-command tests (`pnpm test:eslint`, `pnpm test:screenshots`, `node --test`), then `ng test qits-integrations-angular` (vitest builder, jsdom)                                  |
-| `pnpm test:browser`  | `*.browser.spec.ts` in headless Chromium (style freezing needs a real layout engine), then `screenshotReferences()` in a real Vitest browser run; needs a one-time `pnpm exec playwright install chromium` |
-| `pnpm lint`          | `ng lint qits-integrations-angular`                                                                                                                                                                        |
-| `pnpm check-exports` | verify `dist/qits-integrations-angular` is publishable (run it after `pnpm build`)                                                                                                                         |
+| Command                                 | What it does                                                                                                                                                                                                                                                                     |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm build`                            | `ng build qits-integrations-angular` → APF output in `dist/qits-integrations-angular/`                                                                                                                                                                                           |
+| `pnpm test`                             | the lint-rule, screenshot-command and pwa-command tests (`pnpm test:eslint`, `pnpm test:screenshots`, `pnpm test:pwa`, `node --test`), then `ng test qits-integrations-angular` (vitest builder, jsdom)                                                                          |
+| `pnpm test:browser`                     | `*.browser.spec.ts` in headless Chromium (style freezing needs a real layout engine), then `screenshotReferences()` in a real Vitest browser run, then `qits-angular pwa --check`'s offline start on a built app shell; needs a one-time `pnpm exec playwright install chromium` |
+| `pnpm lint`                             | `ng lint qits-integrations-angular`                                                                                                                                                                                                                                              |
+| `pnpm check-exports`                    | verify `dist/qits-integrations-angular` is publishable (run it after `pnpm build`)                                                                                                                                                                                               |
+| `qits-angular pwa --write`              | (in an app) write the web manifest from `qits-pwa.json`, its colours from the theme tokens; see [Installable offline shell](#installable-offline-shell-qitsangularpwa)                                                                                                           |
+| `qits-angular pwa --check --dist <dir>` | (in an app, after `ng build`) fail a build that does not install or start offline; the offline start needs Chromium                                                                                                                                                              |

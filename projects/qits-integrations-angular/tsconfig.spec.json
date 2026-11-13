@@ -9,5 +9,5 @@
       "@qits/angular": ["./src/public-api.ts"]
     }
   },
-  "include": ["src/**/*.d.ts", "src/**/*.spec.ts", "testing/**/*.spec.ts"]
+  "include": ["src/**/*.d.ts", "src/**/*.spec.ts", "testing/**/*.spec.ts", "pwa/**/*.spec.ts"]
 }
