@@ -354,6 +354,26 @@ describe('freezeShot in a shared page', () => {
     );
   });
 
+  it('empties xterm’s live region by default, keeping aria-live, next to an unrelated .live-region', () => {
+    mount(
+      '<div id="shot"><div class="xterm-accessibility">' +
+        '<div role="list" class="xterm-accessibility-tree"><div role="listitem">a</div></div>' +
+        '<div class="live-region" aria-live="assertive">a</div></div>' +
+        '<div class="live-region">kept</div></div>',
+    );
+    const live = document.querySelector('.xterm-accessibility .live-region')!;
+
+    const body = bodyOf(freezeShot(byId('shot')).html);
+    expect(body).toBe(
+      '<div id="f0"><div class="xterm-accessibility">' +
+        '<div role="list" class="xterm-accessibility-tree"></div>' +
+        '<div class="live-region" aria-live="assertive"></div></div>' +
+        '<div class="live-region">kept</div></div>',
+    );
+    // the live DOM is untouched: the frozen tree is a clone, not the real one.
+    expect(live.textContent).toBe('a');
+  });
+
   it('inlines a loaded blob image as PNG data and turns any other blob URL into a placeholder', async () => {
     const canvas = document.createElement('canvas');
     canvas.width = 3;

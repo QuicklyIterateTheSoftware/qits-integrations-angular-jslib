@@ -156,8 +156,9 @@ export interface FreezeScreenshotsOptions {
   /**
    * Selectors whose matching elements are frozen without their contents (their children are
    * dropped; the element and its own attributes stay). Default {@link DEFAULT_EMPTIED_ELEMENTS}
-   * (xterm's accessibility tree: invisible, and refreshed on a timer after a resize, so its rows
-   * vary with timing); giving it replaces the default, and `[]` disables it.
+   * (two invisible xterm elements: the accessibility tree, rebuilt on a timer after a resize, and
+   * its live region, which gets written terminal text appended on a debouncer and clears only on
+   * key input); giving it replaces the default, and `[]` disables it.
    */
   readonly emptyElements?: readonly string[];
   /**

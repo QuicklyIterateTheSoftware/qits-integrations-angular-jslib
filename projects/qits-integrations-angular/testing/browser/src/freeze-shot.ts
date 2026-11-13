@@ -32,9 +32,9 @@
  *   `xterm-dom-renderer-owner-<n>`) are renumbered in order of appearance, in the HTML and the CSS.
  * - Inline style properties a library measures at run time (`dropInlineStyles`, by default the
  *   `transform` xterm puts on its invisible accessibility rows) are dropped from matching elements.
- * - Elements that are themselves invisible and refreshed on a timer (`emptyElements`, by default
- *   xterm's accessibility tree) are frozen without their children: the element and its own
- *   attributes stay, everything inside it goes.
+ * - Elements that are themselves invisible and refreshed on a timer or on input (`emptyElements`,
+ *   by default xterm's accessibility tree and its live region) are frozen without their children:
+ *   the element and its own attributes stay, everything inside it goes.
  * - A rule whose text (in its at-rule context) was already kept is dropped: a sheet injected again
  *   for every spec file in the shared page would otherwise repeat once per file that ran before.
  * - A `blob:` URL is random per run and dies with the page: a loaded `<img>` from one is inlined as
@@ -66,12 +66,19 @@ export const DEFAULT_DROPPED_INLINE_STYLES: readonly DroppedInlineStyle[] = [
 ];
 
 /**
- * Selectors whose matching elements are frozen without their contents, by default xterm's
- * accessibility tree: it is invisible (built for screen readers) and refreshed by xterm on a
- * 100 ms debouncer after the terminal resizes, which a whole-page shot does by itself, so its
- * rows vary with timing rather than with anything the test controls.
+ * Selectors whose matching elements are frozen without their contents, by default two invisible
+ * (screen-reader-only) xterm elements that refresh on their own schedule rather than with anything
+ * the test controls: `.xterm-accessibility-tree` is rebuilt on a 100 ms debouncer after the
+ * terminal resizes, which a whole-page shot does by itself; `.xterm-accessibility .live-region`
+ * gets the text xterm writes to the terminal appended to it on a debouncer too, and is cleared
+ * only on key input, so a freeze catches it empty in one run and full in the next. The ancestor
+ * is part of the selector because `.live-region` alone is a generic class name a consumer's own
+ * markup could use for something else.
  */
-export const DEFAULT_EMPTIED_ELEMENTS: readonly string[] = ['.xterm-accessibility-tree'];
+export const DEFAULT_EMPTIED_ELEMENTS: readonly string[] = [
+  '.xterm-accessibility-tree',
+  '.xterm-accessibility .live-region',
+];
 
 /** Options for {@link freezeShot}. */
 export interface FreezeShotOptions {
@@ -90,8 +97,9 @@ export interface FreezeShotOptions {
   /**
    * Selectors whose matching elements are frozen without their contents (their children are
    * dropped; the element and its own attributes stay). Default {@link DEFAULT_EMPTIED_ELEMENTS}
-   * (xterm's accessibility tree: invisible, and refreshed on a timer after a resize, so its rows
-   * vary with timing); giving it replaces the default, and `[]` disables it.
+   * (two invisible xterm elements: the accessibility tree, rebuilt on a timer after a resize, and
+   * its live region, which gets written terminal text appended on a debouncer and clears only on
+   * key input); giving it replaces the default, and `[]` disables it.
    */
   readonly emptyElements?: readonly string[];
 }

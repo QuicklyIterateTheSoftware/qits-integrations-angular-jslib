@@ -1195,12 +1195,15 @@ The same bytes on every machine and in every test order, so a freeze is a DOM, n
   matches: `freezeScreenshots({ dropInlineStyles })`, `{ selector, properties }[]`, default
   `DEFAULT_DROPPED_INLINE_STYLES` (`transform` on `.xterm-accessibility-tree > div`, the invisible
   rows xterm scales by the text width it measured); giving it replaces the default.
-- Elements that are themselves invisible and refreshed on a timer are frozen without their
-  contents (the element and its own attributes stay, its children go):
+- Elements that are themselves invisible and refreshed on a timer or on input are frozen without
+  their contents (the element and its own attributes stay, its children go):
   `freezeScreenshots({ emptyElements })`, a list of selectors, default `DEFAULT_EMPTIED_ELEMENTS`
   (`.xterm-accessibility-tree`, xterm's screen-reader tree: it rebuilds on a 100 ms debouncer after
-  the terminal resizes, which a whole-page shot does by itself, so its rows vary with timing);
-  giving it replaces the default, and `[]` disables it.
+  the terminal resizes, which a whole-page shot does by itself; and
+  `.xterm-accessibility .live-region`, xterm's other screen-reader element: it gets the text
+  written to the terminal appended to it on a debouncer and clears only on key input, so a freeze
+  catches it empty in one run and full in the next); giving it replaces the default, and `[]`
+  disables it.
 - A rule already kept in the same at-rule context is kept once, so a sheet the setup injects again
   for every spec file in the shared page does not repeat in later freezes.
 - `blob:` URLs (random per run, dead afterwards): a loaded `<img>` from one is inlined as a PNG
