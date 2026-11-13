@@ -140,7 +140,7 @@ interface ChangesPage {
 }
 
 /** `<provider>#<operationId>`: how an outbox entry finds its operation again. */
-function operationKey(op: QitsOperationIdentity): string {
+export function operationKey(op: QitsOperationIdentity): string {
   return `${op.provider}#${op.operationId}`;
 }
 
@@ -268,7 +268,14 @@ export class OfflineSync {
   private readonly operations = new Map<string, QitsOfflineOperation>();
   private readonly watchers = new Set<(keys: ReadonlySet<string>) => void>();
   private readonly settledWatchers = new Set<(settled: SettledWrite) => void>();
-  private readonly live = new Set<OfflineEntryHandle & { reload(): unknown }>();
+  /** The live `cache` resources, each with its operation's key. */
+  private readonly live = new Map<OfflineEntryHandle & { reload(): unknown }, string>();
+  /**
+   * The live `queue` mutations' operation keys (ticket qits-2151), one entry per mutation: what the
+   * testing hook reports as `queueMutations`. Every mutation registers its operation, whatever its
+   * policy, so {@link operations} cannot tell them apart.
+   */
+  private readonly queueMutations = new Map<object, string>();
 
   private opened: { name: string; db: Promise<IDBDatabase> } | null = null;
   private started = false;
@@ -293,7 +300,7 @@ export class OfflineSync {
 
   private readonly onOnline = () => {
     this.clearBackoff();
-    for (const resource of this.live) resource.reload();
+    for (const resource of this.live.keys()) resource.reload();
     void this.drain();
   };
 
@@ -386,10 +393,33 @@ export class OfflineSync {
     return () => this.settledWatchers.delete(watcher);
   }
 
-  /** Reloads `resource` when the network comes back. Answers the unregister. */
-  addLive(resource: OfflineEntryHandle & { reload(): unknown }): () => void {
-    this.live.add(resource);
+  /**
+   * Reloads `resource`, a `cache` resource reading through `op`, when the network comes back.
+   * Answers the unregister.
+   */
+  addLive(
+    resource: OfflineEntryHandle & { reload(): unknown },
+    op: QitsOperationIdentity,
+  ): () => void {
+    this.live.set(resource, operationKey(op));
     return () => this.live.delete(resource);
+  }
+
+  /** Notes a live `queue` mutation over `op` (ticket qits-2151). Answers the unregister. */
+  addQueueMutation(op: QitsOperationIdentity): () => void {
+    const token = {};
+    this.queueMutations.set(token, operationKey(op));
+    return () => this.queueMutations.delete(token);
+  }
+
+  /** The operation keys of the live `cache` resources, sorted and without duplicates. */
+  liveCacheOperations(): string[] {
+    return [...new Set(this.live.values())].sort();
+  }
+
+  /** The operation keys of the live `queue` mutations, sorted and without duplicates. */
+  liveQueueOperations(): string[] {
+    return [...new Set(this.queueMutations.values())].sort();
   }
 
   /** The entry keys the `targets` show now: those that are `cache` resources. */
@@ -504,6 +534,33 @@ export class OfflineSync {
       });
     }
     return this.view(key);
+  }
+
+  /**
+   * Stores `value` under `key` as if a read had just answered it (ticket qits-2151, the testing
+   * hook's seed): a `ChangesPage` is merged into the entry's records, anything else replaces the
+   * entry. The resources showing `key` read it again. Answers false when there is no store (nobody
+   * signed in).
+   */
+  async seed(key: string, value: unknown): Promise<boolean> {
+    const db = await this.database();
+    if (!db) return false;
+    if (isChangesPage(value)) {
+      await this.merge(db, key, value);
+    } else {
+      const version = versionOfRecord(value);
+      const entry: StoredEntry = {
+        value,
+        cachedAt: Date.now(),
+        ...(version !== null ? { version } : {}),
+      };
+      await write(db, ENTRIES, (tx) => {
+        tx.objectStore(ENTRIES).put(entry, key);
+        return () => undefined;
+      });
+    }
+    this.notify([key]);
+    return true;
   }
 
   /** Drops the stored answer of `key`, records and all. */
@@ -1008,7 +1065,7 @@ export class OfflineSync {
   }
 
   private reloadLive(keys: readonly string[]): void {
-    for (const resource of this.live) {
+    for (const resource of this.live.keys()) {
       const key = resource[OFFLINE_ENTRY]?.();
       if (key && keys.includes(key)) resource.reload();
     }

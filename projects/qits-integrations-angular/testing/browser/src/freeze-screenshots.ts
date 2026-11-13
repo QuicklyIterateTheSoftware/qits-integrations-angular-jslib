@@ -25,6 +25,11 @@
  * `qitsColorScheme` command and the theme attribute set on `<html>`, one PNG and one freeze each,
  * the scheme the last suffix (`<name>[-<viewport>]-light`, `-dark`). Afterwards the attribute is
  * put back as it was and the emulation reset.
+ *
+ * An app that gives {@link FreezeScreenshotsOptions.offline} (ticket qits-2151) starts every test
+ * online with its offline stores deleted, and each freeze carries the page's `connectivity` at the
+ * shot: the network as `navigator.onLine` says it, the outbox, and the live `cache` resources and
+ * `queue` mutations (`offline-shots.ts`).
  */
 import { ApplicationRef } from '@angular/core';
 import { TestBed, getTestBed } from '@angular/core/testing';
@@ -44,6 +49,7 @@ import {
   currentTestRecords,
   type TestRecord,
 } from './golden-master-guard';
+import { resetOfflineState, shotConnectivity, type ShotConnectivity } from './offline-shots';
 import { outcomeRecords } from './record-outcomes';
 import {
   type ColorScheme,
@@ -138,6 +144,11 @@ export interface ScreenshotFreezePayload {
    * always `null` without the option.
    */
   readonly colorSchemeReason: string | null;
+  /**
+   * The page's offline layer at the shot (ticket qits-2151, {@link shotConnectivity}). Only with
+   * {@link FreezeScreenshotsOptions.offline}: without it the payload has no such key.
+   */
+  readonly connectivity?: ShotConnectivity;
 }
 
 /** Options for {@link freezeScreenshots}. */
@@ -206,6 +217,15 @@ export interface FreezeScreenshotsOptions {
    * switched by attribute rather than by media query. Default `'data-theme'`.
    */
   readonly themeAttribute?: string;
+  /**
+   * Record the offline layer in every freeze (ticket qits-2151): each payload carries
+   * `connectivity` (the network, the outbox, the live `cache` resources and `queue` mutations), and
+   * every test starts online with every `qits-offline:*` database deleted, so no stored answer or
+   * queued write leaks from one test into the next. `qits-angular screenshots --check` then asks
+   * each route for its offline, pending and conflict shots. Default `false`: nothing is reset or
+   * recorded, and the manifest stays as it was.
+   */
+  readonly offline?: boolean;
 }
 
 /** The default {@link FreezeScreenshotsOptions.themeAttribute}. */
@@ -341,7 +361,9 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
   const viewportSpecs = options.viewportSpecs;
   const appSchemes = colorSchemesOption(options.colorSchemes);
   const themeAttribute = options.themeAttribute ?? DEFAULT_THEME_ATTRIBUTE;
+  const offline = options.offline === true;
   beforeEach(() => clearTestRecords());
+  if (offline) beforeEach(() => resetOfflineState());
   if (options.routes) {
     const routes: RouteDescription[] = describeRoutes(options.routes);
     let sent = false;
@@ -438,6 +460,7 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
             colorScheme,
             colorSchemes: appSchemes ?? null,
             colorSchemeReason,
+            ...(offline ? { connectivity: shotConnectivity() } : {}),
           };
           await (
             await command(FREEZE_COMMAND)

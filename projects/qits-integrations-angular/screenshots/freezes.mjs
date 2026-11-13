@@ -71,6 +71,27 @@
  * links to the first scheme its shot took (LIGHT unless it opted out of it), at DESKTOP as above.
  * `colorSchemeGaps()` is what `qits-angular screenshots --check` holds the manifest to.
  *
+ * Offline shots (ticket qits-2151): in an app that gives `freezeScreenshots({ offline: true })`,
+ * every payload carries the page's `connectivity` at the shot, and the manifest then has a
+ * top-level `"offline": true`, each freeze a `"connectivity"` next to `colorScheme` (`null` for an
+ * entry kept from a run without it), and `"offlineOptOuts"` after `byRoute`:
+ *
+ *   "connectivity": {
+ *     "network": "OFFLINE",                // ONLINE | OFFLINE, as navigator.onLine said at the shot
+ *     "outbox": [{ "operation": "qits-notes-service#renameNote", "state": "PENDING" }],
+ *                                          // PENDING | SENDING | CONFLICT | FAILED, oldest first
+ *     "cacheResources": ["qits-notes-service#getNote"],   // the live offline: 'cache' resources
+ *     "queueMutations": ["qits-notes-service#renameNote"] // the live offline: 'queue' mutations
+ *   },
+ *   "offlineOptOuts": [{ "spec": "…", "reason": "…", "network": true, "operations": ["…"] }]
+ *
+ * An opt-out is what a spec's `offlineShotsNotTaken()` sent through `qitsOfflineOptOut`, kept per
+ * spec by the freezes' rules. Without the option none of the three keys is written, so the manifest
+ * stays byte for byte as it was. The top-level value is the one the run's payloads carried (a
+ * payload with `connectivity` is a run with the option); a run that froze nothing keeps the previous
+ * manifest's. A fired outcome links to a freeze, so it shows that freeze's connectivity.
+ * `offlineGaps()` is what `qits-angular screenshots --check` holds the manifest to.
+ *
  * Entry points (ticket qits-2049): a route's `entry` is `true` when `describeRoutes()` sees
  * `route.data.qitsEntry === true` (`QITS_ENTRY`), and is omitted otherwise. It marks a route that is
  * entered from outside the app — an idp redirect, an old bookmarked address — rather than by an
@@ -122,6 +143,7 @@ export const FREEZE_COMMAND = 'qitsFreeze';
 export const FREEZE_ROUTES_COMMAND = 'qitsFreezeRoutes';
 export const OUTCOMES_COMMAND = 'qitsOutcomes';
 export const FREEZE_COLOR_SCHEME_COMMAND = 'qitsColorScheme';
+export const OFFLINE_OPT_OUT_COMMAND = 'qitsOfflineOptOut';
 
 /**
  * What the browser sends `qitsColorScheme` to reset the emulation (`RESET_COLOR_SCHEME` there): a
@@ -143,6 +165,12 @@ export const SCREENSHOT_VIEWPORTS = Object.freeze(['PHONE', 'TABLET', 'DESKTOP']
 /** The colour schemes, in the order a shot is taken in them (`ColorScheme` there). */
 export const COLOR_SCHEMES = Object.freeze(['LIGHT', 'DARK']);
 
+/** What a page's network was at a shot (`ShotNetwork` there, ticket qits-2151). */
+export const NETWORKS = Object.freeze(['ONLINE', 'OFFLINE']);
+
+/** An outbox entry's state at a shot (`ShotOutboxState` there). */
+export const OUTBOX_STATES = Object.freeze(['PENDING', 'SENDING', 'CONFLICT', 'FAILED']);
+
 /** The width an outcome links to first: the one a reader shows by default. */
 const LINKED_VIEWPORT = 'DESKTOP';
 
@@ -159,6 +187,103 @@ function schemesOf(value) {
   if (!Array.isArray(value) || value.length === 0) return null;
   if (!value.every((scheme) => COLOR_SCHEMES.includes(scheme))) return null;
   return COLOR_SCHEMES.filter((scheme) => value.includes(scheme));
+}
+
+/** A list of operation keys as the manifest keeps it: strings only, deduplicated and sorted. */
+const operationsOf = (value) =>
+  [...new Set((Array.isArray(value) ? value : []).filter((op) => typeof op === 'string'))].sort(
+    compare,
+  );
+
+/**
+ * A payload's `connectivity` (ticket qits-2151) as the manifest keeps it, or `null` when it is
+ * missing or carries no known network. The outbox keeps its order (oldest first) and drops entries
+ * with no operation or an unknown state.
+ */
+function connectivityOf(value) {
+  if (!value || typeof value !== 'object') return null;
+  const network = oneOf(NETWORKS, value.network);
+  if (network === null) return null;
+  return {
+    network,
+    outbox: (Array.isArray(value.outbox) ? value.outbox : [])
+      .filter((entry) => typeof entry?.operation === 'string')
+      .map(({ operation, state }) => ({ operation, state: oneOf(OUTBOX_STATES, state) }))
+      .filter((entry) => entry.state !== null),
+    cacheResources: operationsOf(value.cacheResources),
+    queueMutations: operationsOf(value.queueMutations),
+  };
+}
+
+/** An opt-out as the manifest keeps it, or `null` without a reason. */
+function optOutOf(spec, value) {
+  const reason = reasonOf(value?.reason);
+  if (reason === null) return null;
+  return {
+    spec,
+    reason,
+    network: value.network === true,
+    operations: operationsOf(value.operations),
+  };
+}
+
+/**
+ * The offline shots a manifest with `"offline": true` misses (ticket qits-2151), one message each.
+ * Per route (the freezes whose `route` is not `null`):
+ *
+ * - a freeze lists a `cacheResources` entry, and none on the route was taken `OFFLINE`:
+ *   `<route>: no offline shot`;
+ * - for each operation in a freeze's `queueMutations`, no freeze's outbox holds it `PENDING`:
+ *   `<route>: no pending shot of <operation>`, and none `CONFLICT`: `no conflict shot of …`.
+ *
+ * An opt-out (`offlineOptOuts`) from a spec with a freeze on the route silences them: `network` the
+ * offline gap, `operations` those operations' gaps, and one with neither every gap of the route.
+ * Empty without `"offline": true`.
+ */
+export function offlineGaps(manifest) {
+  if (manifest?.offline !== true) return [];
+  const routes = new Map();
+  for (const freeze of Array.isArray(manifest.freezes) ? manifest.freezes : []) {
+    if (typeof freeze?.route !== 'string') continue;
+    const route = routes.get(freeze.route) ?? {
+      specs: new Set(),
+      cache: false,
+      offline: false,
+      queue: new Set(),
+      pending: new Set(),
+      conflict: new Set(),
+    };
+    route.specs.add(freeze.spec);
+    const connectivity = connectivityOf(freeze.connectivity);
+    if (connectivity) {
+      if (connectivity.cacheResources.length > 0) route.cache = true;
+      if (connectivity.network === 'OFFLINE') route.offline = true;
+      for (const op of connectivity.queueMutations) route.queue.add(op);
+      for (const { operation, state } of connectivity.outbox) {
+        if (state === 'PENDING') route.pending.add(operation);
+        if (state === 'CONFLICT') route.conflict.add(operation);
+      }
+    }
+    routes.set(freeze.route, route);
+  }
+  const optOuts = (Array.isArray(manifest.offlineOptOuts) ? manifest.offlineOptOuts : [])
+    .map((optOut) => optOutOf(optOut?.spec, optOut))
+    .filter((optOut) => optOut !== null);
+  const gaps = [];
+  for (const [name, route] of routes) {
+    const covering = optOuts.filter((optOut) => route.specs.has(optOut.spec));
+    const everything = covering.some((o) => !o.network && o.operations.length === 0);
+    if (everything) continue;
+    const network = covering.some((o) => o.network);
+    const operations = new Set(covering.flatMap((o) => o.operations));
+    if (route.cache && !route.offline && !network) gaps.push(`${name}: no offline shot`);
+    for (const op of [...route.queue].sort(compare)) {
+      if (operations.has(op)) continue;
+      if (!route.pending.has(op)) gaps.push(`${name}: no pending shot of ${op}`);
+      if (!route.conflict.has(op)) gaps.push(`${name}: no conflict shot of ${op}`);
+    }
+  }
+  return gaps.sort(compare);
 }
 
 /**
@@ -294,6 +419,10 @@ export function freezeWriter({
   let routes;
   /** The `colorSchemes` option this run's payloads carried (`null`: off), `undefined` before one. */
   let runColorSchemes;
+  /** Whether this run's payloads carried `connectivity` (ticket qits-2151), `undefined` before one. */
+  let runOffline;
+  /** spec → the offline opt-outs it sent this run, in order */
+  let pendingOptOuts = new Map();
 
   /** The copy's name for a same-origin `path`, and the file it is copied from (or `null`). */
   function assetFor(path) {
@@ -323,6 +452,8 @@ export function freezeWriter({
       assetSources = new Map();
       routes = undefined;
       runColorSchemes = undefined;
+      runOffline = undefined;
+      pendingOptOuts = new Map();
     },
 
     /**
@@ -331,6 +462,30 @@ export function freezeWriter({
      */
     colorSchemes() {
       return runColorSchemes;
+    },
+
+    /**
+     * Whether this run's payloads carried `connectivity` (`freezeScreenshots({ offline: true })`,
+     * ticket qits-2151), or `undefined` when the run sent no freeze payload yet.
+     */
+    offline() {
+      return runOffline;
+    },
+
+    /**
+     * The `qitsOfflineOptOut` command, for the spec at `testPath`: one `offlineShotsNotTaken()`. One
+     * without a reason is dropped with a warning.
+     */
+    addOfflineOptOut(testPath, payload) {
+      const spec = toPosix(relative(root, testPath));
+      const optOut = optOutOf(spec, payload);
+      if (optOut === null) {
+        console.warn(
+          `screenshot freezes: ${spec} sent an offline opt-out without a reason; dropped`,
+        );
+        return;
+      }
+      pendingOptOuts.set(spec, [...(pendingOptOuts.get(spec) ?? []), optOut]);
     },
 
     /** The `qitsFreezeRoutes` command: the app's route tree, as `describeRoutes()` gives it. */
@@ -355,12 +510,15 @@ export function freezeWriter({
         colorScheme,
         colorSchemes,
         colorSchemeReason,
+        connectivity,
       },
     ) {
       const spec = toPosix(relative(root, testPath));
       const width = oneOf(SCREENSHOT_VIEWPORTS, viewport);
       const scheme = oneOf(COLOR_SCHEMES, colorScheme);
       runColorSchemes = schemesOf(colorSchemes);
+      // The key is there only with the option, so its presence is the option.
+      runOffline = connectivity !== undefined;
       const file = freezeFile(spec, name, width, scheme);
       const toAssets = toPosix(relative(dirname(join(base, file)), join(base, ASSETS)));
       const assets = new Map();
@@ -384,6 +542,7 @@ export function freezeWriter({
         viewport: width,
         colorScheme: scheme,
         colorSchemeReason: reasonOf(colorSchemeReason),
+        connectivity: connectivityOf(connectivity),
         route: routeSpecs.test(spec) ? (route ?? null) : null,
         records: (records ?? []).map(({ provider, state, operationId }) => ({
           provider,
@@ -431,12 +590,16 @@ export function freezeWriter({
       const old = readManifest(manifestPath);
       const entries = new Map(old.freezes.map((entry) => [entry.file, entry]));
       let fired = old.fired;
+      let optOuts = old.optOuts;
       const drop = (spec) => {
         for (const [file, entry] of entries) if (entry.spec === spec) entries.delete(file);
         fired = fired.filter((record) => record.spec !== spec);
+        optOuts = optOuts.filter((optOut) => optOut.spec !== spec);
       };
 
-      for (const spec of new Set([...old.freezes, ...old.fired].map((entry) => entry.spec))) {
+      for (const spec of new Set(
+        [...old.freezes, ...old.fired, ...old.optOuts].map((entry) => entry.spec),
+      )) {
         if (existsSync(join(root, spec))) continue;
         drop(spec);
         rmSync(join(base, spec), { recursive: true, force: true });
@@ -447,6 +610,7 @@ export function freezeWriter({
         if (!complete(testModule)) continue;
         const spec = toPosix(relative(root, testModule.moduleId));
         drop(spec);
+        optOuts.push(...(pendingOptOuts.get(spec) ?? []));
         const freezes = pending.get(spec) ?? new Map();
         for (const [file, { entry, html, assets }] of freezes) {
           writeIfChanged(join(base, file), html);
@@ -500,10 +664,15 @@ export function freezeWriter({
       fired.sort((a, b) => compare(a.spec, b.spec) || compare(a.test, b.test));
       // The option as this run's payloads carried it; a run that froze nothing keeps the old one.
       const colorSchemes = runColorSchemes === undefined ? old.colorSchemes : runColorSchemes;
+      const offline = runOffline === undefined ? old.offline : runOffline;
+      // Stable: a spec's opt-outs keep the order it sent them in.
+      optOuts.sort((a, b) => compare(a.spec, b.spec));
       const manifest = {
         routes: markForwards(routes ?? old.routes, declared),
         // Written only with the option, so a manifest without it stays byte for byte as before.
         ...(colorSchemes ? { colorSchemes } : {}),
+        // The same for the offline shots (ticket qits-2151).
+        ...(offline ? { offline: true } : {}),
         freezes: freezes.map(
           ({
             file,
@@ -514,6 +683,7 @@ export function freezeWriter({
             viewport,
             colorScheme,
             colorSchemeReason,
+            connectivity,
             route,
             records,
             triggers,
@@ -531,6 +701,7 @@ export function freezeWriter({
                   colorSchemeReason: reasonOf(colorSchemeReason),
                 }
               : {}),
+            ...(offline ? { connectivity: connectivityOf(connectivity) } : {}),
             route,
             records,
             triggers: triggers ?? [],
@@ -540,6 +711,16 @@ export function freezeWriter({
           }),
         ),
         byRoute,
+        ...(offline
+          ? {
+              offlineOptOuts: optOuts.map(({ spec, reason, network, operations }) => ({
+                spec,
+                reason,
+                network,
+                operations,
+              })),
+            }
+          : {}),
         outcomes: {
           declared,
           fired: fired.map(({ spec, test, route, interaction, outcome, kind, freeze }) => ({
@@ -564,11 +745,15 @@ function readManifest(path) {
     return {
       routes: Array.isArray(manifest.routes) ? manifest.routes : [],
       colorSchemes: schemesOf(manifest.colorSchemes),
+      offline: manifest.offline === true,
       freezes: Array.isArray(manifest.freezes) ? manifest.freezes : [],
       fired: Array.isArray(manifest.outcomes?.fired) ? manifest.outcomes.fired : [],
+      optOuts: (Array.isArray(manifest.offlineOptOuts) ? manifest.offlineOptOuts : [])
+        .map((optOut) => optOutOf(optOut?.spec, optOut))
+        .filter((optOut) => optOut !== null && typeof optOut.spec === 'string'),
     };
   } catch {
-    return { routes: [], colorSchemes: null, freezes: [], fired: [] };
+    return { routes: [], colorSchemes: null, offline: false, freezes: [], fired: [], optOuts: [] };
   }
 }
 

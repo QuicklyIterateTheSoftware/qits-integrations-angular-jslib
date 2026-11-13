@@ -508,6 +508,26 @@ viewportSpecs, colorSchemes })`, all off by default so a bump changes nothing un
   run) on each page or layout freeze group (spec, test, name, viewport) missing a scheme none of its
   freezes opted out of (`colorSchemeGaps()`). Turning the option on doubles and renames every
   reference: they are regenerated through the screenshot-baselines job.
+  Offline shots (ticket qits-2151): `freezeScreenshots({ offline: true })` resets before every test
+  (real `navigator.onLine` back, every `qits-offline:*` database deleted: a real IndexedDB outlives
+  a test) and puts `connectivity` on each payload (`shotConnectivity()`, `offline-shots.ts`: the
+  network from `navigator.onLine`, the outbox upper-cased, the live `cache` resources and `queue`
+  mutations as `<provider>#<operationId>`). It reads them through the main entry's ɵ hook
+  (`src/lib/offline/offline-testing.ts`: `ɵqitsOfflineState(injector)`, `null` without
+  `provideQitsOffline`; `ɵdeleteQitsOfflineStores()`), so `OfflineSync` stays internal; the sync
+  tracks live `queue` mutations itself (`addQueueMutation`), since every mutation registers its
+  operation whatever its policy, and `addLive` takes the resource's operation. The throwaway apps
+  in `vitest-run.test.mjs` alias `@qits/angular` to a file that must re-export that hook too.
+  `goOffline()` / `goOnline()` override `navigator.onLine` on the tester's window (an own property,
+  deleted to restore, via `onTestFinished`), never Playwright's `setOffline` (it cuts the Vite
+  module server). `seedOfflineStore()` and `conflictAnswer()` go through the guard's
+  `ɵnoteShownRecording()` (refused unless a recording, noted like a flush); the seed notifies
+  watchers, so an open page shows it. `offlineShotsNotTaken()` is sent once per spec through the
+  fifth command, `qitsOfflineOptOut` (skipped when no plugin registered it). Manifest: top-level
+  `offline: true`, per-freeze `connectivity` (after `colorScheme`, `null` on kept entries), and
+  `offlineOptOuts` (after `byRoute`, kept per spec like the freezes), all written only with the
+  option, as `colorSchemes`. `offlineGaps()` is wired into `--check` exactly like
+  `colorSchemeGaps()`.
 
 - **`@qits/angular/pwa`** (`projects/qits-integrations-angular/pwa/`, an ng-packagr secondary
   entry; ticket qits-2152) and the **`qits-angular pwa`** command (`pwa/*.mjs`, plain ESM copied as

@@ -50,6 +50,12 @@ export {
   qitsOfflineReloadGuard,
 } from './lib/offline/qits-offline';
 export { QitsOfflineError } from './lib/offline/offline-types';
+export {
+  ɵdeleteQitsOfflineStores,
+  ɵQITS_OFFLINE_STORE_PREFIX,
+  ɵqitsOfflineState,
+} from './lib/offline/offline-testing';
+export type { ɵQitsOfflineOutboxEntry, ɵQitsOfflineState } from './lib/offline/offline-testing';
 export type {
   QitsConflict,
   QitsMutationOfflinePolicy,

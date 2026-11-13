@@ -12,7 +12,8 @@
  * Vite `config` hook, see there), and the
  * same reporter writes them at the end of the run. The outcomes `recordOutcomes()` sends after each
  * test (`qitsOutcomes`, ticket qits-2003) go into the same manifest. `qitsColorScheme` (ticket
- * qits-2083) emulates `prefers-color-scheme` for `freezeScreenshots({ colorSchemes })`.
+ * qits-2083) emulates `prefers-color-scheme` for `freezeScreenshots({ colorSchemes })`, and
+ * `qitsOfflineOptOut` (ticket qits-2151) takes a spec's `offlineShotsNotTaken()`.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { platform } from 'node:os';
@@ -29,6 +30,7 @@ import {
   RESET_COLOR_SCHEME,
   FREEZE_COMMAND,
   FREEZE_ROUTES_COMMAND,
+  OFFLINE_OPT_OUT_COMMAND,
   OUTCOMES_COMMAND,
   freezeWriter,
 } from './freezes.mjs';
@@ -188,6 +190,10 @@ export function screenshotReferences(options = {}) {
       return null;
     },
     [FREEZE_COLOR_SCHEME_COMMAND]: emulateColorScheme,
+    [OFFLINE_OPT_OUT_COMMAND]: (context, optOut) => {
+      writerFor(context).addOfflineOptOut(context.testPath, optOut);
+      return null;
+    },
   };
 
   const reporter = {

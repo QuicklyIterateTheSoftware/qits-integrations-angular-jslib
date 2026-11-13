@@ -85,6 +85,60 @@ export declare const RESET_COLOR_SCHEME: string;
  */
 export declare function colorSchemeGaps(manifest: FreezeManifest | undefined): string[];
 
+/** What a page's network was at a shot (`ShotNetwork` there, ticket qits-2151). */
+export type FreezeNetwork = 'ONLINE' | 'OFFLINE';
+
+/** An outbox entry's state at a shot (`ShotOutboxState` there). */
+export type FreezeOutboxState = 'PENDING' | 'SENDING' | 'CONFLICT' | 'FAILED';
+
+/** `['ONLINE', 'OFFLINE']`. */
+export declare const NETWORKS: readonly FreezeNetwork[];
+
+/** `['PENDING', 'SENDING', 'CONFLICT', 'FAILED']`. */
+export declare const OUTBOX_STATES: readonly FreezeOutboxState[];
+
+/**
+ * `'qitsOfflineOptOut'`: the browser command a spec's `offlineShotsNotTaken()` is sent through
+ * (ticket qits-2151). `screenshotReferences({ freezes })` registers it.
+ */
+export declare const OFFLINE_OPT_OUT_COMMAND: string;
+
+/**
+ * The page's offline layer at a shot (ticket qits-2151), as `freezeScreenshots({ offline: true })`
+ * records it. Operations are named `<provider>#<operationId>`.
+ */
+export interface FreezeConnectivity {
+  /** As `navigator.onLine` said at the shot. */
+  network: FreezeNetwork;
+  /** The outbox, oldest first. */
+  outbox: { operation: string; state: FreezeOutboxState }[];
+  /** The live `offline: 'cache'` resources' operations, sorted. */
+  cacheResources: string[];
+  /** The live `offline: 'queue'` mutations' operations, sorted. */
+  queueMutations: string[];
+}
+
+/** One spec's `offlineShotsNotTaken()` (ticket qits-2151). */
+export interface FreezeOfflineOptOut {
+  /** Relative to the root. */
+  spec: string;
+  reason: string;
+  /** Covers the offline shot of the spec's routes. */
+  network: boolean;
+  /** Covers the pending and conflict shots of these operations, sorted. */
+  operations: string[];
+}
+
+/**
+ * The offline shots a manifest with `offline: true` misses (ticket qits-2151), one message each, per
+ * route (freezes with a `route`): `<route>: no offline shot` when a freeze lists a `cacheResources`
+ * entry and none was taken `OFFLINE`; `<route>: no pending shot of <operation>` / `no conflict shot
+ * of <operation>` for each `queueMutations` operation no freeze's outbox holds `PENDING` /
+ * `CONFLICT`. An opt-out from a spec with a freeze on the route silences them (`network` the
+ * offline gap, `operations` theirs, neither every gap). Empty without `offline: true`.
+ */
+export declare function offlineGaps(manifest: FreezeManifest | undefined): string[];
+
 /** `['DATA', 'NO_DATA', 'PENDING', 'ERROR']`. */
 export declare const SCREENSHOT_KINDS: readonly FreezeKind[];
 
@@ -112,6 +166,11 @@ export interface FreezeManifest {
    * it, kept from the previous manifest by a run that froze nothing. Absent without the option.
    */
   colorSchemes?: FreezeColorScheme[] | null;
+  /**
+   * `true` when the run's shots carried `freezeScreenshots({ offline: true })` (ticket qits-2151),
+   * kept from the previous manifest by a run that froze nothing. Absent without the option.
+   */
+  offline?: true;
   freezes: {
     /**
      * Relative to the freeze directory: `<spec>/<name>.html`, or `<spec>/<name>-<viewport>.html`
@@ -143,6 +202,12 @@ export interface FreezeManifest {
      * `null`. Written and read as `colorScheme`.
      */
     colorSchemeReason?: string | null;
+    /**
+     * The page's offline layer at the shot (ticket qits-2151), `null` for an entry kept from a run
+     * without the option. Written only when the manifest has `offline`; a reader takes a missing one
+     * as `null`.
+     */
+    connectivity?: FreezeConnectivity | null;
     route: string | null;
     records: { provider: string; state: string; operationId: string }[];
     /** The `<interaction>:<outcome>` marks visible in the shot, sorted. */
@@ -160,6 +225,11 @@ export interface FreezeManifest {
   }[];
   /** Route pattern → the freezes (`file`) of page specs on that route. */
   byRoute: Record<string, string[]>;
+  /**
+   * The specs' `offlineShotsNotTaken()` (ticket qits-2151), sorted by spec, kept per spec as the
+   * freezes are. Written only when the manifest has `offline`.
+   */
+  offlineOptOuts?: FreezeOfflineOptOut[];
   outcomes: {
     /** Read from the source at the end of the run, sorted by route, interaction and outcome. */
     declared: DeclaredOutcome[];

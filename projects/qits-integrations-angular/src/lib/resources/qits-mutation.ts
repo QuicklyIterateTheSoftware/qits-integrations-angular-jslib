@@ -121,6 +121,8 @@ export function qitsMutation<Params, Value, Err>(
   const writeOp = op as unknown as QitsOfflineOperation;
   if (sync) {
     sync.register(writeOp);
+    // Only a `queue` mutation is one the outbox may hold a write of (ticket qits-2151).
+    if (options.offline === 'queue') destroyRef.onDestroy(sync.addQueueMutation(operation));
     const unwatch = sync.onSettled((settled) => {
       if (settled.seq !== queued) return;
       const run = latest;

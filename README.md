@@ -544,6 +544,12 @@ function of the same shape):
 
 It refuses with `'the outbox is sending'` while `sending()` is true.
 
+**Screenshots.** A page's offline, pending and conflict states are screenshots like any other:
+`freezeScreenshots({ offline: true })` records each shot's connectivity, the helpers of
+`@qits/angular/testing/browser` take the page offline, seed the store and answer a conflict, and
+`qits-angular screenshots --check` asks every route for them — see
+[Offline shots](#offline-shots-offline).
+
 Not covered yet: caching API answers in the service worker.
 
 ### Holding an offline-first app to its policies
@@ -1946,6 +1952,118 @@ src/app/routes/projects/projects.page.browser.spec.ts 'list' [PHONE]: missing DA
 A freeze without a scheme in such a manifest (kept from a spec the run skipped) misses every scheme.
 The freeze HTML keeps the theme attribute on `<html>`, so an attribute-switched theme shows in it as
 it did in the shot; a `prefers-color-scheme` rule shows only when the reader opens it in that scheme.
+
+### Offline shots: `offline`
+
+An app built offline-first (`provideQitsOffline`, above) opts in with
+`freezeScreenshots({ offline: true })` (ticket qits-2151); the landing app does not, and without it
+nothing below happens and the manifest stays byte for byte as it is. With it:
+
+- **Every test starts online with an empty store.** Before each test the real `navigator.onLine`
+  is put back and every `qits-offline:*` IndexedDB database is deleted: in a real browser IndexedDB
+  survives from one test to the next, so a stored answer or a queued write would otherwise leak.
+- **Every freeze says what the page's offline layer was.** The payload and the manifest's freeze
+  carry `connectivity`, read at the shot (never declared by the spec, so it cannot say otherwise
+  than the page):
+
+  ```json
+  "connectivity": {
+    "network": "OFFLINE",
+    "outbox": [{ "operation": "qits-notes-service#renameNote", "state": "PENDING" }],
+    "cacheResources": ["qits-notes-service#getNote"],
+    "queueMutations": ["qits-notes-service#renameNote"]
+  }
+  ```
+
+  `network` is `ONLINE` or `OFFLINE`, from `navigator.onLine`; `outbox` the outbox's entries, oldest
+  first (`PENDING`, `SENDING`, `CONFLICT`, `FAILED`); `cacheResources` and `queueMutations` the live
+  `offline: 'cache'` resources and `offline: 'queue'` mutations on the page, as
+  `<provider>#<operationId>`. The manifest also gets a top-level `"offline": true` (a run that froze
+  nothing keeps the previous value) and `"offlineOptOuts"`. `kind` stays what the page shows: an
+  offline page showing stored data is `DATA`, a queued write is not a request in flight, and a
+  conflict shows the server's record.
+
+The helpers, all in `@qits/angular/testing/browser`:
+
+| Helper                                | What it does                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `goOffline()` / `goOnline()`          | Overrides `navigator.onLine` on the page and dispatches `offline` / `online`, which the offline layer listens to. Not Playwright's `context.setOffline`: that also cuts the Vite module server, so a lazy `loadComponent` would fail. The real value is back after every test.                                                                                      |
+| `seedOfflineStore(op, params, body)`  | Stores `body` as the answer of `op` for `params`: what a `cache` resource with those params shows (an open page reads it at once). `body` must be a golden-master recording (refused with the guard's message otherwise), and is named in the test's records, as a flush is. Needs `provideQitsOffline` and a user. Flushing online, then `goOffline()`, works too. |
+| `conflictAnswer(request, current)`    | Answers a queued write's `TestRequest` with qits-2148's 412: `urn:qits:problem:stale-version` with `current` and `currentVersion` (`current.version`). `current` must be a recording; the 412 itself is never recorded by a pact.                                                                                                                                   |
+| `offlineShotsNotTaken({ reason, … })` | Says, once per spec, why it takes none of the shots below: `network: true` covers the offline shot, `operations: ['<provider>#<operationId>']` those mutations' shots, neither covers all. Sent through the browser command `qitsOfflineOptOut`, which `screenshotReferences({ freezes })` registers.                                                               |
+
+A pending write needs no helper: run the page's own mutation after `goOffline()`. A route spec
+taking the three shots:
+
+```ts
+// notes.page.browser.spec.ts
+import { HttpTestingController } from '@angular/common/http/testing';
+import { TestBed } from '@angular/core/testing';
+import {
+  conflictAnswer,
+  goOffline,
+  goOnline,
+  seedOfflineStore,
+} from '@qits/angular/testing/browser';
+import { GET_NOTE } from '../../api/notes';
+import { goldenMaster, openRoute } from '../../../testing/browser';
+
+const note = await goldenMaster('a note exists', 'getNote');
+const renamed = await goldenMaster('the note was renamed', 'getNote');
+
+/** The page opened offline (provideQitsOffline in its TestBed), the note in the store. */
+async function offlineNote() {
+  goOffline();
+  const page = await openRoute('/notes/n1');
+  // The page is open already: the resource showing this entry reads it at once.
+  await seedOfflineStore(GET_NOTE, { path: { id: 'n1' } }, note);
+  await page.stable();
+  return page;
+}
+
+it('shows the stored note offline', async () => {
+  const page = await offlineNote();
+  await expect.element(page.frame).toMatchScreenshot('offline', { kind: 'DATA' });
+});
+
+it('holds a rename made offline', async () => {
+  const page = await offlineNote();
+  await page.rename('shopping'); // the page's own queue mutation
+  await expect.element(page.frame).toMatchScreenshot('pending', { kind: 'DATA' });
+});
+
+it('shows the conflict when the server moved on', async () => {
+  const page = await offlineNote();
+  await page.rename('shopping');
+  goOnline(); // the cache resource reloads, and the outbox sends
+  const http = TestBed.inject(HttpTestingController);
+  (await vi.waitFor(() => http.expectOne({ method: 'GET', url: '/api/notes/n1' }))).flush(renamed);
+  conflictAnswer(
+    await vi.waitFor(() => http.expectOne({ method: 'PATCH', url: '/api/notes/n1' })),
+    renamed,
+  );
+  await page.stable();
+  await expect.element(page.frame).toMatchScreenshot('conflict', { kind: 'DATA' });
+});
+```
+
+(`openRoute`, `page.rename` and `page.stable` stand for the app's own helpers.)
+
+**The check.** With `"offline": true` in the manifest, `qits-angular screenshots --check` holds every
+route (a freeze with a `route`) to its offline states (`offlineGaps()`), and fails on each gap like
+the colour-scheme gaps (exit 1, not behind `--enforce-outcomes`; an update run only lists them):
+
+```
+notes: no offline shot                                    a freeze lists cacheResources, none is OFFLINE
+notes: no pending shot of qits-notes-service#renameNote   a queueMutations entry no outbox holds PENDING
+notes: no conflict shot of qits-notes-service#renameNote  … and none holds CONFLICT
+```
+
+An opt-out from a spec with a freeze on the route silences them as far as it reaches:
+
+```ts
+offlineShotsNotTaken({ reason: 'the board is read live', network: true });
+```
 
 ## Releasing
 

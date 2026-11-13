@@ -282,6 +282,9 @@ const requiredFor = (syntheticAllowed?: readonly string[]) => (): boolean => {
 
 let uninstall: (() => void) | undefined;
 
+/** Whether the installed guard checks the running test; undefined without a guard. */
+let guardWhen: (() => boolean) | undefined;
+
 /**
  * Makes `TestRequest.flush` and `TestRequest.event` refuse backend data that is not a recording.
  * Call it once in the browser specs' setup file. Returns a function that removes the guard. It also
@@ -303,6 +306,7 @@ let uninstall: (() => void) | undefined;
 export function guardGoldenMasters(options: GoldenMasterGuardOptions = {}): () => void {
   uninstall?.();
   const when = options.when ?? requiredFor(options.syntheticAllowed);
+  guardWhen = when;
   const proto = TestRequest.prototype;
   const flush = proto.flush;
   const event = proto.event;
@@ -322,9 +326,25 @@ export function guardGoldenMasters(options: GoldenMasterGuardOptions = {}): () =
   const remove = () => {
     proto.flush = flush;
     proto.event = event;
-    if (uninstall === remove) uninstall = undefined;
+    if (uninstall === remove) {
+      uninstall = undefined;
+      guardWhen = undefined;
+    }
   };
   return (uninstall = remove);
+}
+
+/**
+ * Data a page shows by another way than a 2xx `flush` (ticket qits-2151: an answer seeded into the
+ * offline store, the record a 412 conflict carries) is held to the guard's rule and noted as a
+ * flushed answer is: refused with the guard's message when it is not a recording and the running
+ * test is checked (the installed guard's `when`, or {@link goldenMastersRequired} without one), and
+ * otherwise added to the current test's records and the route's. For `@qits/angular/testing/browser`
+ * itself; `what` names the data in the message.
+ */
+export function ɵnoteShownRecording(value: unknown, what: string): void {
+  if ((guardWhen ?? requiredFor())()) assertRecorded(value, what);
+  noteRoute(value, 200);
 }
 
 /**
