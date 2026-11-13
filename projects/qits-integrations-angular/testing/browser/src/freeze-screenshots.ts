@@ -59,6 +59,7 @@ import {
   viewportSize,
   vitestArgs,
 } from './screenshot-options';
+import { visibleDataMarks, type VisibleDataMark } from './visible-data-marks';
 import { visibleTriggers } from './visible-triggers';
 
 /** The browser command each freeze is sent to; `screenshotReferences({ freezes })` registers it. */
@@ -111,6 +112,11 @@ export interface ScreenshotFreezePayload {
   readonly outcomes: number;
   /** The `<interaction>:<outcome>` trigger marks visible in the shot, sorted (`visibleTriggers`). */
   readonly triggers: string[];
+  /**
+   * The `data-qits-*` data marks visible in the shot (ticket qits-2141), deduplicated and sorted
+   * (`visibleDataMarks`).
+   */
+  readonly dataMarks: VisibleDataMark[];
   /** The state the shot shows, as the spec gave it (`toMatchScreenshot(…, { kind })`), or `null`. */
   readonly kind: ScreenshotKind | null;
   /**
@@ -411,6 +417,7 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
           const target = shotTarget(chai.util.flag(this, 'object'));
           // On the live DOM, before the serializer: the HTML cannot tell a hidden mark from a shown one.
           const triggers = visibleTriggers(target, document);
+          const dataMarks = visibleDataMarks(target, document);
           const freeze = freezeShot(target, document, {
             renameClasses,
             dropInlineStyles,
@@ -425,6 +432,7 @@ export function freezeScreenshots(options: FreezeScreenshotsOptions = {}): void 
             assets: freeze.assets,
             outcomes: outcomeRecords().length,
             triggers,
+            dataMarks,
             kind: request.kind,
             viewport,
             colorScheme,

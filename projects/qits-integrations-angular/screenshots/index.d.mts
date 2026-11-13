@@ -147,6 +147,16 @@ export interface FreezeManifest {
     records: { provider: string; state: string; operationId: string }[];
     /** The `<interaction>:<outcome>` marks visible in the shot, sorted. */
     triggers: string[];
+    /**
+     * The `data-qits-*` data marks visible in the shot (ticket qits-2141), deduplicated and
+     * sorted. Written only when the freeze shows a mark; a missing key reads as `[]`.
+     */
+    dataMarks?: {
+      source: string | null;
+      item: string | null;
+      field: string | null;
+      derived: string[];
+    }[];
   }[];
   /** Route pattern → the freezes (`file`) of page specs on that route. */
   byRoute: Record<string, string[]>;

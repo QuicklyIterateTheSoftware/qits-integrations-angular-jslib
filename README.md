@@ -403,6 +403,101 @@ the ordinary `'idle'` / `'running'` / `'done'` / `'error'`, equally unreached on
 pairs exist now so that templates and the offline lint rules can be written against the full set
 ahead of time; the offline behaviour itself is qits-2149.
 
+## What a page shows: data marks
+
+The UI builder needs to know, for any part of a screenshot, which read produced it, which record
+it shows and which attribute of that record a given element renders (ticket qits-2141). Data marks
+answer that: plain attributes a few directives set, so they survive into a frozen page the same way
+`data-qits-outcome` does (see [outcomes](#where-an-interaction-leads-outcomes) below). Everything
+outside a mark is static design copy — a heading, an icon, a label — and nothing reads it.
+
+| Attribute           | Value                                     | Set on                                                                                  |
+| ------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------- |
+| `data-qits-source`  | `<provider>#<operationId>` (`sourceMark`) | A list container, a detail root, or a joined record.                                    |
+| `data-qits-item`    | `<key>=<value>` (`itemMark`)              | A record.                                                                               |
+| `data-qits-field`   | A dot path                                | An element showing one field of the nearest record as is.                               |
+| `data-qits-derived` | The input paths, space-separated          | An element showing a value computed from fields; never together with `data-qits-field`. |
+
+An element's source and item are the nearest ones above it, itself included —
+`element.closest('[data-qits-source]')` and `element.closest('[data-qits-item]')` — so a join
+element that carries its own `data-qits-source` and `data-qits-item` resolves to itself rather than
+to an ancestor's.
+
+Three directives set the attributes. Each adds only attributes, never a wrapping element, so a
+`<ul>`/`<li>` list, a `<section>`, and the layout around them stay exactly as written:
+
+- **`QitsEntityList`** (`<ul [qitsEntityList]="agents">`) sets `data-qits-source` on the list's
+  container to the resource's `sourceMark`; only the resource's `operation` is read.
+- **`QitsEntity`** (`<li [qitsEntity]="agent" entityKey="agentId">`) sets `data-qits-item` to the
+  entity's `itemMark`, `<entityKey>=<value>`; the attribute is left off while that field is null or
+  undefined. With `[entitySource]`, the same element also gets `data-qits-source` — for a detail
+  root, where one element names both the read and the entity, or for a join, where the read is not
+  the enclosing `QitsEntityList`'s.
+- **`QitsField`** (`<span [fieldOf]="agent" qitsField="owner.name">`) sets `data-qits-field` to the
+  path. `[qitsField]="{ derived: [...] }"` sets `data-qits-derived` to those paths instead
+  (deduplicated, space-separated, in the order given) and leaves `data-qits-field` off.
+
+**The compiler checks the names.** `entityKey` and `qitsField` are checked against the type of
+`qitsEntity` / `fieldOf`: `QitsFieldPath<T>` is `T`'s dot paths — `owner.name` for a field of a
+field, stepping through `null`/`undefined` on the way; an array, a primitive, a `Date` or a
+function is a leaf, with no stepping into it (`tags`, never `tags.length` or `history.at`); at most
+five keys deep. Over a `Consumed` value (see [`consume`](#what-a-store-reads-consume-and-consumed)
+above) or a `qitsResource` value — whose `Value` is the operation's consumed shape (see
+[`qitsResource`](#api-reads-and-writes-qitsresource-and-qitsmutation) above) — only the paths the
+app actually reads exist: a typo, an unconsumed field, a wrong derived path, or a static
+`entityKey="…"` naming the wrong field all fail `ng build` under `strictTemplates`, not only a
+bound one. `QitsFieldPath<T>` takes `T`, not `T | undefined`, and a `qitsResource`'s `value()` can
+be `undefined`, so narrow it first: `@if (res.value(); as v)`.
+
+The Agents route — a list, a workspace slot's join back to its hosting agent, and a detail root:
+
+```ts
+// agents.page.ts: the list
+template: `
+  @if (agents.value(); as list) {
+    <ul [qitsEntityList]="agents">
+      @for (agent of list.entries; track agent.agentId) {
+        <li [qitsEntity]="agent" entityKey="agentId">
+          <span [fieldOf]="agent" qitsField="runtimeStatus">{{ agent.runtimeStatus }}</span>
+          <span [fieldOf]="agent" [qitsField]="{ derived: ['runtimeStatus'] }">
+            {{ runtime(agent.runtimeStatus) }}
+          </span>
+        </li>
+      }
+    </ul>
+  }
+`;
+
+// workspaces.page.ts: a workspace slot row, joined to the agent it hosts — read from `agents`,
+// not from the slot's own `[qitsEntityList]`
+template: `
+  <li [qitsEntity]="slot" entityKey="slotId">
+    @if (hosted(slot.slotId); as host) {
+      <span [qitsEntity]="host" entityKey="agentId" [entitySource]="agents" qitsField="name" [fieldOf]="host">
+        {{ host.name }}
+      </span>
+    }
+  </li>
+`;
+
+// agent-detail.page.ts: a detail root — one element names both the read and the entity
+template: `
+  @if (detail.value(); as agent) {
+    <section [qitsEntity]="agent" entityKey="agentId" [entitySource]="detail">…</section>
+  }
+`;
+```
+
+**The manifest.** Each frozen screenshot carries `dataMarks`: one `{ source, item, field, derived }`
+entry per visibly marked element (`visibleDataMarks()`, `@qits/angular/testing/browser`), under the
+same visibility rule as `triggers` — `checkVisibility` with CSS, no `hidden` ancestor, a non-zero
+box meeting the shot's element or the page's scroll area — deduplicated and sorted. It is written
+only when non-empty; a manifest without it, or an older one written before this ticket, reads as
+`[]`. See [the manifest](#screenshots-frozen-as-html-freezescreenshots-and-the-freezes-option)
+below.
+
+A lint rule that holds an app's templates to marking what it shows is qits-2142, not released yet.
+
 ## Where an interaction leads: `outcomes`
 
 An interaction declares, once, where it can end (ticket qits-2001): each **exit** is a route of
@@ -1137,7 +1232,7 @@ entry?, rendersNothing?, forward?, children?}`; `entry: true` marks a route ente
   `component`, `loadComponent`, `loadChildren` or `redirectTo` (string or function), a `path` other
   than `**`, and children that all render nothing too — a layout's `''` child, a `:tab` child that
   only feeds the layout a parameter — and `forward: true` a forward, ticket qits-2076, see
-  _Forwards and page routes_ under the outcome check; each is omitted when false), `freezes` (`{file, spec, test, name, kind, viewport, route, records, triggers}`,
+  _Forwards and page routes_ under the outcome check; each is omitted when false), `freezes` (`{file, spec, test, name, kind, viewport, route, records, triggers, dataMarks}`,
   sorted by `file`, which is relative to `dir`), `byRoute` (route pattern → files) and `outcomes`
   (below). `name` is the name the spec gave, without a width suffix. `kind` is the state the shot
   says it shows (`'DATA'`, `'NO_DATA'`, `'PENDING'`, `'ERROR'`), `null` when it gave none.
@@ -1153,7 +1248,10 @@ entry?, rendersNothing?, forward?, children?}`; `entry: true` marks a route ente
   shot is serialized, because the HTML keeps a closed menu's marks too: a mark counts when the
   element passes `checkVisibility({ checkVisibilityCSS: true })`, has no `hidden` attribute on itself
   or an ancestor, has a box of non-zero size, and that box meets the shot's element (or the page's
-  scroll area for a page shot). Two-space JSON, stable key order, trailing newline.
+  scroll area for a page shot). `dataMarks` are the visible `data-qits-*` marks (ticket qits-2141),
+  under the same visibility rule, written only when non-empty; see
+  [What a page shows: data marks](#what-a-page-shows-data-marks) above. Two-space JSON, stable key
+  order, trailing newline.
 - `outcomes.declared`: `{route, interaction, outcome, kind, to, global, triggered, file}` per entry
   of the app's `outcomes()` calls, and of the library's that the app brings in, read from the source
   at the end of the run (scoped by the `freezes` option's `routes`, default `src/app/routes`),

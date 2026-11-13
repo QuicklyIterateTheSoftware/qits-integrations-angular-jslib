@@ -1045,6 +1045,88 @@ describe('screenshot freezes', () => {
     });
     assert.deepEqual(manifest(root, 'out/freezes').routes, []);
   });
+
+  // Ticket qits-2141: the data marks (data-qits-source/-item/-field/-derived) a shot shows.
+  it('writes the data marks a shot sent, deduplicated and sorted, and no key when it sent none', () => {
+    const root = app({ [CARD]: 'spec' });
+    send(root, [
+      {
+        name: 'list',
+        kind: 'DATA',
+        dataMarks: [
+          {
+            source: 'qits-projects-service#listProjects',
+            item: 'id=2',
+            field: 'name',
+            derived: [],
+          },
+          {
+            source: 'qits-projects-service#listProjects',
+            item: 'id=1',
+            field: 'name',
+            derived: [],
+          },
+          // A duplicate: collapses with the entry above.
+          {
+            source: 'qits-projects-service#listProjects',
+            item: 'id=1',
+            field: 'name',
+            derived: [],
+          },
+          // Only the four fields are kept, and derived is coerced to a string array.
+          { source: 'x', item: 'y', field: null, derived: [1, 'a.b'], extra: 'dropped' },
+        ],
+      },
+      { name: 'empty', kind: 'DATA' },
+    ]);
+    const written = manifest(root);
+    assert.deepEqual(
+      written.freezes.map((f) => ['dataMarks' in f, f.dataMarks]),
+      [
+        [false, undefined],
+        [
+          true,
+          [
+            {
+              source: 'qits-projects-service#listProjects',
+              item: 'id=1',
+              field: 'name',
+              derived: [],
+            },
+            {
+              source: 'qits-projects-service#listProjects',
+              item: 'id=2',
+              field: 'name',
+              derived: [],
+            },
+            { source: 'x', item: 'y', field: null, derived: ['1', 'a.b'] },
+          ],
+        ],
+      ],
+    );
+    assert.deepEqual(Object.keys(written.freezes[1]), [
+      'file',
+      'spec',
+      'test',
+      'name',
+      'kind',
+      'viewport',
+      'route',
+      'records',
+      'triggers',
+      'dataMarks',
+    ]);
+  });
+
+  it('keeps the data marks of a freeze kept from a spec the run did not complete', () => {
+    const root = app({ [CARD]: 'spec' });
+    const dataMarks = [{ source: 's', item: 'i', field: 'f', derived: [] }];
+    send(root, [{ name: 'list', kind: 'DATA', dataMarks }]);
+    assert.deepEqual(manifest(root).freezes[0].dataMarks, dataMarks);
+    // A run that failed before any shot: the old entry, and its data marks, are kept as they were.
+    send(root, [], [module(root, CARD, 'failed')]);
+    assert.deepEqual(manifest(root).freezes[0].dataMarks, dataMarks);
+  });
 });
 
 // The outcomes (ticket qits-2003): what the source declares, what the tests reached and showed.

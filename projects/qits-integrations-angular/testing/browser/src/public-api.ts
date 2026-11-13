@@ -1,7 +1,8 @@
 /*
  * Public API of @qits/angular/testing/browser: the golden-master guard for browser specs (epic
  * qits-112), the screenshot freezes (ticket qits-1947) with their kinds and preset widths (ticket
- * qits-2046), and the outcome records (ticket qits-2001).
+ * qits-2046), and the outcome records (ticket qits-2001). `visibleDataMarks()` (ticket qits-2141)
+ * reads the visible `data-qits-*` marks a shot shows, beside the outcome triggers.
  * Browser-safe, unlike @qits/angular/testing, which reads node_modules.
  */
 export * from './golden-master-guard';
@@ -30,3 +31,4 @@ export {
   type ScreenshotViewportSize,
 } from './screenshot-options';
 export * from './record-outcomes';
+export { visibleDataMarks, type VisibleDataMark } from './visible-data-marks';
