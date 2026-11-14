@@ -31,6 +31,7 @@ import {
   checkedRoutes,
   forwardRoutes,
   libraryOutcomes,
+  frozenMarks,
   outcomeGaps,
   pageRoutes,
   readOutcomes,
@@ -1948,6 +1949,199 @@ describe('qits-angular screenshots --check, the outcome gaps', () => {
     // Without --routes the file is app-wide, which these fires also satisfy; without --freezes no manifest.
     assert.equal(check(root, ['--enforce-outcomes', '--freezes', 'out/freezes']).code, 0);
     assert.equal(check(root, ['--enforce-outcomes']).code, 1);
+  });
+});
+
+// Ticket qits-2225: a layout's or app-wide trigger is judged per route. Each page route whose frozen
+// HTML renders it must list it in the triggers of one of its own freezes.
+describe('outcomeGaps, the triggers each route renders (qits-2225)', () => {
+  const entry = (interaction, outcome, route, global, triggered = true) => ({
+    route,
+    interaction,
+    outcome,
+    kind: 'stay',
+    to: null,
+    global,
+    triggered,
+    file: 'src/app/x.ts',
+  });
+  const MENU_OPEN = entry('menu', 'open', null, true);
+  const gap = (name, route) =>
+    `${name} (${route}): ${route} renders its trigger, but none of its own screenshots shows it. ` +
+    `Add a screenshot of ${route} where it is visible (an open menu, an expanded section).`;
+  /** A freezes directory holding `html` (file → content), and the manifest over it. */
+  const freezesOf = (html, freezes, routes) => {
+    const root = app(Object.fromEntries(Object.entries(html).map(([f, c]) => [`freezes/${f}`, c])));
+    return { freezesDir: join(root, 'freezes'), manifest: { routes, freezes } };
+  };
+  const shot = (route, file, triggers) => ({ file, route, triggers });
+  const ROUTES = [
+    { path: 'a', fullPath: 'a', entry: true },
+    { path: 'b', fullPath: 'b', entry: true },
+  ];
+  const MENU_HTML =
+    '<!doctype html>\n<html><head><style>[data-qits-outcome="menu:styled"] { color: red }</style>' +
+    '</head><body><nav title="a > b" data-qits-outcome="menu:open"><a href="#">Open</a></nav>' +
+    '</body></html>\n';
+  /** The gaps the per-route rule adds: those with `freezesDir` the same call without it lacks. */
+  const added = (declared, { freezesDir, manifest }) => {
+    const without = outcomeGaps({ declared, unreadable: [], manifest });
+    return outcomeGaps({ declared, unreadable: [], manifest, freezesDir }).filter(
+      (g) => !without.includes(g),
+    );
+  };
+
+  it('names the route that renders an app-wide trigger none of its own screenshots shows', () => {
+    const html = { 'a.html': MENU_HTML, 'b.html': MENU_HTML, 'b2.html': MENU_HTML };
+    const onlyA = freezesOf(
+      html,
+      [shot('a', 'a.html', ['menu:open']), shot('b', 'b.html', []), shot('b', 'b2.html', [])],
+      ROUTES,
+    );
+    assert.deepEqual(added([MENU_OPEN], onlyA), [gap('menu:open', 'b')]);
+    // The old rule saw it shown in scope: no floor gap.
+    assert.deepEqual(
+      outcomeGaps({ declared: [MENU_OPEN], unreadable: [], manifest: onlyA.manifest }).filter((g) =>
+        g.includes('shows its trigger'),
+      ),
+      [],
+    );
+    // One of b's screenshots showing it is enough.
+    const both = freezesOf(
+      html,
+      [
+        shot('a', 'a.html', ['menu:open']),
+        shot('b', 'b.html', []),
+        shot('b', 'b2.html', ['menu:open']),
+      ],
+      ROUTES,
+    );
+    assert.deepEqual(added([MENU_OPEN], both), []);
+  });
+
+  it('asks nothing of a mark not declared, declared triggered: false, or a page’s own', () => {
+    const html = {
+      'a.html': MENU_HTML,
+      'b.html':
+        '<html><body><button data-qits-outcome="stray:mark guard:out page:go">x</button></body></html>',
+    };
+    const declared = [
+      MENU_OPEN,
+      entry('guard', 'out', null, true, false),
+      entry('page', 'go', 'b', false),
+    ];
+    const frozen = freezesOf(
+      html,
+      [shot('a', 'a.html', ['menu:open']), shot('b', 'b.html', [])],
+      ROUTES,
+    );
+    assert.deepEqual(added(declared, frozen), []);
+    // The page's own entry keeps its single floor gap, not a second one per route.
+    assert.deepEqual(
+      outcomeGaps({ declared, unreadable: [], ...frozen }).filter((g) => g.startsWith('page:go')),
+      [
+        'page:go (b): no browser test reaches it.',
+        'page:go: no screenshot of b shows its trigger. Add a screenshot test where it is visible, with another provider state if needed (an open menu, a loaded list).',
+      ],
+    );
+  });
+
+  it('keeps a layout’s trigger to its subtree, and the root route is / for a null route', () => {
+    const nav = entry('nav', 'home', 'projects', true);
+    const html = { 'r.html': '<p data-qits-outcome="nav:home menu:open"></p>' };
+    const frozen = freezesOf(
+      html,
+      [shot(null, 'r.html', []), shot('projects/:id', 'r.html', []), shot('teams', 'r.html', [])],
+      [
+        { path: '', fullPath: '', entry: true },
+        { path: 'projects/:id', fullPath: 'projects/:id', entry: true },
+        { path: 'teams', fullPath: 'teams', entry: true },
+      ],
+    );
+    assert.deepEqual(added([nav, MENU_OPEN], frozen), [
+      gap('menu:open', '/'),
+      gap('menu:open', 'projects/:id'),
+      gap('nav:home', 'projects/:id'),
+      gap('menu:open', 'teams'),
+    ]);
+  });
+
+  it('offers nothing without the freezes directory, or from a missing freeze file', () => {
+    const frozen = freezesOf(
+      { 'a.html': MENU_HTML },
+      [shot('a', 'a.html', ['menu:open']), shot('b', 'gone.html', [])],
+      ROUTES,
+    );
+    assert.deepEqual(added([MENU_OPEN], frozen), []);
+    const withB = freezesOf({ 'b.html': MENU_HTML }, [shot('b', 'b.html', [])], ROUTES);
+    assert.ok(
+      outcomeGaps({ declared: [MENU_OPEN], unreadable: [], manifest: withB.manifest }).every(
+        (g) => !g.includes('renders its trigger'),
+      ),
+    );
+  });
+
+  it('reads the marks of the frozen tags, decoded, and not the CSS', () => {
+    assert.deepEqual(
+      [
+        ...frozenMarks(
+          '<html><head><style>[data-qits-outcome="css:only"]{}</style></head><body>' +
+            '<a title="x > &quot;y&quot;" data-qits-outcome=" a:b  c:d&amp;e ">x</a>' +
+            '<p>data-qits-outcome="text:only"</p><svg><g data-qits-outcome="svg:g"></g></svg>' +
+            '</body></html>',
+        ),
+      ].sort(),
+      ['a:b', 'c:d&e', 'svg:g'],
+    );
+  });
+
+  it('is named by --check, from the --freezes directory', () => {
+    const PAGE = 'src/app/routes/teams/teams.page.browser.spec.ts';
+    const DIR = 'src/testing/browser/freezes';
+    const freeze = (route, triggers, name) => ({
+      file: `${PAGE}/${name}.html`,
+      spec: PAGE,
+      test: 't',
+      name,
+      route,
+      records: [],
+      triggers,
+    });
+    const root = app({
+      [MENU]: DECLARATIONS[MENU],
+      [`${DIR}/${PAGE}/home.html`]: MENU_HTML,
+      [`${DIR}/${PAGE}/teams.html`]: MENU_HTML,
+      [`${DIR}/manifest.json`]: JSON.stringify({
+        routes: [
+          { path: '', fullPath: '', entry: true },
+          { path: 'teams', fullPath: 'teams', entry: true },
+        ],
+        freezes: [freeze(null, ['menu:open'], 'home'), freeze('teams', [], 'teams')],
+        outcomes: {
+          fired: [
+            {
+              spec: PAGE,
+              test: 't',
+              route: null,
+              interaction: 'menu',
+              outcome: 'open',
+              kind: 'stay',
+              freeze: `${PAGE}/home.html`,
+            },
+          ],
+        },
+      }),
+    });
+    const out = [];
+    const err = [];
+    const code = screenshots(['--check', '--enforce-outcomes'], {
+      cwd: root,
+      env: {},
+      out: (l) => out.push(l),
+      err: (l) => err.push(l),
+    });
+    assert.equal(code, 1);
+    assert.deepEqual(err.join('\n').split('\n').slice(1), [`  ${gap('menu:open', 'teams')}`]);
   });
 });
 
