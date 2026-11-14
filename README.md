@@ -284,6 +284,15 @@ providers: [
   Offline (`navigator.onLine === false`), a visitor without a usable token whom the device
   remembers is let through instead (the idp cannot load), and the sign-in starts, back to the
   current page, when the browser goes `online` again (unless a refresh then brings a token).
+- **The idp down** (qits-2250): a token request answered with a 5xx, failing outright, or still
+  unanswered after `TOKEN_REQUEST_TIMEOUT_MS` (15 s) leaves the idp _unavailable_, not the visitor
+  signed out: the tokens are kept and `QitsTokens.lastFailure()` says `'unavailable'` (a 4xx, or
+  nothing to refresh with, is `'refused'` and forgets them, as before). Then, online, the guard
+  redirects to `/auth/callback?error=temporarily_unavailable` instead of the idp's authorize page
+  (which would only be the same outage, a blank 502), and so does a 401 no refresh helps; the
+  callback page says the sign-in service cannot be reached, and its Start again link reruns the
+  guard, which retries the refresh. A code swap the idp does not answer, and the idp's own
+  `error=temporarily_unavailable`, fail `complete()` as `'unavailable'` too.
 - **`QITS_EVENT_SOURCE`** opens a `FetchEventSource` (an `EventSource` stand-in over `fetch`, with the
   bearer). It behaves like `EventSource`: `onopen` on a 2xx; a dropped stream is `CONNECTING` and
   reconnects after 3 s (or the stream's `retry:`), sending `Last-Event-ID` once ids were seen; a
@@ -1175,7 +1184,10 @@ in one of its own screenshots (ticket qits-2225, above).
 (`restarted`, its Start again link, an exit to `''`) on `auth/callback`; the session guard declares
 `session-guard:signedOut` (an external to `idp`, `triggered: false`) app-wide; and the bearer
 interceptor and `QitsBearerFetch`, when a platform call answers 401 and no refresh helps, leave
-through `session-expired:signedOut` (the same, app-wide, ticket qits-2052). They ship in the
+through `session-expired:signedOut` (the same, app-wide, ticket qits-2052). With the idp
+unavailable, both go to the callback page instead, through `session-guard:unavailable` and
+`session-expired:unavailable` (exits to `auth/callback`, app-wide, `triggered: false`, ticket
+qits-2250): a browser test reaches them with a token endpoint answering 5xx. They ship in the
 package (`screenshots/outcomes.json`) and join the app's declarations when the app imports
 `qitsAuthCallbackRoute` or `provideQitsBearerSignIn` (the sign-in ones), `qitsSignedInGuard` or
 `QitsSession` (the guard's), `qitsBearerInterceptor` or `QitsBearerFetch` (the expiry's) from

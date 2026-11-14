@@ -124,6 +124,10 @@ sign-in, `core/auth/dev-*.ts`, with the `dev` naming dropped):
   (`userKey`, qits-2169) on every issue; `user()` falls back to it, so an offline relaunch opens the
   offline store and `QitsSession` admits offline, signing in on `online`. `logout()` keeps it (a
   refused refresh is not a sign-out); only `forgetUser()` (`QitsOffline.signOut`) drops it.
+  Token requests time out after `TOKEN_REQUEST_TIMEOUT_MS` (`AbortSignal.timeout`, qits-2250); a
+  5xx, a rejected fetch or the timeout is `unavailable` (tokens kept), a 4xx `refused` (logout).
+  `lastFailure()` records only refreshes: an unavailable code swap with no tokens held must not
+  make the guard report an outage without ever asking the idp again (`complete()` throws instead).
 - `sign-in-settings.ts` — `platformDomainOf()` (first label `qits` = apex) and `isPlatformUrl()`
   (same origin, or `https` at/under the platform domain): the only hosts that see the bearer.
 - `bearer-web-socket.ts` / `fetch-event-source.ts` — the `qits.bearer` subprotocol offer and the
@@ -178,8 +182,12 @@ declared once and checked by the compiler.
   `succeeded` returnTo, `failed` stay, `triggered: false`; `sign-in-failed:restarted`, the Start
   again `QitsExit` to `''`) and `QitsSession` (`session-guard:signedOut`, external `idp`,
   `triggered: false`; `ensure()` takes `QitsTokens.authorizeUrl()`, the first half of `login()`, and
-  leaves through it); and `QitsSessionExpiry` (ticket qits-2052, not exported, provided by
-  `provideQitsBearerSignIn`: `session-expired:signedOut`, external `idp`, `triggered: false`),
+  leaves through it; `session-guard:unavailable`, exit `auth/callback`, `triggered: false`, ticket
+  qits-2250: with `QitsTokens.lastFailure()` `unavailable` and online, `ensure()` answers its
+  `UrlTree` (`exitUrlTree()` with `?error=temporarily_unavailable`) and records it itself, since a
+  guard redirects by answering, not by `go()`); and `QitsSessionExpiry` (ticket qits-2052, not exported, provided by
+  `provideQitsBearerSignIn`: `session-expired:signedOut`, external `idp`, `triggered: false`; and
+  `session-expired:unavailable`, the same exit through `go()`, qits-2250),
   which `qitsBearerInterceptor` (resolved lazily through its `Injector`, because `outcomes()`
   injects the `Router` only that path needs) and `QitsBearerFetch` call on a 401 that no refresh
   helps, in place of `login()`; its `provides` are `qitsBearerInterceptor` and `QitsBearerFetch`.

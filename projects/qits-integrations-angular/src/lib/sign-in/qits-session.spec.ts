@@ -1,8 +1,9 @@
 import { DOCUMENT, PLATFORM_ID } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
+import { Router, UrlTree } from '@angular/router';
 import { ɵsetOutcomeRecorder, type OutcomeRecord } from '../outcomes/outcome-recorder';
 import { QitsSession } from './qits-session';
-import { QitsTokens, userKey } from './qits-tokens';
+import { QITS_SIGN_IN_FETCH, QitsTokens, tokensKey, userKey } from './qits-tokens';
 import { QITS_SIGN_IN } from './sign-in-settings';
 
 /** Let pending awaits run. The sign-in's own (a SHA-256 digest) may take longer: wait for it. */
@@ -18,9 +19,11 @@ describe('QitsSession', () => {
   const assign = vi.fn();
   let records: OutcomeRecord[];
 
-  function session(): QitsSession {
+  /** The session; with `idp`, the idp's token endpoint answers every request with it. */
+  function session(idp?: () => Promise<Response>): QitsSession {
     TestBed.configureTestingModule({
       providers: [
+        ...(idp ? [{ provide: QITS_SIGN_IN_FETCH, useValue: idp }] : []),
         { provide: PLATFORM_ID, useValue: 'browser' },
         {
           provide: DOCUMENT,
@@ -103,6 +106,63 @@ describe('QitsSession', () => {
     await settle();
     expect(assign).toHaveBeenCalledTimes(1);
     expect(records).toHaveLength(1);
+  });
+
+  describe('the idp failing the refresh (qits-2250)', () => {
+    /** Tokens kept from before, the access token expired: the next ask refreshes. */
+    function heldTokens(): void {
+      sessionStorage.setItem(
+        tokensKey('qits-spa'),
+        JSON.stringify({
+          accessToken: 'A1',
+          accessExpiresAt: Date.now() - 1000,
+          refreshToken: 'R1',
+          refreshExpiresAt: Date.now() + 3_600_000,
+        }),
+      );
+    }
+
+    it('answers the callback page saying so, through session-guard:unavailable, and never leaves', async () => {
+      heldTokens();
+      const service = session(async () => new Response('Bad Gateway', { status: 502 }));
+      const answer = await service.ensure('/projects/qits/work');
+      expect(answer).toBeInstanceOf(UrlTree);
+      const url = TestBed.inject(Router).serializeUrl(answer as UrlTree);
+      expect(url).toBe('/auth/callback?error=temporarily_unavailable');
+      await settle();
+      expect(assign).not.toHaveBeenCalled();
+      expect(records).toEqual([
+        {
+          interaction: 'session-guard',
+          outcome: 'unavailable',
+          kind: 'exit',
+          to: 'auth/callback',
+          url,
+        },
+      ]);
+      // The outage kept the tokens: the guard's next run retries the refresh with them.
+      expect(JSON.parse(sessionStorage.getItem(tokensKey('qits-spa')) ?? '{}').refreshToken).toBe(
+        'R1',
+      );
+    });
+
+    it('answers the callback page when the token request fails outright', async () => {
+      heldTokens();
+      const service = session(async () => Promise.reject(new TypeError('Failed to fetch')));
+      expect(await service.ensure('/projects')).toBeInstanceOf(UrlTree);
+      await settle();
+      expect(assign).not.toHaveBeenCalled();
+    });
+
+    it('still leaves for the idp when the idp refuses the refresh', async () => {
+      heldTokens();
+      const service = session(
+        async () => new Response('{"error":"invalid_grant"}', { status: 400 }),
+      );
+      expect(await service.ensure('/projects/qits/work')).toBe(false);
+      await vi.waitFor(() => expect(assign).toHaveBeenCalled());
+      expect(records).toMatchObject([{ interaction: 'session-guard', outcome: 'signedOut' }]);
+    });
   });
 
   describe('offline', () => {

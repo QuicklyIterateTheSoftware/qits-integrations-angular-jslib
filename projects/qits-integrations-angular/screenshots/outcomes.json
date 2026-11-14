@@ -45,10 +45,32 @@
   },
   {
     "route": null,
+    "interaction": "session-expired",
+    "outcome": "unavailable",
+    "kind": "exit",
+    "to": "auth/callback",
+    "global": true,
+    "triggered": false,
+    "file": "@qits/angular/src/lib/sign-in/session-expiry.ts",
+    "provides": ["qitsBearerInterceptor", "QitsBearerFetch"]
+  },
+  {
+    "route": null,
     "interaction": "session-guard",
     "outcome": "signedOut",
     "kind": "external",
     "to": "idp",
+    "global": true,
+    "triggered": false,
+    "file": "@qits/angular/src/lib/sign-in/qits-session.ts",
+    "provides": ["qitsSignedInGuard", "QitsSession"]
+  },
+  {
+    "route": null,
+    "interaction": "session-guard",
+    "outcome": "unavailable",
+    "kind": "exit",
+    "to": "auth/callback",
     "global": true,
     "triggered": false,
     "file": "@qits/angular/src/lib/sign-in/qits-session.ts",

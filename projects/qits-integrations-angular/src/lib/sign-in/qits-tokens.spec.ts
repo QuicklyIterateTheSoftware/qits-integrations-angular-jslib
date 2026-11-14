@@ -7,6 +7,7 @@ import {
   QitsSignInError,
   QitsTokens,
   REFRESH_AHEAD_MS,
+  TOKEN_REQUEST_TIMEOUT_MS,
   tokensKey,
   userKey,
 } from './qits-tokens';
@@ -188,6 +189,14 @@ describe('QitsTokens', () => {
     expect(posts).toHaveLength(0);
   });
 
+  it('reports the idp being temporarily unavailable as unavailable, not as a refusal', async () => {
+    const service = tokens();
+    await expect(
+      service.complete(new URLSearchParams({ error: 'temporarily_unavailable' })),
+    ).rejects.toMatchObject({ reason: 'unavailable' } satisfies Partial<QitsSignInError>);
+    expect(posts).toHaveLength(0);
+  });
+
   it('refuses a callback with no code', async () => {
     const service = tokens();
     const state = (await login(service)).searchParams.get('state') ?? '';
@@ -204,6 +213,17 @@ describe('QitsTokens', () => {
     await expect(service.complete(new URLSearchParams({ code: 'C', state }))).rejects.toMatchObject(
       { reason: 'not-swapped' } satisfies Partial<QitsSignInError>,
     );
+  });
+
+  it('reports a code swap the idp does not answer as unavailable', async () => {
+    const service = tokens();
+    const state = (await login(service)).searchParams.get('state') ?? '';
+    replies.push(async () => new Response('Bad Gateway', { status: 502 }));
+    await expect(service.complete(new URLSearchParams({ code: 'C', state }))).rejects.toMatchObject(
+      { reason: 'unavailable' } satisfies Partial<QitsSignInError>,
+    );
+    // A swap's failure is the error's to report: no refresh failed.
+    expect(service.lastFailure()).toBeNull();
   });
 
   it('reports a 2xx code swap answer that is not JSON', async () => {
@@ -258,8 +278,68 @@ describe('QitsTokens', () => {
     await signIn(service);
     replies.push(async () => new Response('{"error":"invalid_grant"}', { status: 400 }));
     expect(await service.refresh()).toBeNull();
+    expect(service.lastFailure()).toBe('refused');
     expect(await service.accessToken()).toBeNull();
     expect(sessionStorage.getItem(TOKENS_KEY)).toBeNull();
+  });
+
+  it('reports a refresh with nothing to refresh with as refused, without asking the idp', async () => {
+    const service = tokens();
+    await signIn(service);
+    replies.push(async () => new Response('{"error":"invalid_grant"}', { status: 400 }));
+    await service.refresh();
+    expect(await service.refresh()).toBeNull();
+    expect(service.lastFailure()).toBe('refused');
+    expect(posts).toHaveLength(2);
+  });
+
+  it('keeps the tokens and reports unavailable when the idp answers the refresh with a 5xx', async () => {
+    const service = tokens();
+    await signIn(service);
+    replies.push(async () => new Response('Bad Gateway', { status: 502 }));
+    expect(await service.refresh()).toBeNull();
+    expect(service.lastFailure()).toBe('unavailable');
+    expect(JSON.parse(sessionStorage.getItem(TOKENS_KEY) ?? '{}').refreshToken).toBe('R1');
+    // Back up: the kept refresh token still refreshes, and the failure is over.
+    replies.push(async () => answer('A2', 'R2'));
+    expect(await service.refresh()).toBe('A2');
+    expect(posts.at(-1)?.form.get('refresh_token')).toBe('R1');
+    expect(service.lastFailure()).toBeNull();
+  });
+
+  it('keeps the tokens and reports unavailable when the refresh request fails', async () => {
+    const service = tokens();
+    await signIn(service);
+    replies.push(async () => Promise.reject(new TypeError('Failed to fetch')));
+    expect(await service.refresh()).toBeNull();
+    expect(service.lastFailure()).toBe('unavailable');
+    expect(JSON.parse(sessionStorage.getItem(TOKENS_KEY) ?? '{}').refreshToken).toBe('R1');
+  });
+
+  it('gives up on a refresh the idp leaves hanging, after the timeout, as unavailable', async () => {
+    const service = tokens();
+    await signIn(service);
+    // AbortSignal.timeout runs on a timer of its own that fake timers do not reach: stand it in.
+    const timeout = new AbortController();
+    const signalTimeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeout.signal);
+    try {
+      replies.push(
+        () =>
+          new Promise<Response>((_, reject) => {
+            const signal = posts.at(-1)?.init.signal;
+            signal?.addEventListener('abort', () => reject(signal.reason));
+          }),
+      );
+      const refreshed = service.refresh();
+      expect(signalTimeout).toHaveBeenCalledExactlyOnceWith(TOKEN_REQUEST_TIMEOUT_MS);
+      expect(posts.at(-1)?.init.signal).toBe(timeout.signal);
+      timeout.abort(new DOMException('The operation timed out.', 'TimeoutError'));
+      expect(await refreshed).toBeNull();
+      expect(service.lastFailure()).toBe('unavailable');
+      expect(JSON.parse(sessionStorage.getItem(TOKENS_KEY) ?? '{}').refreshToken).toBe('R1');
+    } finally {
+      signalTimeout.mockRestore();
+    }
   });
 
   it('refreshes on its own before the access token expires', async () => {

@@ -20,6 +20,7 @@ const MESSAGES: Record<QitsSignInFailure | 'null', string> = {
   'unknown-state': 'This sign-in was started in another tab, or by an old link.',
   'no-code': 'The sign-in came back incomplete.',
   'not-swapped': 'The sign-in could not be finished: its code was wrong, already used or expired.',
+  unavailable: 'The sign-in service cannot be reached right now. Try again in a moment.',
   null: 'Something went wrong while signing in.',
 };
 

@@ -18,6 +18,12 @@ export const REFRESH_AHEAD_MS = 60_000;
 /** An access token this close to its end counts as expired: a call must not arrive late. */
 export const EXPIRY_SKEW_MS = 10_000;
 
+/**
+ * How long a token request may take before it counts as the idp being unavailable (qits-2250).
+ * Without it a hanging idp left `accessToken()`, and the guard waiting on it, pending for good.
+ */
+export const TOKEN_REQUEST_TIMEOUT_MS = 15_000;
+
 /** Where the tokens survive a reload: this tab only, one entry per client. */
 export function tokensKey(clientId: string): string {
   return `qits.sign-in.${clientId}.tokens`;
@@ -45,8 +51,30 @@ export const QITS_SIGN_IN_FETCH = new InjectionToken<typeof fetch>('QITS_SIGN_IN
   factory: () => (input, init) => fetch(input, init),
 });
 
-/** Why `complete()` refused: the idp's query, this tab's own state, or the code swap. */
-export type QitsSignInFailure = 'refused' | 'unknown-state' | 'no-code' | 'not-swapped';
+/**
+ * The callback query that says the idp is down (qits-2250): RFC 6749's `temporarily_unavailable`.
+ * The idp may send it itself; `QitsSession` and `QitsSessionExpiry` send it to `/auth/callback`
+ * in-app when a refresh found the idp unavailable, so `complete()` throws the `unavailable` failure
+ * and the callback page says so, rather than leaving for an authorize page that cannot load.
+ */
+export const UNAVAILABLE_QUERY = { error: 'temporarily_unavailable' } as const;
+
+/**
+ * Why `complete()` refused: the idp's query, this tab's own state, or the code swap. `unavailable`
+ * (qits-2250) is the idp not answering at all (a 5xx, a failed or timed-out request, or the idp's
+ * own `temporarily_unavailable`): nothing was wrong with the sign-in, so trying again later helps.
+ */
+export type QitsSignInFailure =
+  'refused' | 'unknown-state' | 'no-code' | 'not-swapped' | 'unavailable';
+
+/**
+ * Why the last refresh issued no tokens (`QitsTokens.lastFailure()`, qits-2250). `refused`: there
+ * was nothing to refresh with, or the idp answered and issued nothing, so signing in again is the
+ * way on. `unavailable`: the idp did not answer (a 5xx, a failed request, or none within
+ * {@link TOKEN_REQUEST_TIMEOUT_MS}), so the tokens are kept for the next try, and sending the
+ * visitor to its authorize page would only show them the same outage as a blank error page.
+ */
+export type QitsTokenFailure = 'refused' | 'unavailable';
 
 /** A sign-in that `complete()` could not finish, with the reason a caller can show. */
 export class QitsSignInError extends Error {
@@ -94,6 +122,11 @@ interface TokenAnswer {
  *   answers the path to go back to. A `state` this tab did not start is refused. Every failure
  *   throws a {@link QitsSignInError} naming the {@link QitsSignInFailure} reason.
  * - `accessToken()` answers a token that is still valid, refreshing first when it is not.
+ * - `lastFailure()` says why the last refresh issued no tokens: `refused` (sign in again) or
+ *   `unavailable` (the idp did not answer; the tokens are kept for the next try). The guard and the
+ *   session expiry read it so as not to send a visitor to an idp that is down; the token answers
+ *   themselves stay `string | null`, so the bearer callers need not know. A code swap reports its
+ *   own failure as a {@link QitsSignInError} instead.
  * - `refresh()` swaps the refresh token for new tokens. The idp rotates the refresh token on every
  *   use and revokes the whole family when one is used twice, so there is only ever one refresh in
  *   flight: a second caller gets the first one's answer.
@@ -127,6 +160,7 @@ export class QitsTokens {
   readonly #accessToken = signal<string | null>(null);
   readonly #renewals = signal(0);
   readonly #remembered = signal<string | null>(null);
+  readonly #lastFailure = signal<QitsTokenFailure | null>(null);
 
   /**
    * How many times the idp issued tokens on this page, a sign-in or a refresh. Tokens read back
@@ -184,6 +218,9 @@ export class QitsTokens {
     const pending = state ? read<Pending>(key) : null;
     if (state) remove(key);
     const error = query.get('error');
+    if (error === UNAVAILABLE_QUERY.error) {
+      throw new QitsSignInError('unavailable', 'The idp is temporarily unavailable.');
+    }
     if (error) {
       throw new QitsSignInError(
         'refused',
@@ -205,7 +242,10 @@ export class QitsTokens {
       redirect_uri: this.redirectUri,
       code_verifier: pending.verifier,
     });
-    if (!answer) {
+    if (answer === 'unavailable') {
+      throw new QitsSignInError('unavailable', 'The idp did not answer the code swap.');
+    }
+    if (typeof answer === 'string') {
       throw new QitsSignInError('not-swapped', 'The idp did not swap the code for tokens.');
     }
     return pending.returnPath;
@@ -227,6 +267,17 @@ export class QitsTokens {
     const tokens = this.tokens;
     if (tokens && tokens.accessToken !== used && fresh(tokens)) return tokens.accessToken;
     return this.refresh();
+  }
+
+  /**
+   * Why the last refresh issued no tokens; null before one failed, once the idp issues tokens
+   * again, and after {@link logout}. `unavailable` therefore means tokens are still held, so the
+   * next {@link accessToken} tries again: an unavailable code swap is not recorded here, or a
+   * visitor holding no tokens would be told of an outage without the idp ever being asked again.
+   * A signal read.
+   */
+  lastFailure(): QitsTokenFailure | null {
+    return this.#lastFailure();
   }
 
   /** Swaps the refresh token for new tokens. One at a time; null when it fails. */
@@ -264,6 +315,7 @@ export class QitsTokens {
   logout(): void {
     clearTimeout(this.timer);
     this.tokens = null;
+    this.#lastFailure.set(null);
     this.#accessToken.set(null);
     if (this.browser) remove(this.tokensKey);
   }
@@ -271,7 +323,9 @@ export class QitsTokens {
   private async runRefresh(): Promise<string | null> {
     const tokens = this.tokens;
     if (!tokens?.refreshToken || tokens.refreshExpiresAt <= Date.now()) {
+      // Nothing to refresh with: no idp could help, so it is a refusal, not an outage.
       this.logout();
+      this.#lastFailure.set('refused');
       return null;
     }
     const answer = await this.post({
@@ -279,40 +333,59 @@ export class QitsTokens {
       client_id: this.clientId,
       refresh_token: tokens.refreshToken,
     });
-    return answer?.accessToken ?? null;
+    if (typeof answer !== 'string') return answer.accessToken;
+    this.#lastFailure.set(answer);
+    return null;
   }
 
   /** One form POST to the token endpoint, without credentials. Keeps what it answers. */
-  private async post(form: Record<string, string>): Promise<Tokens | null> {
+  private async post(form: Record<string, string>): Promise<Tokens | QitsTokenFailure> {
+    const answer = await this.request(form);
+    if (typeof answer !== 'string') {
+      this.#lastFailure.set(null);
+      this.keep(answer);
+      write(this.tokensKey, answer);
+      this.remember(answer.accessToken);
+      this.#renewals.update((n) => n + 1);
+      return answer;
+    }
+    // The idp refused the grant (spent, revoked or expired): nothing left to refresh with. An
+    // unavailable idp, or a 2xx without tokens, is no verdict on the refresh token: it is kept.
+    if (answer === 'refused') this.logout();
+    return answer === 'unavailable' ? 'unavailable' : 'refused';
+  }
+
+  /**
+   * The POST itself, read as tokens or as what went wrong. A 4xx is the idp's refusal. A 5xx (its
+   * gateway's 502 included), a rejected `fetch` and one still unanswered after
+   * {@link TOKEN_REQUEST_TIMEOUT_MS} (the signal aborts it, the body's read too) are the idp being
+   * unavailable. A 2xx without tokens in it (not JSON, fields missing) is `no-tokens`: the idp
+   * answered, so it is no outage, but it did not refuse the grant either.
+   */
+  private async request(
+    form: Record<string, string>,
+  ): Promise<Tokens | 'refused' | 'unavailable' | 'no-tokens'> {
+    const signal = AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS);
     let response: Response;
     try {
       response = await this.fetch(`${this.idp}/idp/token`, {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams(form).toString(),
+        signal,
       });
     } catch {
-      return null;
+      return 'unavailable';
     }
-    if (!response.ok) {
-      // The idp refused the grant (spent, revoked or expired): nothing left to refresh with.
-      if (response.status >= 400 && response.status < 500) this.logout();
-      return null;
-    }
+    if (response.status >= 400 && response.status < 500) return 'refused';
+    if (!response.ok) return 'unavailable';
     let body: unknown;
     try {
       body = await response.json();
     } catch {
-      // A 2xx with a body that is not JSON: treat it like a failed swap.
-      return null;
+      return signal.aborted ? 'unavailable' : 'no-tokens';
     }
-    const tokens = parse(body as TokenAnswer, this.tokens);
-    if (!tokens) return null;
-    this.keep(tokens);
-    write(this.tokensKey, tokens);
-    this.remember(tokens.accessToken);
-    this.#renewals.update((n) => n + 1);
-    return tokens;
+    return parse(body as TokenAnswer, this.tokens) ?? 'no-tokens';
   }
 
   /** Remembers the `sub` of a token the idp issued, for {@link user}; none changes nothing. */

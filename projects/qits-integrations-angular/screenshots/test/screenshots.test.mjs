@@ -1445,7 +1445,9 @@ describe('the library’s own outcomes', () => {
         ['sign-in:succeeded', 'returnTo', null, false, 'auth/callback', false],
         ['sign-in-failed:restarted', 'exit', '', true, 'auth/callback', false],
         ['session-expired:signedOut', 'external', 'idp', false, null, true],
+        ['session-expired:unavailable', 'exit', 'auth/callback', false, null, true],
         ['session-guard:signedOut', 'external', 'idp', false, null, true],
+        ['session-guard:unavailable', 'exit', 'auth/callback', false, null, true],
       ],
     );
   });
@@ -1526,7 +1528,12 @@ export class HomePage {
     });
     assert.deepEqual(
       declaredOutcomes({ root }).declared.map((e) => `${e.route}|${e.interaction}:${e.outcome}`),
-      ['|home:greeted', 'null|menu:open', 'null|session-guard:signedOut'],
+      [
+        '|home:greeted',
+        'null|menu:open',
+        'null|session-guard:signedOut',
+        'null|session-guard:unavailable',
+      ],
     );
   });
 
@@ -1538,6 +1545,7 @@ export class HomePage {
       'sign-in-failed:restarted (auth/callback): no browser test reaches it.',
       'sign-in-failed:restarted: no screenshot of auth/callback shows its trigger. Add a screenshot test where it is visible, with another provider state if needed (an open menu, a loaded list).',
       'session-guard:signedOut (app-wide): no browser test reaches it.',
+      'session-guard:unavailable (app-wide): no browser test reaches it.',
     ]);
     const fired = (interaction, outcome, kind, freeze = null) => ({
       spec: 'src/app/routes/auth.page.browser.spec.ts',
@@ -1562,6 +1570,7 @@ export class HomePage {
           fired('sign-in', 'failed', 'stay', 'f.html'),
           fired('sign-in-failed', 'restarted', 'exit'),
           fired('session-guard', 'signedOut', 'external'),
+          fired('session-guard', 'unavailable', 'exit'),
         ],
       },
     };

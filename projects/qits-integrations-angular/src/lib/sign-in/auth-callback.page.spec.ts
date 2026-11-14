@@ -121,6 +121,7 @@ describe('QitsAuthCallbackPage', () => {
       'not-swapped',
       'The sign-in could not be finished: its code was wrong, already used or expired.',
     ],
+    ['unavailable', 'The sign-in service cannot be reached right now. Try again in a moment.'],
   ])('shows the %s sentence and a way to start again', async (reason, sentence) => {
     const fixture = open({
       complete: async () => Promise.reject(new QitsSignInError(reason, 'x')),

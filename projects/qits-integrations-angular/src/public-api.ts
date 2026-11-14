@@ -90,8 +90,9 @@ export {
   QitsSignInError,
   QitsTokens,
   REFRESH_AHEAD_MS,
+  TOKEN_REQUEST_TIMEOUT_MS,
 } from './lib/sign-in/qits-tokens';
-export type { QitsSignInFailure } from './lib/sign-in/qits-tokens';
+export type { QitsSignInFailure, QitsTokenFailure } from './lib/sign-in/qits-tokens';
 export { QitsSession, qitsSignedInGuard } from './lib/sign-in/qits-session';
 export { qitsBearerInterceptor } from './lib/sign-in/bearer-interceptor';
 export { QitsBearerFetch } from './lib/sign-in/bearer-fetch';

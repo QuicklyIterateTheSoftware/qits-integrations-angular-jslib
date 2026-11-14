@@ -24,7 +24,8 @@ import {
  */
 declare module '@qits/angular' {
   interface QitsApp {
-    routePath: '' | 'projects' | 'projects/:slug' | 'projects/:slug/work/detail/:id';
+    routePath:
+      '' | 'auth/callback' | 'projects' | 'projects/:slug' | 'projects/:slug/work/detail/:id';
     interaction:
       | 'create-work-item'
       | 'open-project'
@@ -358,7 +359,7 @@ describe('outcomeMark', () => {
 describe('the typing seam', () => {
   it('takes the app’s names from QitsApp', () => {
     expectTypeOf<RoutePath>().toEqualTypeOf<
-      '' | 'projects' | 'projects/:slug' | 'projects/:slug/work/detail/:id'
+      '' | 'auth/callback' | 'projects' | 'projects/:slug' | 'projects/:slug/work/detail/:id'
     >();
     expectTypeOf<InteractionName>().toEqualTypeOf<
       | 'create-work-item'

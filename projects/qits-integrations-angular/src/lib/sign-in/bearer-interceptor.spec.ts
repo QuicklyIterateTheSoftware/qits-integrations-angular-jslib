@@ -42,6 +42,10 @@ class FakeTokens {
     this.signIns.push(path);
     return this.signIns.length === 1 ? AUTHORIZE : null;
   }
+  /** A refusal's null: `QitsSessionExpiry` then leaves for the idp. */
+  lastFailure() {
+    return null;
+  }
 }
 
 /** The interceptor's work runs after a few awaits; let them run. */

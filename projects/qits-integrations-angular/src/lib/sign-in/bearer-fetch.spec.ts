@@ -40,6 +40,7 @@ describe('QitsBearerFetch', () => {
             // Once per page, as the real one answers.
             authorizeUrl: async (path: string) =>
               tokens.signIns.push(path) === 1 ? AUTHORIZE : null,
+            lastFailure: () => null,
           },
         },
         {
