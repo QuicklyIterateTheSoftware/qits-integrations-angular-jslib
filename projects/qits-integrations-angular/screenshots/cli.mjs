@@ -11,7 +11,9 @@
  * a route no exit leads to, and that is not itself declared an entry point
  * (`data: QITS_ENTRY` / `data: { qitsEntry: true }`, `manifest.routes[].entry`), is named too. Those
  * gaps are report-only unless `--enforce-outcomes` is given, so an app adopts the check page by
- * page; an update run only lists them, as it does the orphans.
+ * page; an update run only lists them, as it does the orphans. A trigger is judged per route too
+ * (ticket qits-2225): each page route whose frozen HTML renders a layout's or app-wide trigger must
+ * list it in the `triggers` of one of its own freezes; a freeze elsewhere in the scope is not enough.
  *
  * With a manifest that records `colorSchemes` (ticket qits-2083, `freezeScreenshots({ colorSchemes
  * })`), `--check` also fails on every page or layout shot missing one of them that it did not opt
@@ -45,7 +47,9 @@ an orphan; the rest may belong to the skipped tests and are not judged.
 --check also reads the outcomes() declarations from the source and the
 freeze manifest, and names each declared outcome no browser test reaches,
 each stay no screenshot follows, each outcome whose trigger no screenshot
-shows, each outcomes() call it cannot read, and each route (manifest.routes,
+shows, each page route that renders a layout's or app-wide trigger (its
+frozen HTML holds the mark) none of its own screenshots shows, each
+outcomes() call it cannot read, and each route (manifest.routes,
 a page or layout with no children, no redirectTo, path other than '**') that
 no declared exit leads to and that is not itself declared an entry point
 (route data: QITS_ENTRY). These gaps are report-only unless --enforce-outcomes
@@ -290,7 +294,7 @@ function checkOutcomes({ root, freezes, routes, enforceOutcomes, env, out, err }
     } catch {
       manifest = undefined;
     }
-    gaps = outcomeGaps({ ...read, manifest });
+    gaps = outcomeGaps({ ...read, manifest, freezesDir: resolve(root, freezes) });
     if (manifest === undefined && read.declared.length > 0) {
       gaps.unshift(
         `no freeze manifest at ${freezes}/${MANIFEST}: run the browser tests with ` +

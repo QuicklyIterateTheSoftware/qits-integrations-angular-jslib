@@ -35,8 +35,10 @@
  *
  * `outcomeGaps()` holds the declarations against `manifest.json` (`freezes.mjs`): an outcome no
  * fired record reaches, a stay no screenshot follows, an outcome whose trigger no screenshot in its
- * scope shows (not asked of a `triggered: false` one), a checked route no outcome leads to
- * ({@link unreachableRoutes}, ticket qits-2049), and the unreadable calls.
+ * scope shows (not asked of a `triggered: false` one), a page route that renders a layout's or
+ * app-wide trigger none of its own screenshots shows ({@link routeTriggerGaps}, ticket qits-2225), a
+ * checked route no outcome leads to ({@link unreachableRoutes}, ticket qits-2049), and the unreadable
+ * calls.
  *
  * Forwards (ticket qits-2076): {@link forwardRoutes} names the routes that render a component but
  * leave at once (only untriggered exits, nothing rendered below them); the freeze writer marks them
@@ -529,14 +531,112 @@ export function pageRoutes(manifest, declared) {
   );
 }
 
+/** The root route is `''` in `manifest.routes` and `null` on a freeze (`currentRoutePattern()`). */
+const sameRoute = (freezeRoute, fullPath) => (freezeRoute ?? '') === fullPath;
+
+/** What `outerHTML` escapes in an attribute value, and the numeric references, decoded. */
+const ENTITIES = { amp: '&', quot: '"', lt: '<', gt: '>', nbsp: '\u00a0' };
+const decode = (value) =>
+  value.replace(/&(?:#x([0-9a-f]+)|#(\d+)|([a-z]+));/gi, (whole, hex, dec, name) =>
+    hex
+      ? String.fromCodePoint(parseInt(hex, 16))
+      : dec
+        ? String.fromCodePoint(Number(dec))
+        : (ENTITIES[name] ?? whole),
+  );
+
 /**
- * The outcome gaps, one message each, in the order of the declarations, then one per unreachable
- * route ({@link unreachableRoutes}, ticket qits-2049), then the unreadable calls. `manifest` is
- * `manifest.json` as read (or `undefined` when there is none).
- *
- * @param {{ declared: object[], unreadable: object[], manifest?: object }} input
+ * The `<interaction>:<outcome>` marks of every `data-qits-outcome` attribute in a frozen document
+ * (ticket qits-2225), hidden ones included. The freeze is `outerHTML` (`freezeShot()`): attribute
+ * values in double quotes with `"` as `&quot;`, `<` in text as `&lt;`; the only raw text left is
+ * a `<style>` element's CSS, whose `[data-qits-outcome="…"]` selectors are not marks, so it is
+ * dropped before the tags are read.
  */
-export function outcomeGaps({ declared, unreadable, manifest }) {
+export function frozenMarks(html) {
+  const marks = new Set();
+  const markup = html.replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '');
+  for (const [, attributes] of markup.matchAll(
+    /<[a-zA-Z][^\s/>]*((?:\s+[^\s"'>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+))?)*)\s*\/?>/g,
+  )) {
+    for (const [, name, double, single, bare] of attributes.matchAll(
+      /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g,
+    )) {
+      if (name.toLowerCase() !== 'data-qits-outcome') continue;
+      for (const mark of decode(double ?? single ?? bare ?? '').split(/\s+/)) {
+        if (mark) marks.add(mark);
+      }
+    }
+  }
+  return marks;
+}
+
+/**
+ * The per-route trigger gaps (ticket qits-2225, owner ruling: coverage is judged per route). A
+ * layout's or app-wide trigger is not covered by one screenshot anywhere in its scope: each page
+ * route ({@link pageRoutes}) that renders it must show it in one of its own screenshots. For each
+ * page route, its freezes are those whose `route` is its `fullPath` (`null` as the root `''`). What
+ * it offers are the marks in their frozen HTML ({@link frozenMarks}, read from `freezesDir`; a
+ * missing or unreadable file offers nothing, a stale one is named elsewhere), kept to the names
+ * of declared `global` entries that are triggered and in scope for the route (a page's own entry is
+ * already judged on its route alone). What it shows is the union of their `triggers`. Each name
+ * offered and not shown is one gap, routes in `pageRoutes()` order, names sorted. Without
+ * `freezesDir` nothing is offered.
+ *
+ * @param {{ declared: object[], manifest?: object, freezesDir?: string }} input
+ */
+export function routeTriggerGaps({ declared, manifest, freezesDir }) {
+  if (freezesDir === undefined) return [];
+  const freezes = Array.isArray(manifest?.freezes) ? manifest.freezes : [];
+  const read = new Map();
+  const marksOf = (file) => {
+    if (!read.has(file)) {
+      let marks;
+      try {
+        marks = frozenMarks(readFileSync(join(freezesDir, file), 'utf8'));
+      } catch {
+        marks = new Set();
+      }
+      read.set(file, marks);
+    }
+    return read.get(file);
+  };
+  const gaps = [];
+  for (const { fullPath } of pageRoutes(manifest)) {
+    const own = freezes.filter(
+      (freeze) => sameRoute(freeze.route, fullPath) && typeof freeze.file === 'string',
+    );
+    if (own.length === 0) continue;
+    const covered = new Set(
+      declared
+        .filter((entry) => entry.global && entry.triggered !== false && inScope(entry, fullPath))
+        .map((entry) => `${entry.interaction}:${entry.outcome}`),
+    );
+    const offered = new Set(own.flatMap((freeze) => [...marksOf(freeze.file)]));
+    const shown = new Set(
+      own.flatMap((freeze) => (Array.isArray(freeze.triggers) ? freeze.triggers : [])),
+    );
+    const route = shownRoute(fullPath);
+    for (const name of [...offered].filter((n) => covered.has(n) && !shown.has(n)).sort(compare)) {
+      gaps.push(
+        `${name} (${route}): ${route} renders its trigger, but none of its own screenshots shows ` +
+          `it. Add a screenshot of ${route} where it is visible (an open menu, an expanded section).`,
+      );
+    }
+  }
+  return gaps;
+}
+
+/**
+ * The outcome gaps, one message each, in the order of the declarations, then one per page route
+ * that renders a layout's or app-wide trigger none of its own screenshots shows
+ * ({@link routeTriggerGaps}, ticket qits-2225; only with `freezesDir`, the directory holding the
+ * manifest and the frozen HTML), then one per unreachable route ({@link unreachableRoutes}, ticket
+ * qits-2049), then the unreadable calls. `manifest` is `manifest.json` as read (or `undefined` when
+ * there is none).
+ *
+ * @param {{ declared: object[], unreadable: object[], manifest?: object, freezesDir?: string }} input
+ */
+export function outcomeGaps({ declared, unreadable, manifest, freezesDir }) {
   const fired = Array.isArray(manifest?.outcomes?.fired) ? manifest.outcomes.fired : [];
   const freezes = Array.isArray(manifest?.freezes) ? manifest.freezes : [];
   const gaps = [];
@@ -568,6 +668,7 @@ export function outcomeGaps({ declared, unreadable, manifest }) {
       );
     }
   }
+  gaps.push(...routeTriggerGaps({ declared, manifest, freezesDir }));
   for (const route of unreachableRoutes({ declared, manifest })) {
     gaps.push(
       `${shownRoute(route.fullPath)}: no outcome leads here, and it is not an entry point. Add ` +

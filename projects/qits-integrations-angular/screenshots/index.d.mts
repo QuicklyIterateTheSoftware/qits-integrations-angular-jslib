@@ -316,11 +316,16 @@ export declare function declaredOutcomes(options: { root: string; routes?: strin
 /** The library's own declarations, as this copy of the package ships them. */
 export declare function libraryOutcomes(): LibraryOutcome[];
 
-/** The outcome gaps `qits-angular screenshots --check` names, one message each. */
+/**
+ * The outcome gaps `qits-angular screenshots --check` names, one message each. With `freezesDir`
+ * (the directory holding the manifest and the frozen HTML), also each page route that renders a
+ * layout's or app-wide trigger none of its own screenshots shows (ticket qits-2225).
+ */
 export declare function outcomeGaps(input: {
   declared: DeclaredOutcome[];
   unreadable: { file: string; line: number; why: string }[];
   manifest?: FreezeManifest;
+  freezesDir?: string;
 }): string[];
 
 /**
