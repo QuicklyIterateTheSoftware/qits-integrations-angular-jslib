@@ -212,7 +212,8 @@ declared once and checked by the compiler.
   (`markForwards()`, re-judging a kept tree; never on the `''` child that shares the path).
   `pageRoutes(manifest, declared?)` is `checkedRoutes()` minus `rendersNothing` rows and forward
   subtrees, read from the flags (computed when `declared` is given): the set any rule about a
-  page's states iterates. `outcomeGaps()` and the reachability rule do not use it.
+  page's states iterates. The reachability rule does not use it; `outcomeGaps()` uses it only for
+  the per-route trigger rule (ticket qits-2225, below).
 
 The library is **zoneless-first**: no `zone.js`, no `@opentelemetry/context-zone` — the default
 stack context manager is correct. The `instrumentation-user-interaction` `zone.js` peer is
@@ -464,7 +465,11 @@ viewportSpecs, colorSchemes })`, all off by default so a bump changes nothing un
   Outcomes (ticket qits-2003): each freeze payload also carries `outcomes` (the test's record count
   at shot time) and `triggers` (`visible-triggers.ts`: the `data-qits-outcome` marks visible in the
   shot — `checkVisibility` with CSS, no `hidden` on an ancestor, a non-zero box meeting the target's
-  box or the page's scroll area — measured on the **live DOM** before `freezeShot`, because the
+  box or the page's scroll area, and (ticket qits-2225, `isTopmost()` in `visible-marks.ts`)
+  `elementFromPoint` at the centre of that box clipped to the area and the viewport answering the
+  mark or a descendant, so a covered or `overflow`-clipped menu does not count; a box wholly outside
+  the viewport cannot be hit-tested and keeps the CSS rule alone; `visibleDataMarks()` does not take
+  the hit test — measured on the **live DOM** before `freezeShot`, because the
   HTML keeps a closed menu's marks too). The third command, `qitsOutcomes`, takes each test's
   records. `end()` writes `triggers` per freeze and `outcomes: { declared, fired }`: `fired` follow
   the freezes' per-spec rules (complete replaces, gone drops, otherwise kept), each linked to the
@@ -484,7 +489,10 @@ viewportSpecs, colorSchemes })`, all off by default so a bump changes nothing un
   (`global`), a `$layout` layout or any file outside the routes directory app-wide (`route: null`,
   `global`); anything it cannot read is an `unreadable` gap by file:line. `--check` names the gaps
   (`outcomeGaps()`): unreached, a reached stay with no `freeze`, no freeze in scope listing the
-  trigger (not for `triggered: false`), unreadable. They are **report-only** (stderr, exit unchanged) unless
+  trigger (not for `triggered: false`), and per route (`routeTriggerGaps()`, ticket qits-2225): each
+  `pageRoutes()` row whose own freezes' HTML (`frozenMarks()`, read from `freezesDir`, which
+  `checkOutcomes` passes as `resolve(root, freezes)`; `<style>` text skipped) holds a mark of a
+  triggered `global` entry in scope, and whose own freezes' `triggers` lack it; unreadable. They are **report-only** (stderr, exit unchanged) unless
   `--enforce-outcomes`; an app with no declaration prints nothing; an update run only lists them.
   `--freezes <dir>` names the manifest's directory. The root page's route `''` also takes `null`,
   since `currentRoutePattern()` reports the empty route as `null`.

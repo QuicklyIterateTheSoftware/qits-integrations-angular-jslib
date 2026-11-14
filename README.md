@@ -744,8 +744,9 @@ template: `
 
 **The manifest.** Each frozen screenshot carries `dataMarks`: one `{ source, item, field, derived }`
 entry per visibly marked element (`visibleDataMarks()`, `@qits/angular/testing/browser`), under the
-same visibility rule as `triggers` — `checkVisibility` with CSS, no `hidden` ancestor, a non-zero
-box meeting the shot's element or the page's scroll area — deduplicated and sorted. It is written
+visibility rule `triggers` start from — `checkVisibility` with CSS, no `hidden` ancestor, a non-zero
+box meeting the shot's element or the page's scroll area — deduplicated and sorted. (`triggers` also
+ask that the mark be topmost at its centre, ticket qits-2225; data marks do not.) It is written
 only when non-empty; a manifest without it, or an older one written before this ticket, reads as
 `[]`. See [the manifest](#screenshots-frozen-as-html-freezescreenshots-and-the-freezes-option)
 below.
@@ -1133,6 +1134,15 @@ Each freeze also lists the trigger marks visible in its shot (`triggers`). Then
   a layout's one of its subtree, an app-wide one any freeze, `route: null` ones included. This is
   not the same as reaching it: a test may click a button no screenshot shows. Not asked of a
   `triggered: false` interaction;
+- **a route that renders a layout's or app-wide trigger none of its own screenshots shows**
+  (ticket qits-2225). Coverage is judged per route: one freeze somewhere in the scope is not
+  enough. For each page route, its freezes are those whose `route` is its full path (`null` as the
+  root `''`); it offers every `data-qits-outcome` mark their frozen HTML holds (hidden ones too:
+  the HTML keeps a closed menu's marks) that names a declared, triggered layout or app-wide entry
+  in scope there, and each of those must be in the `triggers` of one of its own freezes. A shell's
+  menu links rendered on every page are thus shown on every page, open menu and all. A page's own
+  entries are already judged on their route and are not asked twice; a mark no declaration names,
+  and a `triggered: false` one, are asked nothing;
 - **a route no outcome leads to, and that is not an entry point** (ticket qits-2049, below);
 - **an `outcomes()` call it cannot read**, by `file:line`: a non-literal interaction, a spread, a
   computed key, an entry that is no `exit()` / `stay()` / `returnTo()` / `external()` call, an exit
@@ -1142,6 +1152,7 @@ Each freeze also lists the trigger marks visible in its shot (`triggers`). Then
 create-work-item:refused (projects/:slug/work/create): no browser test reaches it.
 create-work-item:refused (projects/:slug/work/create): a stay needs a screenshot after it is reached.
 create-work-item:refused: no screenshot of projects/:slug/work/create shows its trigger. Add a screenshot test where it is visible, with another provider state if needed (an open menu, a loaded list).
+menu:open (teams): teams renders its trigger, but none of its own screenshots shows it. Add a screenshot of teams where it is visible (an open menu, an expanded section).
 auth/old: no outcome leads here, and it is not an entry point. Add the exit that should lead here, or declare it an entry point.
 src/app/routes/projects/projects.page.ts:12: an outcomes() call that cannot be read statically (a spread).
 ```
@@ -1155,7 +1166,9 @@ directory under the routes directory (`src/app/routes`, `--routes <dir>`, as the
 directory names (`projects/[slug]` → `projects/:slug`, the directory itself `''`); a `*.layout.ts`
 there for its route's whole subtree; a `*.layout.ts` under the `$layout` alias and any file outside
 the routes directory for the whole app (`route: null`). Layout and app-wide declarations are
-`global: true` and checked once, not per page.
+`global: true` and checked once, not per page, for being reached and for the floor of a trigger
+shown somewhere in scope; on top of that, each page route that renders their trigger must show it
+in one of its own screenshots (ticket qits-2225, above).
 
 **The library's own outcomes count too** (ticket qits-2044). The sign-in callback page declares
 `sign-in` (`succeeded`, a return; `failed`, a stay; both `triggered: false`) and `sign-in-failed`
@@ -1741,8 +1754,14 @@ entry?, rendersNothing?, forward?, children?}`; `entry: true` marks a route ente
   visible in the shot, split, deduplicated and sorted. They are measured on the live DOM before the
   shot is serialized, because the HTML keeps a closed menu's marks too: a mark counts when the
   element passes `checkVisibility({ checkVisibilityCSS: true })`, has no `hidden` attribute on itself
-  or an ancestor, has a box of non-zero size, and that box meets the shot's element (or the page's
-  scroll area for a page shot). `dataMarks` are the visible `data-qits-*` marks (ticket qits-2141),
+  or an ancestor, has a box of non-zero size, that box meets the shot's element (or the page's
+  scroll area for a page shot), and (ticket qits-2225) the mark is topmost at one probe point:
+  `document.elementFromPoint()` at the centre of its box clipped to the shot's area and to the
+  viewport answers the mark or something inside it. A menu stacked beneath a higher layer, or
+  clipped away by an `overflow: hidden` ancestor, is therefore not listed; nor is a mark with
+  `pointer-events: none`, which hit testing never finds. Hit testing answers only inside the
+  viewport, so a mark whose clipped box lies wholly outside it (a page shot's mark below the fold)
+  is not hit-tested and keeps the rule before it. `dataMarks` are the visible `data-qits-*` marks (ticket qits-2141),
   under the same visibility rule, written only when non-empty; see
   [What a page shows: data marks](#what-a-page-shows-data-marks) above. Two-space JSON, stable key
   order, trailing newline.
