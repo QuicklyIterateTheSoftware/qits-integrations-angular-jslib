@@ -18,6 +18,13 @@ describe('withServiceWorkerBypass', () => {
     const twice = withServiceWorkerBypass(once);
     expect(new URL(twice).searchParams.getAll('ngsw-bypass')).toEqual(['true']);
   });
+
+  it('keeps a relative URL relative, and its fragment last', () => {
+    expect(withServiceWorkerBypass('/s')).toBe('/s?ngsw-bypass=true');
+    expect(withServiceWorkerBypass('/s?a=1#f')).toBe('/s?a=1&ngsw-bypass=true#f');
+    expect(withServiceWorkerBypass('/s?')).toBe('/s?ngsw-bypass=true');
+    expect(withServiceWorkerBypass('/s?ngsw-bypass')).toBe('/s?ngsw-bypass');
+  });
 });
 
 describe('SseParser', () => {

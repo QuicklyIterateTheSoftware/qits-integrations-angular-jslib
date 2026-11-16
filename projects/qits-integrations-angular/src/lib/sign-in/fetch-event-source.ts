@@ -17,17 +17,21 @@ export interface EventSourceLike {
 export type EventSourceFactory = (url: string) => EventSourceLike;
 
 /**
- * `url` with `ngsw-bypass=true` set as a query parameter (`URLSearchParams.set`, so a URL already
- * carrying it is untouched rather than gaining a second copy, and any existing query is kept).
+ * `url` with `ngsw-bypass=true` added to its query: any existing query and fragment are kept, a URL
+ * already carrying it is answered as it is, and a relative URL stays relative.
  * Angular's service worker relays every fetch it does not bypass, and the browser stops an idle
  * worker after about 30 s, which cuts a stream the worker is relaying (qits-2256). A query
  * parameter is used rather than the header form, because a header on these cross-origin streams
  * would trigger a CORS preflight.
  */
 export function withServiceWorkerBypass(url: string): string {
-  const withBypass = new URL(url);
-  withBypass.searchParams.set('ngsw-bypass', 'true');
-  return withBypass.toString();
+  const hash = url.indexOf('#');
+  const target = hash < 0 ? url : url.slice(0, hash);
+  const fragment = hash < 0 ? '' : url.slice(hash);
+  const query = target.indexOf('?');
+  if (query >= 0 && /[?&]ngsw-bypass(?:[=&]|$)/i.test(target.slice(query))) return url;
+  const join = query < 0 ? '?' : query === target.length - 1 || target.endsWith('&') ? '' : '&';
+  return `${target}${join}ngsw-bypass=true${fragment}`;
 }
 
 /**
