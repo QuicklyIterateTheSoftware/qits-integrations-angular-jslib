@@ -17,13 +17,28 @@ export interface EventSourceLike {
 export type EventSourceFactory = (url: string) => EventSourceLike;
 
 /**
+ * `url` with `ngsw-bypass=true` set as a query parameter (`URLSearchParams.set`, so a URL already
+ * carrying it is untouched rather than gaining a second copy, and any existing query is kept).
+ * Angular's service worker relays every fetch it does not bypass, and the browser stops an idle
+ * worker after about 30 s, which cuts a stream the worker is relaying (qits-2256). A query
+ * parameter is used rather than the header form, because a header on these cross-origin streams
+ * would trigger a CORS preflight.
+ */
+export function withServiceWorkerBypass(url: string): string {
+  const withBypass = new URL(url);
+  withBypass.searchParams.set('ngsw-bypass', 'true');
+  return withBypass.toString();
+}
+
+/**
  * How a consumer opens an event stream on a platform host. Without `provideQitsBearerSignIn`, the
  * browser's `EventSource` with credentials; with it, a {@link FetchEventSource} that sends the
- * bearer.
+ * bearer. Either way the URL carries {@link withServiceWorkerBypass}, so the service worker lets
+ * the stream through instead of relaying it.
  */
 export const QITS_EVENT_SOURCE = new InjectionToken<EventSourceFactory>('QITS_EVENT_SOURCE', {
   providedIn: 'root',
-  factory: () => (url) => new EventSource(url, { withCredentials: true }),
+  factory: () => (url) => new EventSource(withServiceWorkerBypass(url), { withCredentials: true }),
 });
 
 /** One dispatched Server-Sent Events message. */
@@ -144,6 +159,8 @@ type Ended = 'dropped' | 'refused' | 'closed';
  *   first gets one retry with `options.retryToken` (the provider passes `QitsTokens.retryToken`);
  *   only when that is refused too, or there is no token to retry with, does it give up.
  * - `close()` stops everything: the open request, a pending reconnect, every callback.
+ * - The request carries {@link withServiceWorkerBypass}, so Angular's service worker does not
+ *   relay it (the relayed idle worker is killed around 30 s, which would otherwise cut the stream).
  *
  * Like `EventSource`, only unnamed (or `message`) frames reach `onmessage`.
  */
@@ -240,7 +257,7 @@ export class FetchEventSource implements EventSourceLike {
   }
 
   private request(bearer: string | null, signal: AbortSignal): Promise<Response> {
-    return this.fetchFn(this.url, {
+    return this.fetchFn(withServiceWorkerBypass(this.url), {
       headers: {
         accept: 'text/event-stream',
         ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),

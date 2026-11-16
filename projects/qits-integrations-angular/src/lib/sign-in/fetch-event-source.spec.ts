@@ -1,4 +1,24 @@
-import { FetchEventSource, RECONNECT_MS, SseParser } from './fetch-event-source';
+import {
+  FetchEventSource,
+  RECONNECT_MS,
+  SseParser,
+  withServiceWorkerBypass,
+} from './fetch-event-source';
+
+describe('withServiceWorkerBypass', () => {
+  it('keeps an existing query and adds ngsw-bypass=true', () => {
+    const url = withServiceWorkerBypass('https://events.example/events/api/stream?names=*');
+    const { searchParams } = new URL(url);
+    expect(searchParams.get('names')).toBe('*');
+    expect(searchParams.get('ngsw-bypass')).toBe('true');
+  });
+
+  it('sets ngsw-bypass rather than adding it again when called twice', () => {
+    const once = withServiceWorkerBypass('https://events.example/events/api/stream');
+    const twice = withServiceWorkerBypass(once);
+    expect(new URL(twice).searchParams.getAll('ngsw-bypass')).toEqual(['true']);
+  });
+});
 
 describe('SseParser', () => {
   it('dispatches a message on a blank line, joining data lines', () => {
@@ -85,7 +105,7 @@ describe('FetchEventSource', () => {
     expect(source.readyState).toBe(0);
     await settle();
     expect(fetchFn).toHaveBeenCalledWith(
-      'https://events.example/events/api/stream',
+      'https://events.example/events/api/stream?ngsw-bypass=true',
       expect.objectContaining({
         headers: { accept: 'text/event-stream', authorization: 'Bearer T' },
       }),
@@ -105,7 +125,7 @@ describe('FetchEventSource', () => {
       .mockResolvedValueOnce(first.response)
       .mockResolvedValueOnce(second.response);
     const token = vi.fn().mockResolvedValueOnce('T1').mockResolvedValueOnce('T2');
-    const source = new FetchEventSource('/s', token, fetchFn);
+    const source = new FetchEventSource('https://events.example/s', token, fetchFn);
     const calls = record(source);
     await settle();
     first.write('retry: 20\nid: 7\ndata: a\n\n');
@@ -127,6 +147,33 @@ describe('FetchEventSource', () => {
     source.close();
   });
 
+  it('bypasses the service worker on the first request and on a reconnect, keeping the original query', async () => {
+    const url = 'https://events.example/events/api/stream?names=*';
+    const first = streamed();
+    const second = streamed();
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(first.response)
+      .mockResolvedValueOnce(second.response);
+    const source = new FetchEventSource(url, async () => 'T', fetchFn, { reconnectMs: 1 });
+    const calls = record(source);
+    await settle();
+    expect(calls).toEqual(['open:1']);
+    const firstRequested = new URL(fetchFn.mock.calls[0][0] as string);
+    expect(firstRequested.searchParams.get('names')).toBe('*');
+    expect(firstRequested.searchParams.getAll('ngsw-bypass')).toEqual(['true']);
+
+    first.end();
+    await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(2));
+    expect(calls).toEqual(['open:1', 'error:0', 'open:1']);
+    const secondRequested = new URL(fetchFn.mock.calls[1][0] as string);
+    expect(secondRequested.searchParams.get('names')).toBe('*');
+    expect(secondRequested.searchParams.getAll('ngsw-bypass')).toEqual(['true']);
+
+    expect(source.url).toBe(url);
+    source.close();
+  });
+
   it('waits RECONNECT_MS (3 s) by default, and sends no Last-Event-ID when no id came', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
@@ -135,7 +182,7 @@ describe('FetchEventSource', () => {
         .fn()
         .mockResolvedValueOnce(first.response)
         .mockResolvedValue(streamed().response);
-      const source = new FetchEventSource('/s', async () => 'T', fetchFn);
+      const source = new FetchEventSource('https://events.example/s', async () => 'T', fetchFn);
       await vi.advanceTimersByTimeAsync(0);
       first.end();
       await vi.advanceTimersByTimeAsync(RECONNECT_MS - 1);
@@ -160,7 +207,9 @@ describe('FetchEventSource', () => {
       .mockRejectedValueOnce(new TypeError('offline'))
       .mockResolvedValueOnce(stream.response)
       .mockResolvedValue(new Response('', { status: 503 }));
-    const source = new FetchEventSource('/s', async () => 'T', fetchFn, { reconnectMs: 5 });
+    const source = new FetchEventSource('https://events.example/s', async () => 'T', fetchFn, {
+      reconnectMs: 5,
+    });
     const calls = record(source);
     await vi.waitFor(() => expect(calls).toEqual(['error:0', 'open:1']));
     stream.fail();
@@ -171,7 +220,9 @@ describe('FetchEventSource', () => {
   it('treats a non-2xx answer as final: CLOSED, one onerror, no reconnect', async () => {
     for (const status of [404, 500, 204]) {
       const fetchFn = vi.fn(async () => new Response(status === 204 ? null : '', { status }));
-      const source = new FetchEventSource('/s', async () => 'T', fetchFn, { reconnectMs: 1 });
+      const source = new FetchEventSource('https://events.example/s', async () => 'T', fetchFn, {
+        reconnectMs: 1,
+      });
       const calls = record(source);
       await settle();
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -182,7 +233,7 @@ describe('FetchEventSource', () => {
 
   it('fails CLOSED on a 401 when it has no way to refresh', async () => {
     const fetchFn = vi.fn(async () => new Response('', { status: 401 }));
-    const source = new FetchEventSource('/s', async () => null, fetchFn);
+    const source = new FetchEventSource('https://events.example/s', async () => null, fetchFn);
     const calls = record(source);
     await settle();
     expect(calls).toEqual(['error:2']);
@@ -196,7 +247,9 @@ describe('FetchEventSource', () => {
       .mockResolvedValueOnce(new Response('', { status: 401 }))
       .mockResolvedValueOnce(stream.response);
     const retryToken = vi.fn(async () => 'FRESH');
-    const source = new FetchEventSource('/s', async () => 'OLD', fetchFn, { retryToken });
+    const source = new FetchEventSource('https://events.example/s', async () => 'OLD', fetchFn, {
+      retryToken,
+    });
     const calls = record(source);
     await vi.waitFor(() => expect(calls).toEqual(['open:1']));
     expect(retryToken).toHaveBeenCalledWith('OLD');
@@ -210,14 +263,14 @@ describe('FetchEventSource', () => {
   it('gives up after the retried request is refused too, or when the refresh fails', async () => {
     const twice = vi.fn(async () => new Response('', { status: 401 }));
     const retryToken = vi.fn(async () => 'FRESH');
-    const refused = new FetchEventSource('/s', async () => 'OLD', twice, {
+    const refused = new FetchEventSource('https://events.example/s', async () => 'OLD', twice, {
       retryToken,
       reconnectMs: 1,
     });
     const refusedCalls = record(refused);
 
     const once = vi.fn(async () => new Response('', { status: 401 }));
-    const failed = new FetchEventSource('/s', async () => 'OLD', once, {
+    const failed = new FetchEventSource('https://events.example/s', async () => 'OLD', once, {
       retryToken: async () => null,
       reconnectMs: 1,
     });
@@ -234,7 +287,7 @@ describe('FetchEventSource', () => {
   it('stays quiet after close', async () => {
     const stream = streamed();
     const source = new FetchEventSource(
-      '/s',
+      'https://events.example/s',
       async () => 'T',
       async () => stream.response,
     );
@@ -253,7 +306,9 @@ describe('FetchEventSource', () => {
       stream.end();
       return stream.response;
     });
-    const fromHandler = new FetchEventSource('/s', async () => 'T', fetchFn, { reconnectMs: 1 });
+    const fromHandler = new FetchEventSource('https://events.example/s', async () => 'T', fetchFn, {
+      reconnectMs: 1,
+    });
     fromHandler.onerror = () => fromHandler.close();
 
     const waiting = vi.fn(async () => {
@@ -261,9 +316,14 @@ describe('FetchEventSource', () => {
       stream.end();
       return stream.response;
     });
-    const whileWaiting = new FetchEventSource('/s', async () => 'T', waiting, {
-      reconnectMs: 10,
-    });
+    const whileWaiting = new FetchEventSource(
+      'https://events.example/s',
+      async () => 'T',
+      waiting,
+      {
+        reconnectMs: 10,
+      },
+    );
     whileWaiting.onerror = () => queueMicrotask(() => whileWaiting.close());
 
     await new Promise((resolve) => setTimeout(resolve, 40));
