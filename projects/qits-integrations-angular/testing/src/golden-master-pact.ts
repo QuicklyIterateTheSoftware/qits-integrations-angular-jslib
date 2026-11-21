@@ -39,7 +39,9 @@
  *
  * - `frozen.ids`: a uuid regex;
  * - `frozen.instants`: an ISO-8601 regex;
- * - `frozen.strings` and every other leaf: a type match (`number` for numbers);
+ * - `frozen.strings` and every other leaf, numbers included: a type match (`like`, never
+ *   `number` — pact-jvm's `number` rejects exponent-form doubles such as Jackson's `1.5E8`,
+ *   ticket qits-2396);
  * - a leaf that is null where it was recorded: exactly `null`;
  * - `frozen.listFilteredTo`: `arrayContaining`, one variant per shape: the answer contains the
  *   state's entries, among whatever else the provider holds ("contains", never "every element");
@@ -637,7 +639,6 @@ function matched(value: Json, path: string, op: GoldenOperation): unknown {
   }
   if (op.ids.has(path)) return MatchersV3.regex(UUID, String(value));
   if (op.instants.has(path)) return MatchersV3.regex(ISO_INSTANT, String(value));
-  if (typeof value === 'number') return MatchersV3.number(value);
   return MatchersV3.like(value);
 }
 

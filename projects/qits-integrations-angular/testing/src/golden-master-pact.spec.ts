@@ -124,6 +124,14 @@ function project(): string {
             file: 'list-sizes.json',
             frozen: { ids: ['$.entries[*].id'] },
           },
+          {
+            operationId: 'getNumbers',
+            method: 'GET',
+            path: '/numbers',
+            status: 200,
+            file: 'get-numbers.json',
+            frozen: {},
+          },
         ],
       },
       {
@@ -232,6 +240,10 @@ function project(): string {
       ],
     }),
   );
+  // A non-integer (pact-jvm's `number` matcher rejects exponent-form doubles such as Jackson's
+  // `1.5E8`, ticket qits-2396) next to a plain integer: both must bind with the same `type`
+  // matcher.
+  writeFileSync(join(tree, 'get-numbers.json'), JSON.stringify({ ratio: 1.5, count: 3 }));
   return root;
 }
 
@@ -703,8 +715,18 @@ describe('golden-master-pact', () => {
       ]);
       expect(rules['$.entries'].matchers).toEqual([{ match: 'type', min: 2, max: 2 }]);
       expect(rules['$.entries[*].id'].matchers[0].match).toBe('regex');
-      expect(rules['$.entries[*].size'].matchers[0].match).toBe('number');
+      expect(rules['$.entries[*].size'].matchers[0].match).toBe('type');
       expect(rules['$.entries[*].tags'].matchers[0]).toEqual({ match: 'type', min: 2, max: 2 });
+    });
+
+    it('binds a non-integer and an integer number with the same type matcher (qits-2396)', async () => {
+      // pact-jvm's `number` matcher rejects exponent-form doubles such as Jackson's `1.5E8`; a
+      // plain `type` match has no such restriction.
+      const thing = await written('getNumbers', ['ratio', 'count']);
+      expect(thing.response.body.content).toEqual({ ratio: 1.5, count: 3 });
+      const rules = thing.response.matchingRules.body;
+      expect(rules['$.ratio'].matchers).toEqual([{ match: 'type' }]);
+      expect(rules['$.count'].matchers).toEqual([{ match: 'type' }]);
     });
 
     it('requests with the query the recording was made with', async () => {
