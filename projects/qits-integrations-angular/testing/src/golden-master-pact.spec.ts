@@ -19,6 +19,13 @@ const PNG = Buffer.from(
   'base64',
 );
 const ID = '00000000-0000-4000-8000-000000000001';
+/** Path params holding reserved characters (ticket qits-2409), as a provider's state names them. */
+const NAMED = {
+  maven: 'eu.wohlben.qits:contract-maven',
+  npm: '@contract/contract-scoped',
+  file: 'src/app/projects/[slug]/page.html',
+  version: '2100.1.0',
+} as const;
 const PROJECT_ID = '00000000-0000-4000-8000-000000000002';
 /** A recorded text body (ticket qits-2058): it looks like JSON in no place, and ends in a newline. */
 const THING_PAGE = '<!doctype html>\n<h1>Thing “a”</h1>\n';
@@ -116,6 +123,41 @@ function project(): string {
             status: 200,
             file: 'list-sizes.json',
             frozen: { ids: ['$.entries[*].id'] },
+          },
+        ],
+      },
+      {
+        name: 'named things exist',
+        params: NAMED,
+        operations: [
+          {
+            operationId: 'getMavenSbom',
+            method: 'GET',
+            path: '/sboms/maven/{maven}/-/{version}',
+            status: 200,
+            file: 'get-thing.json',
+          },
+          {
+            operationId: 'getNpmSbom',
+            method: 'GET',
+            path: '/sboms/npm/{npm}/-/{version}',
+            status: 200,
+            file: 'get-thing.json',
+          },
+          {
+            operationId: 'getFile',
+            method: 'GET',
+            path: '/files/v{version}/{file}',
+            status: 200,
+            file: 'get-thing.json',
+          },
+          {
+            operationId: 'findSboms',
+            method: 'GET',
+            path: '/sboms',
+            query: { coordinate: '{maven}' },
+            status: 200,
+            file: 'get-thing.json',
           },
         ],
       },
@@ -433,6 +475,127 @@ describe('golden-master-pact', () => {
         /a response that is not JSON has no body paths to consume/,
       );
       expect(() => add(pact, undefined, ['id'])).toThrow(/getPicture has no JSON body/);
+    });
+  });
+
+  describe('path params as the generated client encodes them (ticket qits-2409)', () => {
+    const trigger = { kind: 'ui', app: 'qits-demo-app', interaction: 'open-sbom' } as const;
+
+    /** Adds `operationId` in the named state and makes the call to `sent` (default: the example). */
+    async function written(operationId: string, sent?: string, dir = join(root, 'pacts-named')) {
+      const masters = goldenMasters(PACKAGE, 'qits-demo', root);
+      const pact = new PactV4({ consumer: 'qits-demo-app', provider: 'qits-demo-service', dir });
+      const op = masters.operation('named things exist', operationId);
+      await addGoldenInteraction(pact, masters, {
+        provider: 'qits-demo-service',
+        state: 'named things exist',
+        operationId,
+        trigger,
+        consumes: [],
+      }).executeTest(async (server) => {
+        await fetch(`${server.url}${sent ?? examplePath(op)}`);
+      });
+      const file = join(dir, 'qits-demo-app-qits-demo-service.json');
+      return JSON.parse(readFileSync(file, 'utf8')).interactions[0];
+    }
+
+    it('examplePath encodes each param whole, and leaves the template and plain values as they are', () => {
+      const masters = goldenMasters(PACKAGE, 'qits-demo', root);
+      const path = (operationId: string) =>
+        examplePath(masters.operation('named things exist', operationId));
+      expect(path('getMavenSbom')).toBe('/sboms/maven/eu.wohlben.qits%3Acontract-maven/-/2100.1.0');
+      expect(path('getNpmSbom')).toBe('/sboms/npm/%40contract%2Fcontract-scoped/-/2100.1.0');
+      expect(path('getFile')).toBe(
+        '/files/v2100.1.0/src%2Fapp%2Fprojects%2F%5Bslug%5D%2Fpage.html',
+      );
+      // No reserved character: the same example as before.
+      expect(examplePath(masters.operation('a thing exists', 'getThing'))).toBe(`/things/${ID}`);
+    });
+
+    it('pins the encoded example with a regex, under the same provider-state expression', async () => {
+      const maven = await written('getMavenSbom');
+      expect(maven.request.path).toBe('/sboms/maven/eu.wohlben.qits%3Acontract-maven/-/2100.1.0');
+      expect(maven.request.generators.path).toEqual({
+        type: 'ProviderState',
+        expression: '/sboms/maven/${maven}/-/${version}',
+      });
+      expect(maven.request.matchingRules.path.matchers).toEqual([
+        {
+          match: 'regex',
+          regex: '^/sboms/maven/eu\\.wohlben\\.qits%3Acontract-maven/-/2100\\.1\\.0$',
+        },
+      ]);
+      const file = await written('getFile', undefined, join(root, 'pacts-file'));
+      expect(file.request.generators.path.expression).toBe('/files/v${version}/${file}');
+      expect(file.request.matchingRules.path.matchers).toEqual([
+        {
+          match: 'regex',
+          regex: '^/files/v2100\\.1\\.0/src%2Fapp%2Fprojects%2F%5Bslug%5D%2Fpage\\.html$',
+        },
+      ]);
+    });
+
+    it('refuses the literal spelling a client would send without encoding', async () => {
+      await expect(
+        written(
+          'getMavenSbom',
+          '/sboms/maven/eu.wohlben.qits:contract-maven/-/2100.1.0',
+          join(root, 'pacts-colon'),
+        ),
+      ).rejects.toThrow();
+      await expect(
+        written(
+          'getNpmSbom',
+          '/sboms/npm/@contract/contract-scoped/-/2100.1.0',
+          join(root, 'pacts-at'),
+        ),
+      ).rejects.toThrow();
+      await expect(
+        written(
+          'getFile',
+          '/files/v2100.1.0/src/app/projects/%5Bslug%5D/page.html',
+          join(root, 'pacts-slash'),
+        ),
+      ).rejects.toThrow();
+      await expect(
+        written(
+          'getFile',
+          '/files/v2100.1.0/src%2Fapp%2Fprojects%2F[slug]%2Fpage.html',
+          join(root, 'pacts-bracket'),
+        ),
+      ).rejects.toThrow();
+    });
+
+    it('writes a path without reserved characters exactly as before: a type match', async () => {
+      const masters = goldenMasters(PACKAGE, 'qits-demo', root);
+      const dir = join(root, 'pacts-plain');
+      const pact = new PactV4({ consumer: 'qits-demo-app', provider: 'qits-demo-service', dir });
+      await addGoldenInteraction(pact, masters, {
+        provider: 'qits-demo-service',
+        state: 'a thing exists',
+        operationId: 'getThing',
+        trigger,
+        consumes: [],
+      }).executeTest(async (server) => {
+        await fetch(`${server.url}/things/${ID}`);
+      });
+      const file = join(dir, 'qits-demo-app-qits-demo-service.json');
+      const request = JSON.parse(readFileSync(file, 'utf8')).interactions[0].request;
+      expect(request).toEqual({
+        method: 'GET',
+        path: `/things/${ID}`,
+        generators: { path: { type: 'ProviderState', expression: '/things/${thingId}' } },
+        matchingRules: { path: { combine: 'AND', matchers: [{ match: 'type' }] } },
+      });
+    });
+
+    it('leaves a query value as recorded: it is not a path param', async () => {
+      const masters = goldenMasters(PACKAGE, 'qits-demo', root);
+      expect(exampleQuery(masters.operation('named things exist', 'findSboms'))).toEqual({
+        coordinate: NAMED.maven,
+      });
+      const named = await written('findSboms', `/sboms?coordinate=${NAMED.maven}`);
+      expect(named.request.query).toEqual({ coordinate: [NAMED.maven] });
     });
   });
 

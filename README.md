@@ -1311,7 +1311,12 @@ assertPactFile(
   specs write (see
   [Which routes a pact interaction happens on](#which-routes-a-pact-interaction-happens-on)). With
   neither, or `routes: []`, the interaction has no `route` and is written exactly as before.
-- The path is a provider-state expression only when it has a `{param}`.
+- The path is a provider-state expression only when it has a `{param}`. **Its example is spelled
+  as the generated client sends it** (ticket qits-2409): each param `encodeURIComponent`ed, so
+  `eu.wohlben.qits:x` is `eu.wohlben.qits%3Ax` and `@qits/angular` is `%40qits%2Fangular`
+  (`examplePath(op)` gives it). Where that changes the example, the path is matched by a regex
+  pinning exactly that spelling, so a spec whose client sends the literal one fails; a path whose
+  params hold no reserved character is written exactly as before. Query values stay as recorded.
 - **The library's version is no contract.** `assertPactFile` and `assertPactPart` mask
   `qits-via.version` on both sides: a difference in it alone rewrites the committed file and logs
   `qits-via version refreshed <old> → <new> (<file>)`, without `QITS_GOLDEN_UPDATE`. Any other

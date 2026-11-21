@@ -59,7 +59,12 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { MatchersV3, type PactV4, type TemplateQuery } from '@pact-foundation/pact';
+import {
+  MatchersV3,
+  type PactV4,
+  type ProviderStateInjectedValue,
+  type TemplateQuery,
+} from '@pact-foundation/pact';
 import type { RouteLookup } from './route-ledger';
 import {
   maskViaVersions,
@@ -229,21 +234,38 @@ export function goldenMasters(
   };
 }
 
-/** `template`'s `{param}` placeholders replaced by the state's example values. */
-function withExampleParams(template: string, op: GoldenOperation): string {
+/**
+ * `template`'s `{param}` placeholders replaced by the state's example values, each written through
+ * `spell` (verbatim by default).
+ */
+function withExampleParams(
+  template: string,
+  op: GoldenOperation,
+  spell: (value: string) => string = (value) => value,
+): string {
   return template.replace(/\{(\w+)}/g, (_, name: string) => {
     const value = op.params[name];
     if (value === undefined) throw new Error(`state '${op.state}' has no param '${name}'`);
-    return value;
+    return spell(value);
   });
 }
 
-/** The path with every `{param}` replaced by the state's example value. */
+/**
+ * The path with every `{param}` replaced by the state's example value, `encodeURIComponent`ed: the
+ * bytes the consumer's generated client sends (ticket qits-2409). That client (hey-api's
+ * `client-angular`) encodes each simple-style path param whole and ignores `allowReserved`, so
+ * `eu.wohlben.qits:x` goes out as `eu.wohlben.qits%3Ax` and `@qits/angular` as `%40qits%2Fangular`.
+ * A literal example let a pact stand for a request no consumer makes. The template's own text is
+ * kept as it is, and a value without a reserved character comes out unchanged.
+ */
 export function examplePath(op: GoldenOperation): string {
-  return withExampleParams(op.path, op);
+  return withExampleParams(op.path, op, encodeURIComponent);
 }
 
-/** The query with every `{param}` in each value replaced by the state's example value. */
+/**
+ * The query with every `{param}` in each value replaced by the state's example value, verbatim: a
+ * query value is not a path param, and the client's query serialiser spells it on its own terms.
+ */
 export function exampleQuery(op: GoldenOperation): Record<string, string> {
   return Object.fromEntries(
     Object.entries(op.query).map(([key, value]) => [key, withExampleParams(value, op)]),
@@ -363,7 +385,9 @@ export function useRouteLookup(lookup: RouteLookup | undefined): () => void {
  * - the provider state with its params;
  * - the path, and each query value, as a provider-state expression only when it holds a `{param}`
  *   (pact-jvm resolves a parameterless expression to a path that misses the route); a query value
- *   without a placeholder is sent as the plain string it was recorded with;
+ *   without a placeholder is sent as the plain string it was recorded with. The path's example is
+ *   {@link examplePath}, each param encoded as the client sends it; see {@link providerStatePath}
+ *   for what that changes when a param holds a reserved character;
  * - the recorded status, and the parts of the recorded body named in `consumes`, under matchers
  *   (see the file comment);
  * - `comments.references`: `qits-call` (provider and operation) and `qits-trigger`, which the
@@ -401,9 +425,7 @@ export function addGoldenInteraction(
     ? consumed(masters.body<Json>(state, operationId), consumes, op)
     : undefined;
   const contentType = nonJson ? nonJsonContentType(nonJson.contentType, op) : undefined;
-  const path = /\{\w+}/.test(op.path)
-    ? MatchersV3.fromProviderState(op.path.replace(/\{(\w+)}/g, '$${$1}'), examplePath(op))
-    : op.path;
+  const path = providerStatePath(op);
   let interaction = pact
     .addInteraction()
     .given(state, { ...op.params })
@@ -443,6 +465,41 @@ export function addGoldenInteraction(
       .headers({ 'Content-Type': MatchersV3.regex('application/json.*', 'application/json') })
       .jsonBody(matched(body, '$', op));
   });
+}
+
+/**
+ * The request path of `op` (ticket qits-2409): the plain recorded path when it holds no `{param}`,
+ * otherwise the provider-state expression (`${param}` for each placeholder) with
+ * {@link examplePath}, the encoded spelling, as the example the consumer's mock server expects.
+ *
+ * Where encoding leaves the example as it is (no param holds a reserved character), it is
+ * `fromProviderState`, as before, so those pacts stay byte-identical. That matcher is a `type`
+ * match, though, and the mock server then accepts any path at all: a client sending the literal
+ * `eu.wohlben.qits:x` passed against an example of `eu.wohlben.qits%3Ax`. So where encoding does
+ * change the example, the path carries the same generator under a regex matching exactly the
+ * encoded example instead. The mock server matches that regex against the raw request path, so the
+ * literal spelling no longer matches.
+ *
+ * The expression interpolates the provider's values unencoded, because encoding them there would
+ * change nothing on the wire: pact-jvm's verifier (`ProviderClient`, 4.6.21) URL-decodes the
+ * generated path and re-encodes it per segment, so it sends `%3A` for `:`, `%40` for `@` and `%5B`
+ * for `[` whatever spelling the pact holds (a literal `%3A` in the expression, or an
+ * already-encoded state param, comes out `%3A` too, never `%253A`). It also decodes `%2F` to a
+ * separator, so no pact makes it replay an encoded `/`: that one spelling stays unverified.
+ */
+function providerStatePath(op: GoldenOperation): string | ProviderStateInjectedValue<string> {
+  if (!/\{\w+}/.test(op.path)) return op.path;
+  const expression = op.path.replace(/\{(\w+)}/g, '$${$1}');
+  const example = examplePath(op);
+  if (example === withExampleParams(op.path, op)) {
+    return MatchersV3.fromProviderState(expression, example);
+  }
+  const exactly = `^${example.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`;
+  return {
+    ...MatchersV3.regex(exactly, example),
+    'pact:generator:type': 'ProviderState',
+    expression,
+  };
 }
 
 /**
