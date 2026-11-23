@@ -493,14 +493,19 @@ describe('golden-master-pact', () => {
   describe('path params as the generated client encodes them (ticket qits-2409)', () => {
     const trigger = { kind: 'ui', app: 'qits-demo-app', interaction: 'open-sbom' } as const;
 
-    /** Adds `operationId` in the named state and makes the call to `sent` (default: the example). */
-    async function written(operationId: string, sent?: string, dir = join(root, 'pacts-named')) {
+    /** Adds `operationId` in `state` and makes the call to `sent` (default: the example). */
+    async function written(
+      operationId: string,
+      sent?: string,
+      dir = join(root, 'pacts-named'),
+      state = 'named things exist',
+    ) {
       const masters = goldenMasters(PACKAGE, 'qits-demo', root);
       const pact = new PactV4({ consumer: 'qits-demo-app', provider: 'qits-demo-service', dir });
-      const op = masters.operation('named things exist', operationId);
+      const op = masters.operation(state, operationId);
       await addGoldenInteraction(pact, masters, {
         provider: 'qits-demo-service',
-        state: 'named things exist',
+        state,
         operationId,
         trigger,
         consumes: [],
@@ -578,27 +583,81 @@ describe('golden-master-pact', () => {
       ).rejects.toThrow();
     });
 
-    it('writes a path without reserved characters exactly as before: a type match', async () => {
-      const masters = goldenMasters(PACKAGE, 'qits-demo', root);
-      const dir = join(root, 'pacts-plain');
-      const pact = new PactV4({ consumer: 'qits-demo-app', provider: 'qits-demo-service', dir });
-      await addGoldenInteraction(pact, masters, {
-        provider: 'qits-demo-service',
-        state: 'a thing exists',
-        operationId: 'getThing',
-        trigger,
-        consumes: [],
-      }).executeTest(async (server) => {
-        await fetch(`${server.url}/things/${ID}`);
-      });
-      const file = join(dir, 'qits-demo-app-qits-demo-service.json');
-      const request = JSON.parse(readFileSync(file, 'utf8')).interactions[0].request;
+    it('pins a path without reserved characters to its example too, under the same generator (qits-2511)', async () => {
+      const request = (
+        await written('getThing', undefined, join(root, 'pacts-plain'), 'a thing exists')
+      ).request;
       expect(request).toEqual({
         method: 'GET',
         path: `/things/${ID}`,
         generators: { path: { type: 'ProviderState', expression: '/things/${thingId}' } },
-        matchingRules: { path: { combine: 'AND', matchers: [{ match: 'type' }] } },
+        matchingRules: {
+          path: { combine: 'AND', matchers: [{ match: 'regex', regex: `^/things/${ID}$` }] },
+        },
       });
+    });
+
+    it('refuses a wrong path segment and a wrong id (qits-2511)', async () => {
+      await expect(
+        written('getThing', `/other/${ID}`, join(root, 'pacts-segment'), 'a thing exists'),
+      ).rejects.toThrow();
+      await expect(
+        written('getThing', '/things/zzz', join(root, 'pacts-id'), 'a thing exists'),
+      ).rejects.toThrow();
+      await expect(
+        written(
+          'getThing',
+          '/things/00000000-0000-4000-8000-000000000009',
+          join(root, 'pacts-other-id'),
+          'a thing exists',
+        ),
+      ).rejects.toThrow();
+    });
+
+    it('pins a query placeholder to its decoded example, under the same generator (qits-2511)', async () => {
+      const project = await written(
+        'listProjectThings',
+        `/things?project=${PROJECT_ID}&limit=20`,
+        join(root, 'pacts-query'),
+        'a project exists',
+      );
+      expect(project.request.query).toEqual({ project: [PROJECT_ID], limit: ['20'] });
+      expect(project.request.generators).toEqual({
+        query: { project: { type: 'ProviderState', expression: '${projectId}' } },
+      });
+      expect(project.request.matchingRules).toEqual({
+        query: {
+          project: { combine: 'AND', matchers: [{ match: 'regex', regex: `^${PROJECT_ID}$` }] },
+        },
+      });
+      // The mock server compares a query value decoded: the encoded and the literal spelling of a
+      // reserved character both match, and the regex escapes the example's `.`.
+      const maven = await written(
+        'findSboms',
+        `/sboms?coordinate=${encodeURIComponent(NAMED.maven)}`,
+        join(root, 'pacts-query-encoded'),
+      );
+      expect(maven.request.matchingRules.query.coordinate.matchers).toEqual([
+        { match: 'regex', regex: '^eu\\.wohlben\\.qits:contract-maven$' },
+      ]);
+    });
+
+    it('refuses a wrong query value (qits-2511)', async () => {
+      await expect(
+        written(
+          'listProjectThings',
+          '/things?project=other&limit=20',
+          join(root, 'pacts-query-other'),
+          'a project exists',
+        ),
+      ).rejects.toThrow();
+      await expect(
+        written(
+          'findSboms',
+          '/sboms?coordinate=eu.wohlben.qits:contract-other',
+          join(root, 'pacts-query-coordinate'),
+        ),
+      ).rejects.toThrow();
     });
 
     it('leaves a query value as recorded: it is not a path param', async () => {

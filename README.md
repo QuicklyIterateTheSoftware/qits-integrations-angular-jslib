@@ -1314,9 +1314,13 @@ assertPactFile(
 - The path is a provider-state expression only when it has a `{param}`. **Its example is spelled
   as the generated client sends it** (ticket qits-2409): each param `encodeURIComponent`ed, so
   `eu.wohlben.qits:x` is `eu.wohlben.qits%3Ax` and `@qits/angular` is `%40qits%2Fangular`
-  (`examplePath(op)` gives it). Where that changes the example, the path is matched by a regex
-  pinning exactly that spelling, so a spec whose client sends the literal one fails; a path whose
-  params hold no reserved character is written exactly as before. Query values stay as recorded.
+  (`examplePath(op)` gives it). **Every templated path is matched by a regex pinning exactly that
+  spelling** (ticket qits-2511; qits-2409 pinned only paths encoding changed, and left the rest
+  under a type match that let any path through), so a spec whose client sends the literal spelling,
+  a wrong segment or a wrong id fails. Query values stay as recorded; one holding a `{param}` is
+  pinned the same way to its example from `exampleQuery(op)`, which the mock server compares
+  decoded (`?q=a%20b` and `?q=a+b` both match `a b`). The provider-state generators are unchanged,
+  so what a provider verifies is too.
 - **The library's version is no contract.** `assertPactFile` and `assertPactPart` mask
   `qits-via.version` on both sides: a difference in it alone rewrites the committed file and logs
   `qits-via version refreshed <old> → <new> (<file>)`, without `QITS_GOLDEN_UPDATE`. Any other

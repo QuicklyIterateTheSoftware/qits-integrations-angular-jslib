@@ -388,8 +388,9 @@ export function useRouteLookup(lookup: RouteLookup | undefined): () => void {
  * - the path, and each query value, as a provider-state expression only when it holds a `{param}`
  *   (pact-jvm resolves a parameterless expression to a path that misses the route); a query value
  *   without a placeholder is sent as the plain string it was recorded with. The path's example is
- *   {@link examplePath}, each param encoded as the client sends it; see {@link providerStatePath}
- *   for what that changes when a param holds a reserved character;
+ *   {@link examplePath}, each param encoded as the client sends it, and each templated path and
+ *   query value is pinned to its example (see {@link providerStatePath} and
+ *   {@link providerStateQuery});
  * - the recorded status, and the parts of the recorded body named in `consumes`, under matchers
  *   (see the file comment);
  * - `comments.references`: `qits-call` (provider and operation) and `qits-trigger`, which the
@@ -472,15 +473,16 @@ export function addGoldenInteraction(
 /**
  * The request path of `op` (ticket qits-2409): the plain recorded path when it holds no `{param}`,
  * otherwise the provider-state expression (`${param}` for each placeholder) with
- * {@link examplePath}, the encoded spelling, as the example the consumer's mock server expects.
+ * {@link examplePath}, the encoded spelling, as the example the consumer's mock server expects,
+ * pinned by {@link pinnedToExample}.
  *
- * Where encoding leaves the example as it is (no param holds a reserved character), it is
- * `fromProviderState`, as before, so those pacts stay byte-identical. That matcher is a `type`
- * match, though, and the mock server then accepts any path at all: a client sending the literal
- * `eu.wohlben.qits:x` passed against an example of `eu.wohlben.qits%3Ax`. So where encoding does
- * change the example, the path carries the same generator under a regex matching exactly the
- * encoded example instead. The mock server matches that regex against the raw request path, so the
- * literal spelling no longer matches.
+ * qits-2409 pinned only a path whose example encoding changes, and left every other one under
+ * `fromProviderState` so its pact stayed byte-identical. That matcher is a `type` match, though,
+ * and the mock server then accepts any path at all: `/things/zzz` and `/other/thing` both passed
+ * against an example of `/things/<uuid>` (ticket qits-2511). So every templated path carries its
+ * generator under a regex matching exactly the encoded example. The mock server matches that regex
+ * against the raw request path, so a wrong segment, a wrong id and the literal spelling of an
+ * encoded param all fail to match.
  *
  * The expression interpolates the provider's values unencoded, because encoding them there would
  * change nothing on the wire: pact-jvm's verifier (`ProviderClient`, 4.6.21) URL-decodes the
@@ -491,22 +493,18 @@ export function addGoldenInteraction(
  */
 function providerStatePath(op: GoldenOperation): string | ProviderStateInjectedValue<string> {
   if (!/\{\w+}/.test(op.path)) return op.path;
-  const expression = op.path.replace(/\{(\w+)}/g, '$${$1}');
-  const example = examplePath(op);
-  if (example === withExampleParams(op.path, op)) {
-    return MatchersV3.fromProviderState(expression, example);
-  }
-  const exactly = `^${example.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`;
-  return {
-    ...MatchersV3.regex(exactly, example),
-    'pact:generator:type': 'ProviderState',
-    expression,
-  };
+  return pinnedToExample(op.path.replace(/\{(\w+)}/g, '$${$1}'), examplePath(op));
 }
 
 /**
- * `op.query`, with each value that holds a `{param}` turned into a provider-state expression (the
- * example from {@link exampleQuery}); a value without one is sent as the plain string recorded.
+ * `op.query`, with each value that holds a `{param}` turned into a provider-state expression, its
+ * example from {@link exampleQuery} pinned by {@link pinnedToExample}; a value without one is sent
+ * as the plain string recorded.
+ *
+ * The pin is on the decoded value (ticket qits-2511): the mock server decodes a query value before
+ * it matches, so `?q=a%20b%3Ac%2Fd` and `?q=a+b:c/d` both match `^a b:c/d$`, and a regex on the
+ * encoded spelling matches neither. Under `fromProviderState`'s `type` match it accepted any value
+ * at all, `?project=other` against an example of `qits`.
  */
 function providerStateQuery(op: GoldenOperation): TemplateQuery {
   const example = exampleQuery(op);
@@ -514,10 +512,25 @@ function providerStateQuery(op: GoldenOperation): TemplateQuery {
     Object.entries(op.query).map(([key, value]) => [
       key,
       /\{\w+}/.test(value)
-        ? MatchersV3.fromProviderState(value.replace(/\{(\w+)}/g, '$${$1}'), example[key])
+        ? pinnedToExample(value.replace(/\{(\w+)}/g, '$${$1}'), example[key])
         : value,
     ]),
   );
+}
+
+/**
+ * The provider-state `expression` with `example` as its value, matched by a regex on exactly that
+ * example (ticket qits-2511). The generator is the one `fromProviderState` writes, so pact-jvm,
+ * which replays a request from its generators and ignores its matching rules, verifies the same
+ * request as before; only the consumer's mock server, which reads the matching rules, now refuses
+ * any other value where the `type` match took them all.
+ */
+function pinnedToExample(expression: string, example: string): ProviderStateInjectedValue<string> {
+  return {
+    ...MatchersV3.regex(`^${example.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, example),
+    'pact:generator:type': 'ProviderState',
+    expression,
+  };
 }
 
 /**
